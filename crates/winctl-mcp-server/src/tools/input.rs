@@ -12,7 +12,15 @@ pub fn input_click(state: &AppState, req: ClickRequest) -> serde_json::Value {
     };
     let point = match resolve_screen_point(Some(&window), req.x, req.y, &req.coordinate_space) {
         Ok(point) => point,
-        Err(error) => return serde_json::json!({"ok": false, "error": error.to_string()}),
+        Err(error) => {
+            return serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "coordinate_resolution_failed",
+                    "message": error.to_string()
+                }
+            })
+        }
     };
 
     let preflight = windows_window_from_point(
@@ -26,7 +34,14 @@ pub fn input_click(state: &AppState, req: ClickRequest) -> serde_json::Value {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if req.fail_if_outside_bound.unwrap_or(true) && !belongs {
-        return serde_json::json!({"ok": false, "error": "preflight failed: point not in bound window", "preflight": preflight});
+        return serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "preflight_outside_bound",
+                "message": "point did not resolve to the bound window"
+            },
+            "preflight": preflight
+        });
     }
     let button = match parse_mouse_button(req.button.as_deref()) {
         Ok(button) => button,

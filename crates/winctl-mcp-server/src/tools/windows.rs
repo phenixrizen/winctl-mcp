@@ -20,8 +20,17 @@ pub fn windows_bind(state: &AppState, selector: WindowSelector) -> serde_json::V
 
 pub fn windows_describe(state: &AppState, bound_id: String) -> serde_json::Value {
     let guard = state.bound.lock().expect("bound mutex poisoned");
-    let bound = guard.get(&bound_id);
-    serde_json::json!(bound)
+    match guard.get(&bound_id) {
+        Some(bound) => serde_json::json!({"ok": true, "bound": bound}),
+        None => serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "binding_not_found",
+                "bound_id": bound_id,
+                "message": "bound_id is not registered"
+            }
+        }),
+    }
 }
 
 pub fn windows_focus(_state: &AppState, bound_id: String) -> serde_json::Value {
