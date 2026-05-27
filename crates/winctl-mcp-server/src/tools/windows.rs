@@ -14,14 +14,26 @@ pub fn windows_find(selector: WindowSelector) -> serde_json::Value {
 pub fn windows_bind(state: &AppState, selector: WindowSelector) -> serde_json::Value {
     match state.bind_window(selector) {
         Ok(v) => serde_json::json!({"ok": true, "bound": v}),
-        Err(e) => serde_json::json!({"ok": false, "error": e}),
+        Err(e) => {
+            tracing::warn!(error_code = ?e.code, candidates = e.candidates.len(), "windows.bind failed");
+            serde_json::json!({"ok": false, "error": e})
+        }
     }
 }
 
 pub fn windows_describe(state: &AppState, bound_id: String) -> serde_json::Value {
+    tracing::info!(bound_id = %bound_id, "windows.describe requested");
     let guard = state.bound.lock().expect("bound mutex poisoned");
     match guard.get(&bound_id) {
-        Some(bound) => serde_json::json!({"ok": true, "bound": bound}),
+        Some(bound) => {
+            tracing::info!(
+                bound_id = %bound_id,
+                hwnd = %bound.identity.hwnd_hex,
+                pid = bound.identity.pid,
+                "windows.describe succeeded"
+            );
+            serde_json::json!({"ok": true, "bound": bound})
+        }
         None => serde_json::json!({
             "ok": false,
             "error": {
@@ -34,14 +46,37 @@ pub fn windows_describe(state: &AppState, bound_id: String) -> serde_json::Value
 }
 
 pub fn windows_focus(_state: &AppState, bound_id: String) -> serde_json::Value {
+    tracing::info!(bound_id = %bound_id, "windows.focus requested");
     match _state.revalidate_bound_window(&bound_id) {
         Ok(window) => match focus_window(&window) {
             Ok(focus) => {
+                tracing::info!(
+                    bound_id = %bound_id,
+                    hwnd = %window.hwnd_hex,
+                    pid = window.pid,
+                    attempts = focus.attempts,
+                    foreground = focus.foreground,
+                    "windows.focus succeeded"
+                );
                 serde_json::json!({"ok": true, "bound_id": bound_id, "window": window, "focus": focus})
             }
-            Err(error) => serde_json::json!({"ok": false, "error": error}),
+            Err(error) => {
+                tracing::warn!(
+                    bound_id = %bound_id,
+                    error_code = ?error.code,
+                    "windows.focus dispatch failed"
+                );
+                serde_json::json!({"ok": false, "error": error})
+            }
         },
-        Err(error) => serde_json::json!({"ok": false, "error": error}),
+        Err(error) => {
+            tracing::warn!(
+                bound_id = %bound_id,
+                error_code = ?error.code,
+                "windows.focus revalidation failed"
+            );
+            serde_json::json!({"ok": false, "error": error})
+        }
     }
 }
 
@@ -51,8 +86,20 @@ pub fn windows_window_from_point(
     y: i32,
     bound_id: Option<String>,
 ) -> serde_json::Value {
+    let bound_id_for_log = bound_id.clone();
     let bound = bound_id.and_then(|id| state.bound.lock().ok().and_then(|g| g.get(&id).cloned()));
     let out = window_from_point(x, y, bound.as_ref());
+    tracing::info!(
+        x = x,
+        y = y,
+        bound_id = ?bound_id_for_log,
+        top_level_hwnd = ?out.top_level.as_ref().map(|window| window.hwnd_hex.as_str()),
+        top_level_pid = ?out.top_level.as_ref().map(|window| window.pid),
+        child_hwnd = ?out.child.as_ref().map(|window| window.hwnd_hex.as_str()),
+        child_pid = ?out.child.as_ref().map(|window| window.pid),
+        belongs_to_bound_window = ?out.belongs_to_bound_window,
+        "windows.window_from_point resolved"
+    );
     serde_json::json!(out)
 }
 

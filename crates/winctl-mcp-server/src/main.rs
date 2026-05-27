@@ -28,7 +28,31 @@ pub struct AppState {
 impl AppState {
     pub fn bind_window(&self, selector: WindowSelector) -> Result<BoundWindow, WindowBindError> {
         let windows = list_windows();
-        let selected_match = select_window_for_bind(&selector, &windows)?;
+        tracing::info!(
+            windows_count = windows.len(),
+            selector_id = ?selector.id,
+            selector_hwnd = ?selector.hwnd,
+            selector_pid = ?selector.pid,
+            selector_process_name = ?selector.process_name,
+            selector_has_title_contains = selector.title_contains.is_some(),
+            selector_has_title_regex = selector.title_regex.is_some(),
+            selector_class_name_contains = ?selector.class_name_contains,
+            selector_exe_path_contains = ?selector.exe_path_contains,
+            selector_exe_path_ends_with = ?selector.exe_path_ends_with,
+            "bind selector requested"
+        );
+
+        let selected_match = match select_window_for_bind(&selector, &windows) {
+            Ok(selected_match) => selected_match,
+            Err(error) => {
+                tracing::warn!(
+                    error_code = ?error.code,
+                    candidates = error.candidates.len(),
+                    "bind selector rejected"
+                );
+                return Err(error);
+            }
+        };
         let selected = selected_match.window;
         let bound = BoundWindow {
             bound_id: selected.id.clone(),
@@ -46,6 +70,15 @@ impl AppState {
             .lock()
             .expect("bound mutex poisoned")
             .insert(bound.bound_id.clone(), bound.clone());
+        tracing::info!(
+            bound_id = %bound.bound_id,
+            hwnd = %bound.identity.hwnd_hex,
+            pid = bound.identity.pid,
+            process_name = ?bound.identity.process_name,
+            exe_path = ?bound.identity.exe_path,
+            match_score = bound.match_score,
+            "bind succeeded"
+        );
         Ok(bound)
     }
 
@@ -62,21 +95,46 @@ impl AppState {
         bound_id: &str,
         windows: &[WindowInfo],
     ) -> Result<WindowInfo, WindowControlError> {
-        let bound = self
+        let bound = match self
             .bound
             .lock()
             .expect("bound mutex poisoned")
             .get(bound_id)
             .cloned()
-            .ok_or_else(|| WindowControlError {
-                code: WindowControlErrorCode::BindingNotFound,
-                bound_id: bound_id.into(),
-                message: "bound_id is not registered".into(),
-                expected: None,
-                actual: None,
-            })?;
+        {
+            Some(bound) => bound,
+            None => {
+                tracing::warn!(bound_id = %bound_id, "bound window revalidation failed: binding not found");
+                return Err(WindowControlError {
+                    code: WindowControlErrorCode::BindingNotFound,
+                    bound_id: bound_id.into(),
+                    message: "bound_id is not registered".into(),
+                    expected: None,
+                    actual: None,
+                });
+            }
+        };
 
-        revalidate_bound_record(&bound, windows)
+        let result = revalidate_bound_record(&bound, windows);
+        match &result {
+            Ok(window) => tracing::info!(
+                bound_id = %bound_id,
+                hwnd = %window.hwnd_hex,
+                pid = window.pid,
+                process_name = ?window.process_name,
+                exe_path = ?window.exe_path,
+                "bound window revalidated"
+            ),
+            Err(error) => tracing::warn!(
+                bound_id = %bound_id,
+                error_code = ?error.code,
+                expected = ?error.expected,
+                actual = ?error.actual,
+                "bound window revalidation failed"
+            ),
+        }
+
+        result
     }
 }
 
