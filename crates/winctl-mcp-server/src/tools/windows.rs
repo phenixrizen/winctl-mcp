@@ -1,7 +1,6 @@
 use crate::AppState;
 use winctl::{
-    find_windows, list_windows, monitors, window_by_id, BoundWindow, WindowFromPointResult,
-    WindowSelector,
+    find_windows, list_windows, monitors, BoundWindow, WindowFromPointResult, WindowSelector,
 };
 
 pub fn windows_list() -> serde_json::Value {
@@ -26,8 +25,10 @@ pub fn windows_describe(state: &AppState, bound_id: String) -> serde_json::Value
 }
 
 pub fn windows_focus(_state: &AppState, bound_id: String) -> serde_json::Value {
-    let found = window_by_id(&bound_id).is_some();
-    serde_json::json!({"ok": found, "bound_id": bound_id})
+    match _state.revalidate_bound_window(&bound_id) {
+        Ok(window) => serde_json::json!({"ok": true, "bound_id": bound_id, "window": window}),
+        Err(error) => serde_json::json!({"ok": false, "error": error}),
+    }
 }
 
 pub fn windows_window_from_point(

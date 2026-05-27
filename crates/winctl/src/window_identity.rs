@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WindowInfo {
@@ -43,6 +44,20 @@ impl WindowIdentity {
             exe_path: window.exe_path.clone(),
         }
     }
+
+    pub fn matches_window(&self, window: &WindowInfo) -> bool {
+        self.hwnd == window.hwnd
+            && self.pid == window.pid
+            && same_path(&self.exe_path, &window.exe_path)
+    }
+}
+
+fn same_path(left: &Option<String>, right: &Option<String>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -54,6 +69,54 @@ pub struct BoundWindow {
     pub match_score: i32,
     pub title_at_bind: String,
     pub bound_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowControlErrorCode {
+    BindingNotFound,
+    StaleTarget,
+    IdentityMismatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Error)]
+#[error("{message}")]
+pub struct WindowControlError {
+    pub code: WindowControlErrorCode,
+    pub bound_id: String,
+    pub message: String,
+    pub expected: Option<WindowIdentity>,
+    pub actual: Option<WindowIdentity>,
+}
+
+pub fn revalidate_bound_window(
+    bound: &BoundWindow,
+    windows: &[WindowInfo],
+) -> Result<WindowInfo, WindowControlError> {
+    let Some(current) = windows
+        .iter()
+        .find(|window| window.hwnd == bound.identity.hwnd)
+    else {
+        return Err(WindowControlError {
+            code: WindowControlErrorCode::StaleTarget,
+            bound_id: bound.bound_id.clone(),
+            message: "bound window HWND no longer exists".into(),
+            expected: Some(bound.identity.clone()),
+            actual: None,
+        });
+    };
+
+    if !bound.identity.matches_window(current) {
+        return Err(WindowControlError {
+            code: WindowControlErrorCode::IdentityMismatch,
+            bound_id: bound.bound_id.clone(),
+            message: "bound window identity changed".into(),
+            expected: Some(bound.identity.clone()),
+            actual: Some(WindowIdentity::from_window(current)),
+        });
+    }
+
+    Ok(current.clone())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]

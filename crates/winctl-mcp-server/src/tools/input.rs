@@ -3,6 +3,10 @@ use crate::AppState;
 use winctl::{ClickRequest, TypeTextRequest};
 
 pub fn input_click(state: &AppState, req: ClickRequest) -> serde_json::Value {
+    if let Err(error) = state.revalidate_bound_window(&req.bound_id) {
+        return serde_json::json!({"ok": false, "error": error});
+    }
+
     let preflight = windows_window_from_point(
         state,
         req.x as i32,
@@ -19,6 +23,10 @@ pub fn input_click(state: &AppState, req: ClickRequest) -> serde_json::Value {
     serde_json::json!({"ok": true, "preflight": preflight, "note": "click dispatch pending Win32 SendInput implementation"})
 }
 
-pub fn input_type_text(_state: &AppState, req: TypeTextRequest) -> serde_json::Value {
+pub fn input_type_text(state: &AppState, req: TypeTextRequest) -> serde_json::Value {
+    if let Err(error) = state.revalidate_bound_window(&req.bound_id) {
+        return serde_json::json!({"ok": false, "error": error});
+    }
+
     serde_json::json!({"ok": true, "bound_id": req.bound_id, "typed_len": req.text.len(), "note": "type dispatch pending Win32 SendInput implementation"})
 }
