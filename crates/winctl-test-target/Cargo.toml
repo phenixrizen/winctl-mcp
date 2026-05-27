@@ -1,0 +1,11 @@
+[package]
+name = "winctl-test-target"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+winctl = { path = "../winctl" }
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
