@@ -15,7 +15,7 @@ pub fn windows_find(selector: WindowSelector) -> serde_json::Value {
 pub fn windows_bind(state: &AppState, selector: WindowSelector) -> serde_json::Value {
     match state.bind_window(selector) {
         Ok(v) => serde_json::json!({"ok": true, "bound": v}),
-        Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
+        Err(e) => serde_json::json!({"ok": false, "error": e}),
     }
 }
 

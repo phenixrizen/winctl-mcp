@@ -3,7 +3,10 @@ mod tools;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use winctl::{find_windows, list_windows, BoundWindow, WindowSelector};
+use winctl::{
+    list_windows, select_window_for_bind, BoundWindow, WindowBindError, WindowIdentity,
+    WindowSelector,
+};
 
 #[derive(Default, Clone)]
 pub struct AppState {
@@ -11,22 +14,21 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn bind_window(&self, selector: WindowSelector) -> anyhow::Result<BoundWindow> {
+    pub fn bind_window(&self, selector: WindowSelector) -> Result<BoundWindow, WindowBindError> {
         let windows = list_windows();
-        let matches = find_windows(&selector, &windows);
-        if matches.is_empty() {
-            anyhow::bail!("no window matched selector")
-        }
-        if matches.len() > 1 && !selector.is_strong_selector() {
-            anyhow::bail!("ambiguous selector; use pid/hwnd/process_name/exe selector")
-        }
-
-        let selected = matches[0].window.clone();
+        let selected_match = select_window_for_bind(&selector, &windows)?;
+        let selected = selected_match.window;
         let bound = BoundWindow {
             bound_id: selected.id.clone(),
+            identity: WindowIdentity::from_window(&selected),
             window: selected.clone(),
+            selector,
+            match_score: selected_match.score,
             title_at_bind: selected.title.clone(),
-            bound_at_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64,
+            bound_at_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_millis() as u64)
+                .unwrap_or_default(),
         };
         self.bound
             .lock()

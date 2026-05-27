@@ -25,9 +25,33 @@ pub struct WindowInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WindowIdentity {
+    pub hwnd: isize,
+    pub hwnd_hex: String,
+    pub pid: u32,
+    pub process_name: Option<String>,
+    pub exe_path: Option<String>,
+}
+
+impl WindowIdentity {
+    pub fn from_window(window: &WindowInfo) -> Self {
+        Self {
+            hwnd: window.hwnd,
+            hwnd_hex: window.hwnd_hex.clone(),
+            pid: window.pid,
+            process_name: window.process_name.clone(),
+            exe_path: window.exe_path.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BoundWindow {
     pub bound_id: String,
+    pub identity: WindowIdentity,
     pub window: WindowInfo,
+    pub selector: WindowSelector,
+    pub match_score: i32,
     pub title_at_bind: String,
     pub bound_at_unix_ms: u64,
 }
