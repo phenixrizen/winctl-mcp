@@ -1,7 +1,5 @@
 use crate::AppState;
-use winctl::{
-    find_windows, list_windows, monitors, BoundWindow, WindowFromPointResult, WindowSelector,
-};
+use winctl::{find_windows, list_windows, monitors, window_from_point, WindowSelector};
 
 pub fn windows_list() -> serde_json::Value {
     serde_json::json!(list_windows())
@@ -37,29 +35,8 @@ pub fn windows_window_from_point(
     y: i32,
     bound_id: Option<String>,
 ) -> serde_json::Value {
-    let top = list_windows()
-        .into_iter()
-        .find(|w| x >= w.x && y >= w.y && x < w.x + w.width && y < w.y + w.height);
-
-    let belongs = bound_id.and_then(|id| {
-        state
-            .bound
-            .lock()
-            .ok()
-            .and_then(|g| g.get(&id).cloned())
-            .and_then(|b: BoundWindow| {
-                top.as_ref()
-                    .map(|t| t.hwnd == b.window.hwnd && t.pid == b.window.pid)
-            })
-    });
-
-    let out = WindowFromPointResult {
-        screen_x: x,
-        screen_y: y,
-        child: top.clone(),
-        top_level: top,
-        belongs_to_bound_window: belongs,
-    };
+    let bound = bound_id.and_then(|id| state.bound.lock().ok().and_then(|g| g.get(&id).cloned()));
+    let out = window_from_point(x, y, bound.as_ref());
     serde_json::json!(out)
 }
 

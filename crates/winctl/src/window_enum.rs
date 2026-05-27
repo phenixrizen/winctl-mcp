@@ -1,4 +1,4 @@
-use crate::WindowInfo;
+use crate::{BoundWindow, WindowFromPointResult, WindowInfo};
 
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn hwnd_hex(hwnd: u64) -> String {
@@ -30,28 +30,92 @@ pub fn window_by_id(id: &str) -> Option<WindowInfo> {
     list_windows().into_iter().find(|w| w.id == id)
 }
 
+pub fn window_info_from_hwnd(hwnd: isize) -> Option<WindowInfo> {
+    #[cfg(windows)]
+    {
+        windows_impl::window_info_from_hwnd(hwnd)
+    }
+
+    #[cfg(not(windows))]
+    {
+        list_windows()
+            .into_iter()
+            .find(|window| window.hwnd == hwnd)
+    }
+}
+
+pub fn window_from_point(
+    screen_x: i32,
+    screen_y: i32,
+    bound: Option<&BoundWindow>,
+) -> WindowFromPointResult {
+    #[cfg(windows)]
+    {
+        windows_impl::window_from_point(screen_x, screen_y, bound)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let top_level = list_windows().into_iter().find(|window| {
+            screen_x >= window.x
+                && screen_y >= window.y
+                && screen_x < window.x + window.width
+                && screen_y < window.y + window.height
+        });
+        let child = top_level.clone();
+        let belongs_to_bound_window =
+            bound.map(|bound| point_belongs_to_bound_window(bound, &top_level, &child));
+
+        WindowFromPointResult {
+            screen_x,
+            screen_y,
+            top_level,
+            child,
+            belongs_to_bound_window,
+        }
+    }
+}
+
+pub fn point_belongs_to_bound_window(
+    bound: &BoundWindow,
+    top_level: &Option<WindowInfo>,
+    child: &Option<WindowInfo>,
+) -> bool {
+    top_level
+        .as_ref()
+        .map(|window| bound.identity.matches_window(window))
+        .unwrap_or(false)
+        || child
+            .as_ref()
+            .map(|window| bound.identity.matches_process(window))
+            .unwrap_or(false)
+}
+
 #[cfg(windows)]
 mod windows_impl {
     use std::ffi::c_void;
     use std::mem::size_of;
 
     use windows::core::PWSTR;
-    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT, TRUE};
+    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindowRect,
-        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+        ChildWindowFromPointEx, EnumWindows, GetAncestor, GetClassNameW, GetForegroundWindow,
+        GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+        IsWindowVisible, WindowFromPoint, CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT,
         GA_ROOT,
     };
 
     use crate::process::basename;
+    use crate::window_enum::point_belongs_to_bound_window;
     use crate::window_enum::{hwnd_hex, window_id_from_hwnd};
-    use crate::WindowInfo;
+    use crate::{BoundWindow, WindowFromPointResult, WindowInfo};
 
     pub(super) fn list_windows() -> anyhow::Result<Vec<WindowInfo>> {
         let mut windows = Vec::new();
@@ -62,6 +126,68 @@ mod windows_impl {
             )?;
         }
         Ok(windows)
+    }
+
+    pub(super) fn window_info_from_hwnd(hwnd: isize) -> Option<WindowInfo> {
+        if hwnd == 0 {
+            return None;
+        }
+
+        let hwnd = HWND(hwnd as *mut c_void);
+        unsafe { window_info(hwnd) }
+    }
+
+    pub(super) fn window_from_point(
+        screen_x: i32,
+        screen_y: i32,
+        bound: Option<&BoundWindow>,
+    ) -> WindowFromPointResult {
+        let point = POINT {
+            x: screen_x,
+            y: screen_y,
+        };
+        let hit = unsafe { WindowFromPoint(point) };
+        let top_hwnd = if hit.0.is_null() {
+            hit
+        } else {
+            unsafe { GetAncestor(hit, GA_ROOT) }
+        };
+
+        let top_level = if top_hwnd.0.is_null() {
+            None
+        } else {
+            unsafe { window_info(top_hwnd) }
+        };
+
+        let child = if top_hwnd.0.is_null() {
+            None
+        } else {
+            let mut client_point = point;
+            let _ = unsafe { ScreenToClient(top_hwnd, &mut client_point) };
+            let child_hwnd = unsafe {
+                ChildWindowFromPointEx(
+                    top_hwnd,
+                    client_point,
+                    CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT,
+                )
+            };
+            if child_hwnd.0.is_null() {
+                None
+            } else {
+                unsafe { window_info(child_hwnd) }
+            }
+        };
+
+        let belongs_to_bound_window =
+            bound.map(|bound| point_belongs_to_bound_window(bound, &top_level, &child));
+
+        WindowFromPointResult {
+            screen_x,
+            screen_y,
+            top_level,
+            child,
+            belongs_to_bound_window,
+        }
     }
 
     unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> windows::core::BOOL {

@@ -50,6 +50,10 @@ impl WindowIdentity {
             && self.pid == window.pid
             && same_path(&self.exe_path, &window.exe_path)
     }
+
+    pub fn matches_process(&self, window: &WindowInfo) -> bool {
+        self.pid == window.pid && same_path(&self.exe_path, &window.exe_path)
+    }
 }
 
 fn same_path(left: &Option<String>, right: &Option<String>) -> bool {
