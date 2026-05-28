@@ -23,6 +23,7 @@ use winctl::{
 #[derive(Default, Clone)]
 pub struct AppState {
     pub bound: Arc<Mutex<HashMap<String, BoundWindow>>>,
+    pub capture_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -294,7 +295,10 @@ impl WinctlMcpServer {
         &self,
         request: Parameters<DisplayScreenshotRequest>,
     ) -> Json<serde_json::Value> {
-        Json(tools::capture::screenshot_display(request.0.display_index))
+        Json(tools::capture::screenshot_display(
+            &self.state,
+            request.0.display_index,
+        ))
     }
 }
 
@@ -320,10 +324,17 @@ impl ServerHandler for WinctlMcpServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_env_filter("info")
+        .with_env_filter(env_filter)
         .init();
+    if tools::capture::is_capture_helper_mode() {
+        tracing::info!("winctl capture helper starting");
+        return tools::capture::run_capture_helper();
+    }
+
     tracing::info!("winctl-mcp-server starting on stdio");
     let service = WinctlMcpServer::new().serve(stdio()).await?;
     service.waiting().await?;
