@@ -15,7 +15,7 @@ pub fn screenshot_window(state: &AppState, bound_id: String) -> serde_json::Valu
         }
     };
 
-    match screenshot_window_to_path(&window, format!("./captures/{bound_id}.png")) {
+    match screenshot_window_to_path(&window, screenshot_window_output_path(&window)) {
         Ok(screenshot) => {
             tracing::info!(
                 bound_id = %bound_id,
@@ -43,6 +43,13 @@ pub fn screenshot_window(state: &AppState, bound_id: String) -> serde_json::Valu
             serde_json::json!({"ok": false, "error": error})
         }
     }
+}
+
+pub(crate) fn screenshot_window_output_path(window: &winctl::WindowInfo) -> String {
+    format!(
+        "./captures/window-{}.png",
+        sanitize_path_component(&window.hwnd_hex)
+    )
 }
 
 pub fn screenshot_display(display_index: usize) -> serde_json::Value {
@@ -87,5 +94,53 @@ pub fn screenshot_display(display_index: usize) -> serde_json::Value {
             );
             serde_json::json!({"ok": false, "error": error})
         }
+    }
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screenshot_window_output_path_uses_safe_hwnd_component() {
+        let window = winctl::WindowInfo {
+            id: "hwnd:0x0000000000981332".into(),
+            hwnd: 0x981332,
+            hwnd_hex: "0x0000000000981332".into(),
+            pid: 1,
+            tid: 1,
+            process_name: Some("Betty.exe".into()),
+            exe_path: Some("C:/Betty.exe".into()),
+            title: "Betty".into(),
+            class_name: "#32770".into(),
+            x: 920,
+            y: 230,
+            width: 1616,
+            height: 1039,
+            visible: true,
+            enabled: true,
+            foreground: false,
+            minimized: false,
+            cloaked: false,
+            top_level: true,
+        };
+
+        let path = screenshot_window_output_path(&window);
+
+        assert_eq!(path, "./captures/window-0x0000000000981332.png");
+        assert!(!path["./captures/".len()..].contains(':'));
     }
 }

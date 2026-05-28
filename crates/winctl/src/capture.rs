@@ -107,6 +107,7 @@ mod windows_impl {
     use std::error::Error;
     use std::ffi::c_void;
     use std::fs;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
@@ -206,10 +207,28 @@ mod windows_impl {
             flags,
         );
 
-        OneFrameCapture::start(settings).map_err(|error| CaptureError {
-            code: CaptureErrorCode::CaptureFailed,
-            message: format!("windows-capture failed: {error}"),
-        })?;
+        let capture_result = catch_unwind(AssertUnwindSafe(|| {
+            let control = OneFrameCapture::start_free_threaded(settings)
+                .map_err(|error| format!("windows-capture failed to start: {error}"))?;
+            control
+                .wait()
+                .map_err(|error| format!("windows-capture failed: {error}"))
+        }));
+        match capture_result {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                return Err(CaptureError {
+                    code: CaptureErrorCode::CaptureFailed,
+                    message,
+                });
+            }
+            Err(error) => {
+                return Err(CaptureError {
+                    code: CaptureErrorCode::CaptureFailed,
+                    message: format!("windows-capture panicked: {}", panic_message(error)),
+                });
+            }
+        }
 
         let (width, height) = result
             .lock()
@@ -239,6 +258,16 @@ mod windows_impl {
         }
 
         Ok(())
+    }
+
+    fn panic_message(error: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = error.downcast_ref::<&str>() {
+            (*message).into()
+        } else if let Some(message) = error.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "unknown panic payload".into()
+        }
     }
 }
 
