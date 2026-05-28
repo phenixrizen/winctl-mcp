@@ -5,32 +5,70 @@ use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::io::{self, Write};
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode};
+use axum::middleware;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::{Json as AxumJson, Router};
 use rmcp::schemars;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, tool::Parameters},
     model::{ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
-    transport::stdio,
+    transport::{
+        stdio, streamable_http_server::session::local::LocalSessionManager,
+        StreamableHttpServerConfig, StreamableHttpService,
+    },
     Json, ServerHandler, ServiceExt,
 };
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::fmt::MakeWriter;
 use winctl::{
     list_windows, revalidate_bound_window as revalidate_bound_record, select_window_for_bind,
-    BoundWindow, ClickRequest, TypeTextRequest, WindowBindError, WindowControlError,
-    WindowControlErrorCode, WindowIdentity, WindowInfo, WindowSelector,
+    BoundWindow, ClickRequest, ProcessLaunchResult, ProcessLaunchSpec, TypeTextRequest,
+    WindowBindError, WindowControlError, WindowControlErrorCode, WindowIdentity, WindowInfo,
+    WindowSelector,
 };
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct AppState {
     pub bound: Arc<Mutex<HashMap<String, BoundWindow>>>,
     pub capture_lock: Arc<Mutex<()>>,
+    pub launched: Arc<Mutex<HashMap<String, TrackedProcess>>>,
+    launch_counter: Arc<AtomicU64>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            bound: Arc::new(Mutex::new(HashMap::new())),
+            capture_lock: Arc::new(Mutex::new(())),
+            launched: Arc::new(Mutex::new(HashMap::new())),
+            launch_counter: Arc::new(AtomicU64::new(1)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct TrackedProcess {
+    pub launch_id: String,
+    pub pid: u32,
+    pub exe: String,
+    pub executable_path: Option<String>,
+    pub process_name: Option<String>,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub launch_time_unix_ms: u64,
+    pub command_line: String,
 }
 
 impl AppState {
@@ -144,6 +182,57 @@ impl AppState {
 
         result
     }
+
+    pub fn track_launch(
+        &self,
+        spec: &ProcessLaunchSpec,
+        launch: &ProcessLaunchResult,
+    ) -> TrackedProcess {
+        let launch_id = format!(
+            "launch-{}",
+            self.launch_counter.fetch_add(1, Ordering::Relaxed)
+        );
+        let tracked = TrackedProcess {
+            launch_id: launch_id.clone(),
+            pid: launch.pid,
+            exe: spec.exe.clone(),
+            executable_path: launch.executable_path.clone(),
+            process_name: launch.process_name.clone(),
+            args: spec.args.clone(),
+            cwd: spec.cwd.clone(),
+            launch_time_unix_ms: launch.launch_time_unix_ms,
+            command_line: winctl::windows_argv_command_line(&spec.exe, &spec.args),
+        };
+        self.launched
+            .lock()
+            .expect("launched process mutex poisoned")
+            .insert(launch_id, tracked.clone());
+        tracked
+    }
+
+    pub fn tracked_by_pid(&self, pid: u32) -> Option<TrackedProcess> {
+        self.launched
+            .lock()
+            .expect("launched process mutex poisoned")
+            .values()
+            .find(|tracked| tracked.pid == pid)
+            .cloned()
+    }
+
+    pub fn tracked_by_launch_id(&self, launch_id: &str) -> Option<TrackedProcess> {
+        self.launched
+            .lock()
+            .expect("launched process mutex poisoned")
+            .get(launch_id)
+            .cloned()
+    }
+
+    pub fn forget_launch(&self, launch_id: &str) {
+        self.launched
+            .lock()
+            .expect("launched process mutex poisoned")
+            .remove(launch_id);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
@@ -163,6 +252,60 @@ pub struct DisplayScreenshotRequest {
     pub display_index: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ProcessLaunchRequest {
+    pub exe: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub wait_for_window: bool,
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub allow_child_process_windows: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct ProcessListRequest {
+    pub name_contains: Option<String>,
+    pub exe_path_contains: Option<String>,
+    #[serde(default)]
+    pub include_windows: bool,
+    #[serde(default)]
+    pub only_mcp_launched: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ProcessDescribeRequest {
+    pub pid: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ProcessKillRequest {
+    pub pid: Option<u32>,
+    pub launch_id: Option<String>,
+    #[serde(default = "default_force")]
+    pub force: bool,
+    #[serde(default)]
+    pub kill_tree: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct WaitForWindowRequest {
+    pub pid: Option<u32>,
+    pub launch_id: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub title_contains: Option<String>,
+    pub class_name_contains: Option<String>,
+    #[serde(default)]
+    pub allow_child_process_windows: bool,
+}
+
+fn default_force() -> bool {
+    true
+}
+
 #[derive(Clone)]
 pub struct WinctlMcpServer {
     state: AppState,
@@ -172,8 +315,12 @@ pub struct WinctlMcpServer {
 #[tool_router(router = tool_router)]
 impl WinctlMcpServer {
     pub fn new() -> Self {
+        Self::with_state(AppState::default())
+    }
+
+    pub fn with_state(state: AppState) -> Self {
         Self {
-            state: AppState::default(),
+            state,
             tool_router: Self::tool_router(),
         }
     }
@@ -285,6 +432,86 @@ impl WinctlMcpServer {
     )]
     pub async fn windows_monitors(&self) -> Json<serde_json::Value> {
         run_blocking_tool("windows.monitors", tools::windows::windows_monitors).await
+    }
+
+    #[tool(
+        name = "windows.wait_for_window",
+        description = "Wait for visible top-level window candidates owned by a PID or MCP launch ID without title-only selection."
+    )]
+    pub async fn windows_wait_for_window(
+        &self,
+        request: Parameters<WaitForWindowRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("windows.wait_for_window", move || {
+            tools::process::windows_wait_for_window(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "process.launch",
+        description = "Launch a Windows executable via CreateProcessW and optionally wait for visible PID-owned window candidates."
+    )]
+    pub async fn process_launch(
+        &self,
+        request: Parameters<ProcessLaunchRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("process.launch", move || {
+            tools::process::process_launch(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "process.list",
+        description = "List Windows process metadata, with optional top-level window candidates and MCP-launched process markers."
+    )]
+    pub async fn process_list(
+        &self,
+        request: Parameters<ProcessListRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("process.list", move || {
+            tools::process::process_list(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "process.describe",
+        description = "Describe one process with executable metadata, tracked launch status, children, and top-level windows."
+    )]
+    pub async fn process_describe(
+        &self,
+        request: Parameters<ProcessDescribeRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("process.describe", move || {
+            tools::process::process_describe(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "process.kill",
+        description = "Terminate only a process launched and tracked by this MCP server session."
+    )]
+    pub async fn process_kill(
+        &self,
+        request: Parameters<ProcessKillRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("process.kill", move || {
+            tools::process::process_kill(&state, request)
+        })
+        .await
     }
 
     #[tool(
@@ -402,14 +629,6 @@ fn main() {
         }
     };
 
-    if cli.self_test {
-        if let Err(error) = run_self_test() {
-            let _ = writeln!(io::stderr(), "self-test failed: {error:#}");
-            process::exit(1);
-        }
-        return;
-    }
-
     if let Err(error) = init_tracing(cli.log_file.clone()) {
         let _ = writeln!(io::stderr(), "fatal startup error: {error:#}");
         process::exit(1);
@@ -441,12 +660,18 @@ async fn run(_cli: Cli) -> anyhow::Result<()> {
         return tools::capture::run_capture_helper();
     }
 
-    run_mcp_stdio().await
+    match _cli.command {
+        Command::SelfTest(command) => run_self_test(command),
+        Command::Serve(config) => match config.transport {
+            TransportMode::Stdio => run_mcp_stdio(AppState::default()).await,
+            TransportMode::Http => run_mcp_http(config, AppState::default()).await,
+        },
+    }
 }
 
-async fn run_mcp_stdio() -> anyhow::Result<()> {
+async fn run_mcp_stdio(state: AppState) -> anyhow::Result<()> {
     tracing::info!("winctl-mcp-server starting on stdio");
-    let service = WinctlMcpServer::new()
+    let service = WinctlMcpServer::with_state(state)
         .serve(stdio())
         .await
         .context("failed to initialize MCP stdio service")?;
@@ -456,6 +681,99 @@ async fn run_mcp_stdio() -> anyhow::Result<()> {
         .await
         .context("MCP stdio service failed")?;
     tracing::info!("winctl-mcp-server stdio service stopped");
+    Ok(())
+}
+
+async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()> {
+    validate_http_config(config.listen, config.auth_token.as_deref())?;
+    tracing::info!(
+        listen = %config.listen,
+        auth_required = !config.listen.ip().is_loopback() || config.auth_token.is_some(),
+        "winctl-mcp-server starting on HTTP"
+    );
+
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let service = StreamableHttpService::new(
+        {
+            let state = state.clone();
+            move || Ok(WinctlMcpServer::with_state(state.clone()))
+        },
+        session_manager,
+        StreamableHttpServerConfig {
+            sse_keep_alive: None,
+            ..Default::default()
+        },
+    );
+    let auth_state = HttpAuthState {
+        required_token: if config.auth_token.is_some() || !config.listen.ip().is_loopback() {
+            config.auth_token.clone()
+        } else {
+            None
+        },
+    };
+    let mcp_router =
+        Router::new()
+            .route_service("/mcp", service)
+            .route_layer(middleware::from_fn_with_state(
+                auth_state,
+                require_bearer_auth,
+            ));
+    let app = Router::new()
+        .route("/healthz", get(healthz))
+        .merge(mcp_router);
+    let listener = tokio::net::TcpListener::bind(config.listen)
+        .await
+        .with_context(|| format!("failed to bind HTTP listener {}", config.listen))?;
+    tracing::info!(
+        listen = %listener.local_addr().unwrap_or(config.listen),
+        "winctl-mcp-server HTTP listener initialized"
+    );
+    axum::serve(listener, app)
+        .await
+        .context("HTTP MCP server failed")
+}
+
+#[derive(Clone)]
+struct HttpAuthState {
+    required_token: Option<String>,
+}
+
+async fn healthz() -> impl IntoResponse {
+    tracing::info!("HTTP health check requested");
+    AxumJson(serde_json::json!({
+        "ok": true,
+        "service": "winctl-mcp-server"
+    }))
+}
+
+async fn require_bearer_auth(
+    State(state): State<HttpAuthState>,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let Some(required_token) = state.required_token else {
+        return next.run(request).await;
+    };
+    let authorized = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .map(|header| header == format!("Bearer {required_token}"))
+        .unwrap_or(false);
+    if authorized {
+        next.run(request).await
+    } else {
+        tracing::warn!("HTTP MCP request rejected by bearer auth");
+        (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+    }
+}
+
+fn validate_http_config(listen: SocketAddr, auth_token: Option<&str>) -> anyhow::Result<()> {
+    if !listen.ip().is_loopback() && auth_token.filter(|token| !token.is_empty()).is_none() {
+        anyhow::bail!(
+            "HTTP listen address {listen} is not loopback; provide --auth-token before exposing MCP tools"
+        );
+    }
     Ok(())
 }
 
@@ -492,7 +810,7 @@ fn install_panic_hook() {
     }));
 }
 
-fn run_self_test() -> anyhow::Result<()> {
+fn run_self_test(command: SelfTestCommand) -> anyhow::Result<()> {
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "winctl-mcp-server self-test")?;
     writeln!(stdout, "stdout: self-test output only")?;
@@ -500,13 +818,64 @@ fn run_self_test() -> anyhow::Result<()> {
         stdout,
         "mcp_stdio: stdout reserved for JSON-RPC in MCP mode"
     )?;
+    match command {
+        SelfTestCommand::Basic => {}
+        SelfTestCommand::WindowsList => {
+            let windows = list_windows();
+            writeln!(stdout, "windows-list: {} windows", windows.len())?;
+        }
+    }
     Ok(())
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct Cli {
-    self_test: bool,
+    command: Command,
     log_file: Option<PathBuf>,
+}
+
+impl Default for Cli {
+    fn default() -> Self {
+        Self {
+            command: Command::Serve(ServeConfig::stdio()),
+            log_file: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Command {
+    Serve(ServeConfig),
+    SelfTest(SelfTestCommand),
+}
+
+#[derive(Debug, Clone)]
+struct ServeConfig {
+    transport: TransportMode,
+    listen: SocketAddr,
+    auth_token: Option<String>,
+}
+
+impl ServeConfig {
+    fn stdio() -> Self {
+        Self {
+            transport: TransportMode::Stdio,
+            listen: default_http_listen(),
+            auth_token: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransportMode {
+    Stdio,
+    Http,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SelfTestCommand {
+    Basic,
+    WindowsList,
 }
 
 impl Cli {
@@ -515,22 +884,114 @@ impl Cli {
         I: IntoIterator<Item = OsString>,
     {
         let mut cli = Self::default();
-        let mut args = args.into_iter();
-        while let Some(arg) = args.next() {
-            if arg == "--self-test" {
-                cli.self_test = true;
-            } else if arg == "--log-file" {
-                let Some(path) = args.next() else {
+        let args: Vec<_> = args.into_iter().collect();
+        let mut index = 0;
+        let mut command_seen = false;
+        while index < args.len() {
+            let arg = &args[index];
+            if arg == "--log-file" {
+                index += 1;
+                let Some(path) = args.get(index) else {
                     anyhow::bail!("--log-file requires a path");
                 };
                 cli.log_file = Some(PathBuf::from(path));
+            } else if arg == "--self-test" {
+                cli.command = Command::SelfTest(SelfTestCommand::Basic);
+                command_seen = true;
+            } else if arg == "self-test" {
+                if command_seen {
+                    anyhow::bail!("only one command may be provided");
+                }
+                index += 1;
+                let Some(command) = args.get(index) else {
+                    anyhow::bail!(
+                        "self-test requires a command, for example: self-test windows-list"
+                    );
+                };
+                cli.command = Command::SelfTest(parse_self_test_command(command)?);
+                command_seen = true;
+            } else if arg == "serve" {
+                if command_seen {
+                    anyhow::bail!("only one command may be provided");
+                }
+                let (serve, next_index, log_file) = parse_serve_args(&args, index + 1)?;
+                cli.command = Command::Serve(serve);
+                if let Some(log_file) = log_file {
+                    cli.log_file = Some(log_file);
+                }
+                index = next_index;
+                command_seen = true;
+                continue;
             } else {
                 anyhow::bail!("unknown argument: {}", arg.to_string_lossy());
             }
+            index += 1;
         }
 
         Ok(cli)
     }
+}
+
+fn parse_serve_args(
+    args: &[OsString],
+    mut index: usize,
+) -> anyhow::Result<(ServeConfig, usize, Option<PathBuf>)> {
+    let mut config = ServeConfig::stdio();
+    let mut log_file = None;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--transport" {
+            index += 1;
+            let Some(value) = args.get(index) else {
+                anyhow::bail!("--transport requires stdio or http");
+            };
+            config.transport = parse_transport(value)?;
+        } else if arg == "--listen" {
+            index += 1;
+            let Some(value) = args.get(index) else {
+                anyhow::bail!("--listen requires an address");
+            };
+            config.listen = value
+                .to_string_lossy()
+                .parse()
+                .with_context(|| format!("invalid listen address {}", value.to_string_lossy()))?;
+        } else if arg == "--auth-token" {
+            index += 1;
+            let Some(value) = args.get(index) else {
+                anyhow::bail!("--auth-token requires a value");
+            };
+            config.auth_token = Some(value.to_string_lossy().to_string());
+        } else if arg == "--log-file" {
+            index += 1;
+            let Some(path) = args.get(index) else {
+                anyhow::bail!("--log-file requires a path");
+            };
+            log_file = Some(PathBuf::from(path));
+        } else {
+            anyhow::bail!("unknown serve argument: {}", arg.to_string_lossy());
+        }
+        index += 1;
+    }
+    Ok((config, index, log_file))
+}
+
+fn parse_transport(value: &OsString) -> anyhow::Result<TransportMode> {
+    match value.to_string_lossy().as_ref() {
+        "stdio" => Ok(TransportMode::Stdio),
+        "http" => Ok(TransportMode::Http),
+        other => anyhow::bail!("unsupported transport {other}; expected stdio or http"),
+    }
+}
+
+fn parse_self_test_command(value: &OsString) -> anyhow::Result<SelfTestCommand> {
+    match value.to_string_lossy().as_ref() {
+        "windows-list" => Ok(SelfTestCommand::WindowsList),
+        other => anyhow::bail!("unsupported self-test {other}; expected windows-list"),
+    }
+}
+
+fn default_http_listen() -> SocketAddr {
+    SocketAddr::new(IpAddr::from([127, 0, 0, 1]), 8765)
 }
 
 #[derive(Clone)]
@@ -655,6 +1116,10 @@ mod tests {
                 "capture.screenshot_window",
                 "input.click",
                 "input.type_text",
+                "process.describe",
+                "process.kill",
+                "process.launch",
+                "process.list",
                 "server.ping",
                 "windows.bind",
                 "windows.describe",
@@ -662,8 +1127,92 @@ mod tests {
                 "windows.focus",
                 "windows.list",
                 "windows.monitors",
+                "windows.wait_for_window",
                 "windows.window_from_point",
             ]
         );
+    }
+
+    #[test]
+    fn process_kill_refuses_untracked_pid() {
+        let state = AppState::default();
+        let value = tools::process::process_kill(
+            &state,
+            ProcessKillRequest {
+                pid: Some(12345),
+                launch_id: None,
+                force: true,
+                kill_tree: false,
+            },
+        );
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "process_not_owned_by_server");
+    }
+
+    #[test]
+    fn process_kill_refuses_tracked_pid_identity_mismatch() {
+        let state = AppState::default();
+        state.launched.lock().unwrap().insert(
+            "launch-test".into(),
+            TrackedProcess {
+                launch_id: "launch-test".into(),
+                pid: std::process::id(),
+                exe: "C:/not-the-current-process.exe".into(),
+                executable_path: Some("C:/not-the-current-process.exe".into()),
+                process_name: Some("not-the-current-process.exe".into()),
+                args: vec![],
+                cwd: None,
+                launch_time_unix_ms: 1,
+                command_line: "C:/not-the-current-process.exe".into(),
+            },
+        );
+
+        let value = tools::process::process_kill(
+            &state,
+            ProcessKillRequest {
+                pid: None,
+                launch_id: Some("launch-test".into()),
+                force: true,
+                kill_tree: false,
+            },
+        );
+
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "tracked_process_identity_mismatch");
+    }
+
+    #[test]
+    fn http_non_loopback_requires_auth_token() {
+        let addr: SocketAddr = "0.0.0.0:8765".parse().unwrap();
+        assert!(validate_http_config(addr, None).is_err());
+        assert!(validate_http_config(addr, Some("secret")).is_ok());
+        let loopback: SocketAddr = "127.0.0.1:8765".parse().unwrap();
+        assert!(validate_http_config(loopback, None).is_ok());
+    }
+
+    #[test]
+    fn cli_parses_required_commands() {
+        let cli = Cli::parse([
+            OsString::from("serve"),
+            OsString::from("--transport"),
+            OsString::from("http"),
+            OsString::from("--listen"),
+            OsString::from("127.0.0.1:8765"),
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Serve(config) => {
+                assert_eq!(config.transport, TransportMode::Http);
+                assert_eq!(config.listen, default_http_listen());
+            }
+            _ => panic!("expected serve command"),
+        }
+
+        let cli =
+            Cli::parse([OsString::from("self-test"), OsString::from("windows-list")]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::SelfTest(SelfTestCommand::WindowsList)
+        ));
     }
 }

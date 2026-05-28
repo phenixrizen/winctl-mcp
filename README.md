@@ -27,3 +27,23 @@ make build-win-server WINDOWS_TARGET=x86_64-pc-windows-msvc
 ## Runbook
 
 See [docs/windows-runbook.md](docs/windows-runbook.md) for Windows host setup, permissions, troubleshooting, packaging, and the integration harness.
+
+## Server Commands
+
+Preferred Windows/WSL development transport:
+
+```powershell
+winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765
+```
+
+Compatibility stdio transport:
+
+```powershell
+winctl-mcp-server.exe serve --transport stdio
+```
+
+Self-test:
+
+```powershell
+winctl-mcp-server.exe self-test windows-list
+```

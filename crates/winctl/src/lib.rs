@@ -9,6 +9,7 @@ pub mod window_match;
 pub use capture::*;
 pub use input::*;
 pub use monitors::*;
+pub use process::*;
 pub use window_enum::*;
 pub use window_identity::*;
 pub use window_match::*;

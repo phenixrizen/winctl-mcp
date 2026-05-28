@@ -26,7 +26,27 @@ The packaged server is written under `dist/winctl-mcp-windows-<target>/`.
 
 ## Run On Windows
 
-Run `winctl-mcp-server.exe` from an interactive Windows desktop session. MCP clients should launch the server over stdio with no shell wrapper that writes to stdout.
+Run `winctl-mcp-server.exe` from an interactive Windows desktop session.
+
+Preferred HTTP transport for Windows/WSL development:
+
+```powershell
+winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765
+```
+
+Compatibility stdio transport:
+
+```powershell
+winctl-mcp-server.exe serve --transport stdio
+```
+
+Self-test mode may write human-readable output to stdout:
+
+```powershell
+winctl-mcp-server.exe self-test windows-list
+```
+
+In stdio mode, MCP clients should launch the server with no shell wrapper that writes to stdout.
 
 Example MCP command path:
 
@@ -34,7 +54,9 @@ Example MCP command path:
 target\x86_64-pc-windows-gnu\release\winctl-mcp-server.exe
 ```
 
-Set `RUST_LOG=info` for operational logs. The server writes tracing logs to stderr so stdout remains reserved for MCP protocol messages.
+Set `RUST_LOG=info` for operational logs. The server writes tracing logs to stderr so stdout remains reserved for MCP protocol messages. Use `--log-file <path>` with either `serve` transport when the MCP client hides stderr.
+
+HTTP binds to loopback by default. If you bind to anything other than loopback, pass `--auth-token <token>` and send `Authorization: Bearer <token>` on MCP requests. Tool routes are not exposed over unauthenticated non-loopback HTTP.
 
 ## Required Permissions
 

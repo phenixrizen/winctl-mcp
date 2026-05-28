@@ -20,8 +20,11 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
+  "Win32_Security",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_HiDpi",
@@ -34,7 +37,7 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dwm",
 ] }
 windows-capture = "2"
-rmcp = { version = "0.5", features = ["server", "transport-io"] }
+rmcp = { version = "0.5", features = ["server", "transport-io", "transport-worker", "transport-streamable-http-server"] }
 regex = "1"
 base64 = "0.22"
 image = "0.25"
