@@ -1,10 +1,16 @@
 mod tools;
 
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
 use std::future::Future;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::process;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
 use rmcp::schemars;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, tool::Parameters},
@@ -14,6 +20,7 @@ use rmcp::{
     Json, ServerHandler, ServiceExt,
 };
 use serde::{Deserialize, Serialize};
+use tracing_subscriber::fmt::MakeWriter;
 use winctl::{
     list_windows, revalidate_bound_window as revalidate_bound_record, select_window_for_bind,
     BoundWindow, ClickRequest, TypeTextRequest, WindowBindError, WindowControlError,
@@ -172,11 +179,20 @@ impl WinctlMcpServer {
     }
 
     #[tool(
+        name = "server.ping",
+        description = "Return a minimal health response without touching Win32 APIs."
+    )]
+    pub async fn server_ping(&self) -> Json<serde_json::Value> {
+        tracing::info!("server.ping requested");
+        Json(serde_json::json!({"ok": true, "pong": true}))
+    }
+
+    #[tool(
         name = "windows.list",
         description = "List visible and discoverable top-level Windows windows with HWND, PID, executable, class, title, and virtual desktop geometry."
     )]
     pub async fn windows_list(&self) -> Json<serde_json::Value> {
-        Json(tools::windows::windows_list())
+        run_blocking_tool("windows.list", tools::windows::windows_list).await
     }
 
     #[tool(
@@ -187,7 +203,11 @@ impl WinctlMcpServer {
         &self,
         selector: Parameters<WindowSelector>,
     ) -> Json<serde_json::Value> {
-        Json(tools::windows::windows_find(selector.0))
+        let selector = selector.0;
+        run_blocking_tool("windows.find", move || {
+            tools::windows::windows_find(selector)
+        })
+        .await
     }
 
     #[tool(
@@ -198,7 +218,12 @@ impl WinctlMcpServer {
         &self,
         selector: Parameters<WindowSelector>,
     ) -> Json<serde_json::Value> {
-        Json(tools::windows::windows_bind(&self.state, selector.0))
+        let state = self.state.clone();
+        let selector = selector.0;
+        run_blocking_tool("windows.bind", move || {
+            tools::windows::windows_bind(&state, selector)
+        })
+        .await
     }
 
     #[tool(
@@ -209,10 +234,12 @@ impl WinctlMcpServer {
         &self,
         request: Parameters<BoundIdRequest>,
     ) -> Json<serde_json::Value> {
-        Json(tools::windows::windows_describe(
-            &self.state,
-            request.0.bound_id,
-        ))
+        let state = self.state.clone();
+        let bound_id = request.0.bound_id;
+        run_blocking_tool("windows.describe", move || {
+            tools::windows::windows_describe(&state, bound_id)
+        })
+        .await
     }
 
     #[tool(
@@ -223,10 +250,12 @@ impl WinctlMcpServer {
         &self,
         request: Parameters<BoundIdRequest>,
     ) -> Json<serde_json::Value> {
-        Json(tools::windows::windows_focus(
-            &self.state,
-            request.0.bound_id,
-        ))
+        let state = self.state.clone();
+        let bound_id = request.0.bound_id;
+        run_blocking_tool("windows.focus", move || {
+            tools::windows::windows_focus(&state, bound_id)
+        })
+        .await
     }
 
     #[tool(
@@ -238,12 +267,16 @@ impl WinctlMcpServer {
         request: Parameters<WindowFromPointRequest>,
     ) -> Json<serde_json::Value> {
         let request = request.0;
-        Json(tools::windows::windows_window_from_point(
-            &self.state,
-            request.x,
-            request.y,
-            request.bound_id,
-        ))
+        let state = self.state.clone();
+        run_blocking_tool("windows.window_from_point", move || {
+            tools::windows::windows_window_from_point(
+                &state,
+                request.x,
+                request.y,
+                request.bound_id,
+            )
+        })
+        .await
     }
 
     #[tool(
@@ -251,7 +284,7 @@ impl WinctlMcpServer {
         description = "List monitor geometry, DPI scale, primary monitor flag, and total virtual desktop bounds."
     )]
     pub async fn windows_monitors(&self) -> Json<serde_json::Value> {
-        Json(tools::windows::windows_monitors())
+        run_blocking_tool("windows.monitors", tools::windows::windows_monitors).await
     }
 
     #[tool(
@@ -259,7 +292,12 @@ impl WinctlMcpServer {
         description = "Click a bound window coordinate after identity revalidation and window-from-point preflight."
     )]
     pub async fn input_click(&self, request: Parameters<ClickRequest>) -> Json<serde_json::Value> {
-        Json(tools::input::input_click(&self.state, request.0))
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("input.click", move || {
+            tools::input::input_click(&state, request)
+        })
+        .await
     }
 
     #[tool(
@@ -270,7 +308,12 @@ impl WinctlMcpServer {
         &self,
         request: Parameters<TypeTextRequest>,
     ) -> Json<serde_json::Value> {
-        Json(tools::input::input_type_text(&self.state, request.0))
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("input.type_text", move || {
+            tools::input::input_type_text(&state, request)
+        })
+        .await
     }
 
     #[tool(
@@ -281,10 +324,12 @@ impl WinctlMcpServer {
         &self,
         request: Parameters<BoundIdRequest>,
     ) -> Json<serde_json::Value> {
-        Json(tools::capture::screenshot_window(
-            &self.state,
-            request.0.bound_id,
-        ))
+        let state = self.state.clone();
+        let bound_id = request.0.bound_id;
+        run_blocking_tool("capture.screenshot_window", move || {
+            tools::capture::screenshot_window(&state, bound_id)
+        })
+        .await
     }
 
     #[tool(
@@ -295,10 +340,35 @@ impl WinctlMcpServer {
         &self,
         request: Parameters<DisplayScreenshotRequest>,
     ) -> Json<serde_json::Value> {
-        Json(tools::capture::screenshot_display(
-            &self.state,
-            request.0.display_index,
-        ))
+        let state = self.state.clone();
+        let display_index = request.0.display_index;
+        run_blocking_tool("capture.screenshot_display", move || {
+            tools::capture::screenshot_display(&state, display_index)
+        })
+        .await
+    }
+}
+
+async fn run_blocking_tool<F>(tool_name: &'static str, operation: F) -> Json<serde_json::Value>
+where
+    F: FnOnce() -> serde_json::Value + Send + 'static,
+{
+    match tokio::task::spawn_blocking(operation).await {
+        Ok(value) => Json(value),
+        Err(error) => {
+            tracing::error!(
+                tool_name = tool_name,
+                error = %error,
+                "blocking MCP tool task failed"
+            );
+            Json(serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "internal_task_failed",
+                    "message": format!("{tool_name} worker failed: {error}")
+                }
+            }))
+        }
     }
 }
 
@@ -322,23 +392,188 @@ impl ServerHandler for WinctlMcpServer {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(env_filter)
-        .init();
+fn main() {
+    install_panic_hook();
+    let cli = match Cli::parse(std::env::args_os().skip(1)) {
+        Ok(cli) => cli,
+        Err(error) => {
+            let _ = writeln!(io::stderr(), "fatal startup error: {error:#}");
+            process::exit(2);
+        }
+    };
+
+    if cli.self_test {
+        if let Err(error) = run_self_test() {
+            let _ = writeln!(io::stderr(), "self-test failed: {error:#}");
+            process::exit(1);
+        }
+        return;
+    }
+
+    if let Err(error) = init_tracing(cli.log_file.clone()) {
+        let _ = writeln!(io::stderr(), "fatal startup error: {error:#}");
+        process::exit(1);
+    }
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::error!(%error, "failed to initialize Tokio runtime");
+            process::exit(1);
+        }
+    };
+
+    match runtime.block_on(run(cli)) {
+        Ok(()) => {}
+        Err(error) => {
+            tracing::error!(error = ?error, "winctl-mcp-server fatal error");
+            process::exit(1);
+        }
+    }
+}
+
+async fn run(_cli: Cli) -> anyhow::Result<()> {
     if tools::capture::is_capture_helper_mode() {
         tracing::info!("winctl capture helper starting");
         return tools::capture::run_capture_helper();
     }
 
+    run_mcp_stdio().await
+}
+
+async fn run_mcp_stdio() -> anyhow::Result<()> {
     tracing::info!("winctl-mcp-server starting on stdio");
-    let service = WinctlMcpServer::new().serve(stdio()).await?;
-    service.waiting().await?;
+    let service = WinctlMcpServer::new()
+        .serve(stdio())
+        .await
+        .context("failed to initialize MCP stdio service")?;
+    tracing::info!("winctl-mcp-server stdio service initialized");
+    service
+        .waiting()
+        .await
+        .context("MCP stdio service failed")?;
+    tracing::info!("winctl-mcp-server stdio service stopped");
     Ok(())
+}
+
+fn init_tracing(log_file: Option<PathBuf>) -> anyhow::Result<()> {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    let log_file = match log_file {
+        Some(path) => {
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .with_context(|| format!("failed to open log file {}", path.display()))?;
+            Some(Arc::new(Mutex::new(file)))
+        }
+        None => None,
+    };
+
+    tracing_subscriber::fmt()
+        .with_writer(StderrAndFileMakeWriter { log_file })
+        .with_env_filter(env_filter)
+        .with_timer(tracing_subscriber::fmt::time::SystemTime)
+        .with_level(true)
+        .init();
+    Ok(())
+}
+
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|panic_info| {
+        let backtrace = std::backtrace::Backtrace::capture();
+        let _ = writeln!(io::stderr(), "winctl-mcp-server panic: {panic_info}");
+        let _ = writeln!(io::stderr(), "backtrace: {backtrace}");
+        tracing::error!(panic = %panic_info, backtrace = %backtrace, "winctl-mcp-server panic");
+    }));
+}
+
+fn run_self_test() -> anyhow::Result<()> {
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "winctl-mcp-server self-test")?;
+    writeln!(stdout, "stdout: self-test output only")?;
+    writeln!(
+        stdout,
+        "mcp_stdio: stdout reserved for JSON-RPC in MCP mode"
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+struct Cli {
+    self_test: bool,
+    log_file: Option<PathBuf>,
+}
+
+impl Cli {
+    fn parse<I>(args: I) -> anyhow::Result<Self>
+    where
+        I: IntoIterator<Item = OsString>,
+    {
+        let mut cli = Self::default();
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            if arg == "--self-test" {
+                cli.self_test = true;
+            } else if arg == "--log-file" {
+                let Some(path) = args.next() else {
+                    anyhow::bail!("--log-file requires a path");
+                };
+                cli.log_file = Some(PathBuf::from(path));
+            } else {
+                anyhow::bail!("unknown argument: {}", arg.to_string_lossy());
+            }
+        }
+
+        Ok(cli)
+    }
+}
+
+#[derive(Clone)]
+struct StderrAndFileMakeWriter {
+    log_file: Option<Arc<Mutex<File>>>,
+}
+
+struct StderrAndFileWriter {
+    log_file: Option<Arc<Mutex<File>>>,
+}
+
+impl<'a> MakeWriter<'a> for StderrAndFileMakeWriter {
+    type Writer = StderrAndFileWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        StderrAndFileWriter {
+            log_file: self.log_file.clone(),
+        }
+    }
+}
+
+impl Write for StderrAndFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        io::stderr().write_all(buf)?;
+        if let Some(file) = &self.log_file {
+            let mut file = file
+                .lock()
+                .map_err(|_| io::Error::other("log file mutex poisoned"))?;
+            file.write_all(buf)?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        io::stderr().flush()?;
+        if let Some(file) = &self.log_file {
+            let mut file = file
+                .lock()
+                .map_err(|_| io::Error::other("log file mutex poisoned"))?;
+            file.flush()?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -420,6 +655,7 @@ mod tests {
                 "capture.screenshot_window",
                 "input.click",
                 "input.type_text",
+                "server.ping",
                 "windows.bind",
                 "windows.describe",
                 "windows.find",

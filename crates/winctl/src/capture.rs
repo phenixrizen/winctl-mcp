@@ -111,6 +111,8 @@ mod windows_impl {
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
     use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
     use windows_capture::encoder::ImageFormat;
     use windows_capture::frame::Frame;
@@ -164,6 +166,7 @@ mod windows_impl {
         output_path: String,
         region: CaptureRegion,
     ) -> Result<ScreenshotResult, CaptureError> {
+        let _com = initialize_com_for_capture()?;
         let item = Window::from_raw_hwnd(window.hwnd as *mut c_void);
         capture_once(item, output_path, region)
     }
@@ -173,11 +176,48 @@ mod windows_impl {
         output_path: String,
         region: CaptureRegion,
     ) -> Result<ScreenshotResult, CaptureError> {
+        let _com = initialize_com_for_capture()?;
         let item = Monitor::from_index(display_index + 1).map_err(|error| CaptureError {
             code: CaptureErrorCode::NoDisplay,
             message: format!("display index {display_index} is unavailable: {error}"),
         })?;
         capture_once(item, output_path, region)
+    }
+
+    struct ComApartment {
+        should_uninitialize: bool,
+    }
+
+    impl Drop for ComApartment {
+        fn drop(&mut self) {
+            if self.should_uninitialize {
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
+
+    fn initialize_com_for_capture() -> Result<ComApartment, CaptureError> {
+        let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        if result.is_ok() {
+            return Ok(ComApartment {
+                should_uninitialize: true,
+            });
+        }
+
+        if result == RPC_E_CHANGED_MODE {
+            tracing::warn!(
+                result = ?result,
+                "capture thread COM apartment was already initialized with a different model"
+            );
+            return Ok(ComApartment {
+                should_uninitialize: false,
+            });
+        }
+
+        Err(CaptureError {
+            code: CaptureErrorCode::CaptureFailed,
+            message: format!("failed to initialize COM for capture: {result:?}"),
+        })
     }
 
     fn capture_once<T>(

@@ -49,6 +49,7 @@ struct CaptureHelperResponse {
 }
 
 #[derive(Debug)]
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 struct CaptureHelperProcessOutput {
     success: bool,
     status_code: Option<i32>,
@@ -424,6 +425,7 @@ fn terminate_capture_helper_pid(helper_pid: u32) {
     });
 }
 
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 fn decode_capture_helper_output(
     output: CaptureHelperProcessOutput,
 ) -> Result<ScreenshotResult, CaptureError> {
@@ -488,6 +490,7 @@ fn decode_capture_helper_output(
     }
 }
 
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 fn capture_helper_timeout_error(capture_kind: &str, timeout: Duration) -> CaptureError {
     CaptureError {
         code: CaptureErrorCode::CaptureFailed,
@@ -515,6 +518,7 @@ fn write_atomic_file(path: &Path, payload: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 fn summarize_output(value: &str) -> String {
     const LIMIT: usize = 500;
     let value = value.trim();

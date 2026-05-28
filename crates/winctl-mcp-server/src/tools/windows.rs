@@ -4,10 +4,12 @@ use winctl::{
 };
 
 pub fn windows_list() -> serde_json::Value {
+    tracing::info!("windows.list requested");
     serde_json::json!(list_windows())
 }
 
 pub fn windows_find(selector: WindowSelector) -> serde_json::Value {
+    tracing::info!("windows.find requested");
     serde_json::json!(find_windows(&selector, &list_windows()))
 }
 
