@@ -43,15 +43,23 @@ use winctl::{
 pub struct AppState {
     pub bound: Arc<Mutex<HashMap<String, BoundWindow>>>,
     pub capture_lock: Arc<Mutex<()>>,
+    pub capture_dir: Arc<PathBuf>,
     pub launched: Arc<Mutex<HashMap<String, TrackedProcess>>>,
     launch_counter: Arc<AtomicU64>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        Self::with_capture_dir(tools::capture::default_capture_dir())
+    }
+}
+
+impl AppState {
+    pub fn with_capture_dir(capture_dir: PathBuf) -> Self {
         Self {
             bound: Arc::new(Mutex::new(HashMap::new())),
             capture_lock: Arc::new(Mutex::new(())),
+            capture_dir: Arc::new(capture_dir),
             launched: Arc::new(Mutex::new(HashMap::new())),
             launch_counter: Arc::new(AtomicU64::new(1)),
         }
@@ -662,15 +670,26 @@ async fn run(_cli: Cli) -> anyhow::Result<()> {
 
     match _cli.command {
         Command::SelfTest(command) => run_self_test(command),
-        Command::Serve(config) => match config.transport {
-            TransportMode::Stdio => run_mcp_stdio(AppState::default()).await,
-            TransportMode::Http => run_mcp_http(config, AppState::default()).await,
-        },
+        Command::Serve(config) => {
+            let state = config
+                .capture_dir
+                .clone()
+                .map(AppState::with_capture_dir)
+                .unwrap_or_default();
+            match config.transport {
+                TransportMode::Stdio => run_mcp_stdio(state).await,
+                TransportMode::Http => run_mcp_http(config, state).await,
+            }
+        }
     }
 }
 
 async fn run_mcp_stdio(state: AppState) -> anyhow::Result<()> {
-    tracing::info!("winctl-mcp-server starting on stdio");
+    tools::capture::ensure_capture_dir(state.capture_dir.as_ref())?;
+    tracing::info!(
+        capture_dir = %state.capture_dir.as_ref().display(),
+        "winctl-mcp-server starting on stdio"
+    );
     let service = WinctlMcpServer::with_state(state)
         .serve(stdio())
         .await
@@ -686,8 +705,10 @@ async fn run_mcp_stdio(state: AppState) -> anyhow::Result<()> {
 
 async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()> {
     validate_http_config(config.listen, config.auth_token.as_deref())?;
+    tools::capture::ensure_capture_dir(state.capture_dir.as_ref())?;
     tracing::info!(
         listen = %config.listen,
+        capture_dir = %state.capture_dir.as_ref().display(),
         auth_required = !config.listen.ip().is_loopback() || config.auth_token.is_some(),
         "winctl-mcp-server starting on HTTP"
     );
@@ -854,6 +875,7 @@ struct ServeConfig {
     transport: TransportMode,
     listen: SocketAddr,
     auth_token: Option<String>,
+    capture_dir: Option<PathBuf>,
 }
 
 impl ServeConfig {
@@ -862,6 +884,7 @@ impl ServeConfig {
             transport: TransportMode::Stdio,
             listen: default_http_listen(),
             auth_token: None,
+            capture_dir: None,
         }
     }
 }
@@ -961,6 +984,12 @@ fn parse_serve_args(
                 anyhow::bail!("--auth-token requires a value");
             };
             config.auth_token = Some(value.to_string_lossy().to_string());
+        } else if arg == "--capture-dir" {
+            index += 1;
+            let Some(path) = args.get(index) else {
+                anyhow::bail!("--capture-dir requires a path");
+            };
+            config.capture_dir = Some(PathBuf::from(path));
         } else if arg == "--log-file" {
             index += 1;
             let Some(path) = args.get(index) else {
@@ -1198,12 +1227,18 @@ mod tests {
             OsString::from("http"),
             OsString::from("--listen"),
             OsString::from("127.0.0.1:8765"),
+            OsString::from("--capture-dir"),
+            OsString::from("D:/winctl-captures"),
         ])
         .unwrap();
         match cli.command {
             Command::Serve(config) => {
                 assert_eq!(config.transport, TransportMode::Http);
                 assert_eq!(config.listen, default_http_listen());
+                assert_eq!(
+                    config.capture_dir,
+                    Some(PathBuf::from("D:/winctl-captures"))
+                );
             }
             _ => panic!("expected serve command"),
         }
