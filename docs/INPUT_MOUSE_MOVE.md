@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Move the mouse to a bound window coordinate after identity revalidation and point preflight.
 

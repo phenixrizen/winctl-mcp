@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Poll bound-window screenshots until the image bytes change, returning replay-safe capture diagnostics.
 

@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Drag between two bound window coordinates after identity revalidation and point preflight.
 

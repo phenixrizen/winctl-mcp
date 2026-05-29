@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Wait for a process identified by PID or MCP launch ID to exit and return lifecycle timing metadata.
 

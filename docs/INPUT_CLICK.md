@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Click a bound window coordinate after identity revalidation and window-from-point preflight.
 

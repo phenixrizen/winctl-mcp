@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata.
 

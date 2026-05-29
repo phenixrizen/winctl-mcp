@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Wait for a bound window to satisfy state, foreground, title, or class conditions after identity revalidation.
 

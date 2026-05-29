@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Find UI Automation elements in a fresh bound-window snapshot by semantic selector fields.
 

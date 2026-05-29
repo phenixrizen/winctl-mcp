@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Execute a macro manifest through the existing MCP tool implementations with target revalidation before control actions.
 

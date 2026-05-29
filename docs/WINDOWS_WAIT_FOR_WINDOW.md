@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Wait for visible top-level window candidates owned by a PID or MCP launch ID without title-only selection.
 
