@@ -1,0 +1,13 @@
+{
+  "name": "winctl-mcp",
+  "transport": {
+    "type": "streamable_http",
+    "url": "http://127.0.0.1:8765/mcp",
+    "headers": {
+      "Authorization": "Bearer replace-me"
+    }
+  },
+  "timeouts": {
+    "tool_seconds": 120
+  }
+}

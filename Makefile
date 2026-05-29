@@ -5,7 +5,8 @@ CARGO ?= cargo
 RUSTUP ?= rustup
 WINDOWS_TARGET ?= x86_64-pc-windows-gnu
 RELEASE ?= 1
-DIST_DIR ?= dist/winctl-mcp-windows-$(WINDOWS_TARGET)
+VERSION ?= $(shell awk -F\" '/^version = / { print $$2; exit }' Cargo.toml)
+DIST_DIR ?= dist/winctl-mcp-$(VERSION)-windows-$(WINDOWS_TARGET)
 
 ifeq ($(RELEASE),1)
   PROFILE_FLAG := --release
@@ -26,7 +27,7 @@ help:
 	@echo "  build-win-server    Build only winctl-mcp-server for Windows"
 	@echo "  build-win-tray      Build only winctl-tray for Windows"
 	@echo "  build-win-fixture   Build the Windows integration fixture"
-	@echo "  package-win         Copy Windows server artifact and runbook into dist/"
+	@echo "  package-win         Package Windows binaries, docs, scripts, metadata, and checksums"
 	@echo "  check               Run fmt + test + build-linux"
 	@echo "  print-artifacts     Show expected Windows artifact paths"
 
@@ -63,14 +64,8 @@ build-win-fixture:
 	$(CARGO) build -p winctl-test-target --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
 
 .PHONY: package-win
-package-win: build-win-server
-	rm -rf "$(DIST_DIR)"
-	mkdir -p "$(DIST_DIR)/scripts" "$(DIST_DIR)/docs"
-	cp "target/$(WINDOWS_TARGET)/$(PROFILE_DIR)/winctl-mcp-server.exe" "$(DIST_DIR)/"
-	cp README.md "$(DIST_DIR)/"
-	cp docs/windows-runbook.md "$(DIST_DIR)/docs/"
-	cp scripts/run-windows-integration.ps1 "$(DIST_DIR)/scripts/"
-	@echo "Packaged Windows server in $(DIST_DIR)"
+package-win: build-win-server build-win-tray
+	bash scripts/package-windows-release.sh "$(WINDOWS_TARGET)" "$(PROFILE_DIR)" "$(DIST_DIR)" "$(VERSION)"
 
 .PHONY: check
 check: fmt test build-linux

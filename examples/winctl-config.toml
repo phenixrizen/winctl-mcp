@@ -1,0 +1,42 @@
+[transport]
+mode = "http"
+listen = "127.0.0.1:8765"
+
+[auth]
+token = "replace-me"
+
+[logging]
+log_file = "C:/Users/nater/AppData/Local/winctl-mcp/logs/server.log"
+
+[paths]
+capture_dir = "C:/Users/nater/AppData/Local/winctl-mcp/captures"
+artifact_dir = "C:/Users/nater/AppData/Local/winctl-mcp/artifacts"
+filesystem_roots = [
+  "C:/Users/nater/AppData/Local/winctl-mcp/captures",
+  "C:/Users/nater/AppData/Local/winctl-mcp/artifacts",
+  "C:/Users/nater/AppData/Local/winctl-mcp/exports"
+]
+memory_db = "C:/Users/nater/AppData/Local/winctl-mcp/memory/memory.sqlite"
+
+[policy]
+enable_filesystem_mutation = false
+enable_clipboard_write = false
+enable_registry_mutation = false
+allow_private_network = false
+memory_mutation_enabled = true
+macro_execution_enabled = true
+macro_destructive_tools_allowed = false
+max_macro_runtime_ms = 300000
+max_macro_steps = 200
+screenshot_retention_count = 200
+tool_denylist = []
+
+[embedding]
+model_path = "C:/Users/nater/AppData/Local/winctl-mcp/models/minilm.onnx"
+dimension = 384
+
+[macro_execution]
+enabled = true
+allow_destructive_tools = false
+max_runtime_ms = 300000
+max_steps = 200

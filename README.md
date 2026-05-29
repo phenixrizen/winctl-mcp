@@ -30,6 +30,22 @@ The default Windows target is `x86_64-pc-windows-gnu`. Override it when needed:
 make build-win-server WINDOWS_TARGET=x86_64-pc-windows-msvc
 ```
 
+## Package and Install
+
+Build a Windows package with binaries, docs, scripts, examples, version metadata, and SHA-256 checksums:
+
+```bash
+make package-win
+```
+
+Install or update from the package on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-winctl-mcp.ps1
+```
+
+See [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md), [docs/DIRECTORY_LAYOUT.md](docs/DIRECTORY_LAYOUT.md), and [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
 ## Runbook
 
 See [docs/windows-runbook.md](docs/windows-runbook.md) for Windows host setup, permissions, troubleshooting, packaging, and the integration harness.
@@ -59,6 +75,8 @@ winctl-mcp-server.exe serve --config "$env:LOCALAPPDATA\winctl-mcp\config.toml"
 ```
 
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for transport, auth, logging, filesystem root, mutation policy, memory, embedding, and macro execution settings.
+
+MCP client examples for Codex, Claude Desktop, and generic Streamable HTTP clients are in [docs/CLIENT_CONFIGS.md](docs/CLIENT_CONFIGS.md). The canonical MCP server name is `winctl-mcp`; stale client sessions using `winctl-cmp` need the old server entry removed and the client restarted.
 
 With HTTP transport, the local diagnostic dashboard is available at `/dashboard`. See [docs/DASHBOARD.md](docs/DASHBOARD.md).
 

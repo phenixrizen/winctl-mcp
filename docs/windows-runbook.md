@@ -22,7 +22,13 @@ Package the server binary plus this runbook:
 make package-win
 ```
 
-The packaged server is written under `dist/winctl-mcp-windows-<target>/`.
+The packaged release is written under `dist/winctl-mcp-<version>-windows-<target>/` and includes binaries, docs, scripts, examples, `VERSION.txt`, `RELEASE.json`, and `CHECKSUMS.sha256`.
+
+Install or update the package on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-winctl-mcp.ps1
+```
 
 ## Run On Windows
 
@@ -60,6 +66,8 @@ Set `RUST_LOG=info` for operational logs. The server writes tracing logs to stde
 
 HTTP binds to loopback by default. If you bind to anything other than loopback, pass `--auth-token <token>` and send `Authorization: Bearer <token>` on MCP requests. Tool routes are not exposed over unauthenticated non-loopback HTTP.
 
+See [Client Configs](CLIENT_CONFIGS.md) for Codex, Claude Desktop, and Streamable HTTP examples.
+
 ## Required Permissions
 
 - Run the server as the same Windows user as the target apps.
@@ -94,3 +102,9 @@ The harness sets `WINCTL_RUN_WINDOWS_INTEGRATION=1`. Normal workspace tests do n
 - Focus or click fails: check elevation mismatch, minimized windows, remote desktop state, and whether another app is blocking foreground activation.
 - Screenshot fails: check Graphics Capture permission, display availability, and whether the target window is minimized or protected.
 - Cross-build fails for GNU: install the Rust target with `make setup-win-target` and ensure MinGW link tools are available in WSL.
+
+Packaged installs include a diagnostic helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\winctl-mcp\scripts\diagnose-winctl-mcp.ps1" -RunSelfTest
+```
