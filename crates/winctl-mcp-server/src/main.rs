@@ -683,6 +683,17 @@ pub struct RecorderExportRequest {
     pub session_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct TestManifestRequest {
+    pub manifest: winctl_macro::TestManifest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct TestRunRequest {
+    pub manifest: winctl_macro::TestManifest,
+    pub max_steps: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct WindowImageChangeWaitRequest {
     pub bound_id: String,
@@ -1819,6 +1830,59 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         run_blocking_tool("recorder.state", move || {
             tools::recorder::recorder_state(&state)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "test.validate",
+        description = "Validate a winctl test manifest and its aligned macro manifest."
+    )]
+    pub async fn test_validate(
+        &self,
+        request: Parameters<TestManifestRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        run_blocking_tool("test.validate", move || {
+            tools::tests::test_validate(request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "test.dry_run",
+        description = "Build a dry-run plan for a winctl test manifest without mutating UI state."
+    )]
+    pub async fn test_dry_run(
+        &self,
+        request: Parameters<TestManifestRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        run_blocking_tool("test.dry_run", move || tools::tests::test_dry_run(request)).await
+    }
+
+    #[tool(
+        name = "test.run",
+        description = "Run a winctl test manifest through the macro execution engine."
+    )]
+    pub async fn test_run(&self, request: Parameters<TestRunRequest>) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("test.run", move || tools::tests::test_run(&state, request)).await
+    }
+
+    #[tool(
+        name = "test.export_result",
+        description = "Export a test run result by run ID."
+    )]
+    pub async fn test_export_result(
+        &self,
+        request: Parameters<MacroExportResultRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("test.export_result", move || {
+            tools::tests::test_export_result(&state, request)
         })
         .await
     }
@@ -3384,6 +3448,10 @@ mod tests {
                 "registry.write",
                 "server.config",
                 "server.ping",
+                "test.dry_run",
+                "test.export_result",
+                "test.run",
+                "test.validate",
                 "uia.find",
                 "uia.resolve",
                 "uia.snapshot",
@@ -3518,6 +3586,37 @@ mod tests {
         assert_eq!(stopped["ok"], true);
         assert_eq!(stopped["manifest"]["steps"][0]["tool"], "input.delay");
         assert_eq!(stopped["validation"]["valid"], true);
+    }
+
+    #[test]
+    fn test_manifest_runs_through_macro_engine() {
+        let state = AppState::with_capture_dir_and_memory(
+            std::env::temp_dir().join("winctl-mcp-test-captures"),
+            winctl_memory::MemoryStore::open_in_memory().unwrap(),
+        );
+        let manifest = winctl_macro::TestManifest {
+            version: winctl_macro::TEST_MANIFEST_VERSION.into(),
+            kind: "test_procedure".into(),
+            title: "Delay test".into(),
+            description: "Delay-only test manifest".into(),
+            tags: vec!["test".into()],
+            macro_manifest: delay_manifest(),
+            artifact_paths: Vec::new(),
+            diagnostics: serde_json::Value::Null,
+        };
+        let dry_run = tools::tests::test_dry_run(TestManifestRequest {
+            manifest: manifest.clone(),
+        });
+        assert_eq!(dry_run["ok"], true);
+        let run = tools::tests::test_run(
+            &state,
+            TestRunRequest {
+                manifest,
+                max_steps: None,
+            },
+        );
+        assert_eq!(run["ok"], true);
+        assert_eq!(run["result"]["status"], "succeeded");
     }
 
     #[test]

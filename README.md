@@ -64,6 +64,8 @@ With HTTP transport, the local diagnostic dashboard is available at `/dashboard`
 
 The recorder UI is available at `/recorder` and records MCP tool steps into macro manifests. See [docs/RECORDER.md](docs/RECORDER.md).
 
+Test manifests use `winctl.test.v1` and run through the macro engine. See [docs/TEST_MANIFEST.md](docs/TEST_MANIFEST.md).
+
 Optional server controller:
 
 ```powershell

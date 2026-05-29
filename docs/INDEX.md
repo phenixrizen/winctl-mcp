@@ -27,6 +27,10 @@
 | `winctl-mcp` | [`registry.delete`](REGISTRY_DELETE.md) | Delete a Windows registry value only when registry mutation is explicitly enabled. |
 | `winctl-mcp` | [`server.config`](SERVER_CONFIG.md) | Return effective runtime configuration and security policy diagnostics. |
 | `winctl-mcp` | [`server.ping`](SERVER_PING.md) | Return a minimal health response without touching Win32 APIs. |
+| `winctl-mcp` | [`test.validate`](TEST_VALIDATE.md) | Validate a winctl test manifest and its aligned macro manifest. |
+| `winctl-mcp` | [`test.dry_run`](TEST_DRY_RUN.md) | Build a dry-run plan for a winctl test manifest without mutating UI state. |
+| `winctl-mcp` | [`test.run`](TEST_RUN.md) | Run a winctl test manifest through the macro execution engine. |
+| `winctl-mcp` | [`test.export_result`](TEST_EXPORT_RESULT.md) | Export a test run result by run ID. |
 | `winctl-mcp` | [`memory.remember`](MEMORY_REMEMBER.md) | Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata. |
 | `winctl-mcp` | [`memory.search`](MEMORY_SEARCH.md) | Search remembered procedures, observations, macros, and recipes using hybrid sqlite-vec, FTS5, tag, identity, recency, and usefulness ranking. |
 | `winctl-mcp` | [`memory.get`](MEMORY_GET.md) | Fetch one memory item by ID and update its explicit use metadata. |
@@ -95,3 +99,4 @@
 - [Dashboard](DASHBOARD.md)
 - [Tray controller](TRAY_CONTROLLER.md)
 - [Recorder](RECORDER.md)
+- [Test manifest](TEST_MANIFEST.md)

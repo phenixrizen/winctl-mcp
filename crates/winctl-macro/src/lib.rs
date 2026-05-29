@@ -7,6 +7,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub const MACRO_MANIFEST_VERSION: &str = "winctl.macro.v1";
+pub const TEST_MANIFEST_VERSION: &str = "winctl.test.v1";
 
 #[derive(Debug, Error)]
 pub enum MacroError {
@@ -45,6 +46,23 @@ pub struct MacroManifest {
     pub artifacts: ArtifactPolicy,
     #[serde(default)]
     pub replay: ReplayMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct TestManifest {
+    pub version: String,
+    #[serde(default = "default_test_kind")]
+    pub kind: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub macro_manifest: MacroManifest,
+    #[serde(default)]
+    pub artifact_paths: Vec<String>,
+    #[serde(default)]
+    pub diagnostics: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -488,6 +506,46 @@ pub fn dry_run_plan(manifest: &MacroManifest) -> Result<MacroPlan, MacroValidati
     }
 }
 
+pub fn test_manifest_to_macro(manifest: &TestManifest) -> MacroManifest {
+    let mut macro_manifest = manifest.macro_manifest.clone();
+    macro_manifest.title = manifest.title.clone();
+    macro_manifest.description = manifest.description.clone();
+    macro_manifest.tags = manifest.tags.clone();
+    macro_manifest
+}
+
+pub fn validate_test_manifest(manifest: &TestManifest) -> MacroValidationReport {
+    let mut report = validate_manifest(&test_manifest_to_macro(manifest));
+    if manifest.version != TEST_MANIFEST_VERSION {
+        report.issues.push(error(
+            "unsupported_test_version",
+            format!(
+                "test manifest version must be {TEST_MANIFEST_VERSION}, got {}",
+                manifest.version
+            ),
+            "/version",
+        ));
+    }
+    if manifest.title.trim().is_empty() {
+        report
+            .issues
+            .push(error("missing_title", "test title is required", "/title"));
+    }
+    report.valid = !report
+        .issues
+        .iter()
+        .any(|issue| issue.severity == MacroValidationSeverity::Error);
+    report
+}
+
+pub fn dry_run_test_plan(manifest: &TestManifest) -> Result<MacroPlan, MacroValidationReport> {
+    let report = validate_test_manifest(manifest);
+    if !report.valid {
+        return Err(report);
+    }
+    dry_run_plan(&test_manifest_to_macro(manifest))
+}
+
 pub fn supported_tool_names() -> Vec<&'static str> {
     SUPPORTED_TOOLS.iter().map(|tool| tool.name).collect()
 }
@@ -708,6 +766,10 @@ fn warning(
 
 fn default_required() -> bool {
     true
+}
+
+fn default_test_kind() -> String {
+    "test_procedure".into()
 }
 
 const SUPPORTED_TOOLS: &[ToolDescriptor] = &[
@@ -1011,6 +1073,28 @@ mod tests {
         let decoded: MacroManifest = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, manifest);
         assert_eq!(decoded.version, MACRO_MANIFEST_VERSION);
+    }
+
+    #[test]
+    fn test_manifest_validates_through_macro_manifest() {
+        let test_manifest = TestManifest {
+            version: TEST_MANIFEST_VERSION.into(),
+            kind: "test_procedure".into(),
+            title: "Betty settings test".into(),
+            description: "Runs the Betty settings smoke macro.".into(),
+            tags: vec!["betty".into()],
+            macro_manifest: betty_manifest(),
+            artifact_paths: Vec::new(),
+            diagnostics: Value::Null,
+        };
+        let report = validate_test_manifest(&test_manifest);
+        assert!(
+            report.valid,
+            "expected valid test manifest, got {:?}",
+            report.issues
+        );
+        let plan = dry_run_test_plan(&test_manifest).unwrap();
+        assert_eq!(plan.title, "Betty settings test");
     }
 
     #[test]
