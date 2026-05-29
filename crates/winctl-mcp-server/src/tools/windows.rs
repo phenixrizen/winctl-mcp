@@ -1,6 +1,9 @@
-use crate::AppState;
+use crate::{AppState, WaitForStateRequest};
+use std::thread;
+use std::time::{Duration, Instant};
 use winctl::{
-    find_windows, focus_window, list_windows, monitors, window_from_point, WindowSelector,
+    find_windows, focus_window, list_windows, monitors, window_from_point, WindowInfo,
+    WindowSelector,
 };
 
 pub fn windows_list() -> serde_json::Value {
@@ -107,4 +110,111 @@ pub fn windows_window_from_point(
 
 pub fn windows_monitors() -> serde_json::Value {
     serde_json::json!(monitors())
+}
+
+pub fn windows_wait_for_state(state: &AppState, request: WaitForStateRequest) -> serde_json::Value {
+    tracing::info!(
+        bound_id = %request.bound_id,
+        timeout_ms = request.timeout_ms,
+        poll_interval_ms = request.poll_interval_ms,
+        visible = ?request.visible,
+        foreground = ?request.foreground,
+        minimized = ?request.minimized,
+        cloaked = ?request.cloaked,
+        title_contains = ?request.title_contains,
+        class_name_contains = ?request.class_name_contains,
+        "windows.wait_for_state requested"
+    );
+    let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(5_000));
+    let poll_interval = Duration::from_millis(request.poll_interval_ms.unwrap_or(100).max(10));
+    let started = Instant::now();
+    let mut last_window;
+
+    loop {
+        match state.revalidate_bound_window(&request.bound_id) {
+            Ok(window) => {
+                if window_matches_state(&window, &request) {
+                    tracing::info!(
+                        bound_id = %request.bound_id,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "windows.wait_for_state matched"
+                    );
+                    return serde_json::json!({
+                        "ok": true,
+                        "bound_id": request.bound_id,
+                        "matched": true,
+                        "timeout": false,
+                        "window": window,
+                        "timing": {"elapsed_ms": started.elapsed().as_millis() as u64}
+                    });
+                }
+                last_window = Some(window);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    bound_id = %request.bound_id,
+                    error_code = ?error.code,
+                    "windows.wait_for_state revalidation failed"
+                );
+                return serde_json::json!({"ok": false, "error": error});
+            }
+        }
+
+        if started.elapsed() >= timeout {
+            tracing::warn!(
+                bound_id = %request.bound_id,
+                timeout_ms = timeout.as_millis() as u64,
+                "windows.wait_for_state timed out"
+            );
+            return serde_json::json!({
+                "ok": false,
+                "bound_id": request.bound_id,
+                "matched": false,
+                "timeout": true,
+                "last_window": last_window,
+                "timing": {"elapsed_ms": started.elapsed().as_millis() as u64},
+                "error": {
+                    "code": "window_state_timeout",
+                    "message": "bound window did not satisfy requested state before timeout"
+                }
+            });
+        }
+
+        thread::sleep(poll_interval);
+    }
+}
+
+fn window_matches_state(window: &WindowInfo, request: &WaitForStateRequest) -> bool {
+    request
+        .visible
+        .map(|expected| window.visible == expected)
+        .unwrap_or(true)
+        && request
+            .foreground
+            .map(|expected| window.foreground == expected)
+            .unwrap_or(true)
+        && request
+            .minimized
+            .map(|expected| window.minimized == expected)
+            .unwrap_or(true)
+        && request
+            .cloaked
+            .map(|expected| window.cloaked == expected)
+            .unwrap_or(true)
+        && request
+            .title_contains
+            .as_ref()
+            .map(|needle| contains_case_insensitive(&window.title, needle))
+            .unwrap_or(true)
+        && request
+            .class_name_contains
+            .as_ref()
+            .map(|needle| contains_case_insensitive(&window.class_name, needle))
+            .unwrap_or(true)
+}
+
+fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    haystack
+        .to_ascii_lowercase()
+        .contains(&needle.to_ascii_lowercase())
 }

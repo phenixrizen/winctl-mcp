@@ -1,9 +1,12 @@
-use crate::AppState;
+use crate::{AppState, WindowImageChangeWaitRequest};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 use winctl::{
     monitors, screenshot_display_to_path, screenshot_window_to_path, CaptureError,
     CaptureErrorCode, ScreenshotResult,
@@ -13,8 +16,6 @@ use winctl::{
 use std::{
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    thread,
-    time::Instant,
 };
 
 pub(crate) const CAPTURE_HELPER_ENV: &str = "WINCTL_CAPTURE_HELPER";
@@ -181,6 +182,73 @@ pub fn screenshot_display(state: &AppState, display_index: usize) -> serde_json:
     }
 }
 
+pub fn wait_for_window_image_change(
+    state: &AppState,
+    request: WindowImageChangeWaitRequest,
+) -> serde_json::Value {
+    tracing::info!(
+        bound_id = %request.bound_id,
+        timeout_ms = request.timeout_ms,
+        poll_interval_ms = request.poll_interval_ms,
+        "capture.wait_for_window_image_change requested"
+    );
+    let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(5_000));
+    let poll_interval = Duration::from_millis(request.poll_interval_ms.unwrap_or(250).max(50));
+    let started = Instant::now();
+
+    let initial = match capture_and_hash_window(state, &request.bound_id) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+
+    loop {
+        if started.elapsed() >= timeout {
+            tracing::warn!(
+                bound_id = %request.bound_id,
+                timeout_ms = timeout.as_millis() as u64,
+                "capture.wait_for_window_image_change timed out"
+            );
+            return serde_json::json!({
+                "ok": false,
+                "bound_id": request.bound_id,
+                "changed": false,
+                "timeout": true,
+                "initial_screenshot": initial.screenshot,
+                "initial_hash": initial.hash,
+                "timing": {"elapsed_ms": started.elapsed().as_millis() as u64},
+                "error": {
+                    "code": "image_change_timeout",
+                    "message": "bound window screenshot did not change before timeout"
+                }
+            });
+        }
+
+        thread::sleep(poll_interval);
+        let current = match capture_and_hash_window(state, &request.bound_id) {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        if current.hash != initial.hash {
+            tracing::info!(
+                bound_id = %request.bound_id,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "capture.wait_for_window_image_change matched"
+            );
+            return serde_json::json!({
+                "ok": true,
+                "bound_id": request.bound_id,
+                "changed": true,
+                "timeout": false,
+                "initial_screenshot": initial.screenshot,
+                "changed_screenshot": current.screenshot,
+                "initial_hash": initial.hash,
+                "changed_hash": current.hash,
+                "timing": {"elapsed_ms": started.elapsed().as_millis() as u64}
+            });
+        }
+    }
+}
+
 pub(crate) fn default_capture_dir() -> PathBuf {
     if let Some(value) = std::env::var_os(CAPTURE_DIR_ENV) {
         if !value.is_empty() {
@@ -215,6 +283,57 @@ fn screenshot_display_output_path(capture_dir: &Path, display_index: usize) -> S
 
 fn capture_output_path(capture_dir: &Path, file_name: String) -> String {
     capture_dir.join(file_name).to_string_lossy().into_owned()
+}
+
+struct HashedScreenshot {
+    screenshot: ScreenshotResult,
+    hash: u64,
+}
+
+fn capture_and_hash_window(
+    state: &AppState,
+    bound_id: &str,
+) -> Result<HashedScreenshot, serde_json::Value> {
+    let response = screenshot_window(state, bound_id.to_owned());
+    if !response
+        .get("ok")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(response);
+    }
+    let screenshot: ScreenshotResult = serde_json::from_value(
+        response.get("screenshot").cloned().unwrap_or_default(),
+    )
+    .map_err(|error| {
+        serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "invalid_screenshot_metadata",
+                "message": format!("screenshot metadata could not be decoded: {error}")
+            },
+            "capture_response": response
+        })
+    })?;
+    let hash = hash_file(&screenshot.output_path).map_err(|error| {
+        serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "image_hash_failed",
+                "message": format!("failed to hash screenshot {}: {error}", screenshot.output_path)
+            },
+            "screenshot": screenshot
+        })
+    })?;
+
+    Ok(HashedScreenshot { screenshot, hash })
+}
+
+fn hash_file(path: &str) -> std::io::Result<u64> {
+    let bytes = fs::read(path)?;
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    Ok(hasher.finish())
 }
 
 pub(crate) fn is_capture_helper_mode() -> bool {

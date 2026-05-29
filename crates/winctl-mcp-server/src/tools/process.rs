@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::{
     AppState, ProcessDescribeRequest, ProcessKillRequest, ProcessLaunchRequest, ProcessListRequest,
-    WaitForWindowRequest,
+    ProcessWaitForExitRequest, WaitForWindowRequest,
 };
 use winctl::{
     child_processes, describe_process, kill_process, launch_process, list_processes, list_windows,
@@ -274,6 +274,88 @@ pub fn process_kill(state: &AppState, request: ProcessKillRequest) -> serde_json
             );
             serde_json::json!({"ok": false, "error": error})
         }
+    }
+}
+
+pub fn process_wait_for_exit(
+    state: &AppState,
+    request: ProcessWaitForExitRequest,
+) -> serde_json::Value {
+    tracing::info!(
+        pid = ?request.pid,
+        launch_id = ?request.launch_id,
+        timeout_ms = request.timeout_ms,
+        poll_interval_ms = request.poll_interval_ms,
+        "process.wait_for_exit requested"
+    );
+    let pid = match resolve_pid(state, request.pid, request.launch_id.as_deref()) {
+        Ok(pid) => pid,
+        Err(error) => return serde_json::json!({"ok": false, "error": error}),
+    };
+    let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(5_000));
+    let poll_interval = Duration::from_millis(request.poll_interval_ms.unwrap_or(100).max(10));
+    let started = Instant::now();
+    let mut last_process = describe_process(pid).ok().flatten();
+
+    loop {
+        match describe_process(pid) {
+            Ok(Some(process)) => {
+                last_process = Some(process);
+            }
+            Ok(None) => {
+                tracing::info!(
+                    pid = pid,
+                    launch_id = ?request.launch_id,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "process.wait_for_exit matched"
+                );
+                if let Some(launch_id) = &request.launch_id {
+                    state.forget_launch(launch_id);
+                }
+                return serde_json::json!({
+                    "ok": true,
+                    "pid": pid,
+                    "launch_id": request.launch_id,
+                    "exited": true,
+                    "timeout": false,
+                    "timing": {"elapsed_ms": started.elapsed().as_millis() as u64},
+                    "last_process": last_process,
+                });
+            }
+            Err(error) => {
+                tracing::warn!(
+                    pid = pid,
+                    launch_id = ?request.launch_id,
+                    error_code = %error.code,
+                    "process.wait_for_exit describe failed"
+                );
+                return serde_json::json!({"ok": false, "error": error});
+            }
+        }
+
+        if started.elapsed() >= timeout {
+            tracing::warn!(
+                pid = pid,
+                launch_id = ?request.launch_id,
+                timeout_ms = timeout.as_millis() as u64,
+                "process.wait_for_exit timed out"
+            );
+            return serde_json::json!({
+                "ok": false,
+                "pid": pid,
+                "launch_id": request.launch_id,
+                "exited": false,
+                "timeout": true,
+                "timing": {"elapsed_ms": started.elapsed().as_millis() as u64},
+                "last_process": last_process,
+                "error": {
+                    "code": "process_exit_timeout",
+                    "message": format!("pid {pid} did not exit before timeout")
+                }
+            });
+        }
+
+        thread::sleep(poll_interval);
     }
 }
 

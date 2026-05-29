@@ -34,9 +34,10 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::fmt::MakeWriter;
 use winctl::{
     list_windows, revalidate_bound_window as revalidate_bound_record, select_window_for_bind,
-    BoundWindow, ClickRequest, ProcessLaunchResult, ProcessLaunchSpec, TypeTextRequest,
-    WindowBindError, WindowControlError, WindowControlErrorCode, WindowIdentity, WindowInfo,
-    WindowSelector,
+    BoundWindow, ClickRequest, DelayRequest, DoubleClickRequest, DragRequest, KeyRequest,
+    MouseMoveRequest, ProcessLaunchResult, ProcessLaunchSpec, ScrollRequest, ShortcutRequest,
+    TypeTextRequest, WindowBindError, WindowControlError, WindowControlErrorCode, WindowIdentity,
+    WindowInfo, WindowSelector,
 };
 
 #[derive(Clone)]
@@ -300,6 +301,14 @@ pub struct ProcessKillRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct ProcessWaitForExitRequest {
+    pub pid: Option<u32>,
+    pub launch_id: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub poll_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct WaitForWindowRequest {
     pub pid: Option<u32>,
     pub launch_id: Option<String>,
@@ -308,6 +317,26 @@ pub struct WaitForWindowRequest {
     pub class_name_contains: Option<String>,
     #[serde(default)]
     pub allow_child_process_windows: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct WaitForStateRequest {
+    pub bound_id: String,
+    pub timeout_ms: Option<u64>,
+    pub poll_interval_ms: Option<u64>,
+    pub visible: Option<bool>,
+    pub foreground: Option<bool>,
+    pub minimized: Option<bool>,
+    pub cloaked: Option<bool>,
+    pub title_contains: Option<String>,
+    pub class_name_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct WindowImageChangeWaitRequest {
+    pub bound_id: String,
+    pub timeout_ms: Option<u64>,
+    pub poll_interval_ms: Option<u64>,
 }
 
 fn default_force() -> bool {
@@ -459,6 +488,22 @@ impl WinctlMcpServer {
     }
 
     #[tool(
+        name = "windows.wait_for_state",
+        description = "Wait for a bound window to satisfy state, foreground, title, or class conditions after identity revalidation."
+    )]
+    pub async fn windows_wait_for_state(
+        &self,
+        request: Parameters<WaitForStateRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("windows.wait_for_state", move || {
+            tools::windows::windows_wait_for_state(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
         name = "process.launch",
         description = "Launch a Windows executable via CreateProcessW and optionally wait for visible PID-owned window candidates."
     )]
@@ -523,6 +568,22 @@ impl WinctlMcpServer {
     }
 
     #[tool(
+        name = "process.wait_for_exit",
+        description = "Wait for a process identified by PID or MCP launch ID to exit and return lifecycle timing metadata."
+    )]
+    pub async fn process_wait_for_exit(
+        &self,
+        request: Parameters<ProcessWaitForExitRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("process.wait_for_exit", move || {
+            tools::process::process_wait_for_exit(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
         name = "input.click",
         description = "Click a bound window coordinate after identity revalidation and window-from-point preflight."
     )]
@@ -533,6 +594,118 @@ impl WinctlMcpServer {
             tools::input::input_click(&state, request)
         })
         .await
+    }
+
+    #[tool(
+        name = "input.mouse_move",
+        description = "Move the mouse to a bound window coordinate after identity revalidation and point preflight."
+    )]
+    pub async fn input_mouse_move(
+        &self,
+        request: Parameters<MouseMoveRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("input.mouse_move", move || {
+            tools::input::input_mouse_move(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "input.double_click",
+        description = "Double-click a bound window coordinate after identity revalidation and point preflight."
+    )]
+    pub async fn input_double_click(
+        &self,
+        request: Parameters<DoubleClickRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("input.double_click", move || {
+            tools::input::input_double_click(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "input.drag",
+        description = "Drag between two bound window coordinates after identity revalidation and point preflight."
+    )]
+    pub async fn input_drag(&self, request: Parameters<DragRequest>) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("input.drag", move || {
+            tools::input::input_drag(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "input.scroll",
+        description = "Scroll at a bound window coordinate after identity revalidation and point preflight."
+    )]
+    pub async fn input_scroll(
+        &self,
+        request: Parameters<ScrollRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("input.scroll", move || {
+            tools::input::input_scroll(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "input.key_down",
+        description = "Focus a bound window and dispatch a virtual key-down event after identity revalidation."
+    )]
+    pub async fn input_key_down(&self, request: Parameters<KeyRequest>) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("input.key_down", move || {
+            tools::input::input_key_down(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "input.key_up",
+        description = "Focus a bound window and dispatch a virtual key-up event after identity revalidation."
+    )]
+    pub async fn input_key_up(&self, request: Parameters<KeyRequest>) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("input.key_up", move || {
+            tools::input::input_key_up(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "input.shortcut",
+        description = "Focus a bound window and dispatch a virtual-key shortcut after identity revalidation."
+    )]
+    pub async fn input_shortcut(
+        &self,
+        request: Parameters<ShortcutRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("input.shortcut", move || {
+            tools::input::input_shortcut(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "input.delay",
+        description = "Wait for a bounded number of milliseconds and return timing metadata for replay manifests."
+    )]
+    pub async fn input_delay(&self, request: Parameters<DelayRequest>) -> Json<serde_json::Value> {
+        let request = request.0;
+        run_blocking_tool("input.delay", move || tools::input::input_delay(request)).await
     }
 
     #[tool(
@@ -579,6 +752,22 @@ impl WinctlMcpServer {
         let display_index = request.0.display_index;
         run_blocking_tool("capture.screenshot_display", move || {
             tools::capture::screenshot_display(&state, display_index)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "capture.wait_for_window_image_change",
+        description = "Poll bound-window screenshots until the image bytes change, returning replay-safe capture diagnostics."
+    )]
+    pub async fn wait_for_window_image_change(
+        &self,
+        request: Parameters<WindowImageChangeWaitRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("capture.wait_for_window_image_change", move || {
+            tools::capture::wait_for_window_image_change(&state, request)
         })
         .await
     }
@@ -1143,12 +1332,22 @@ mod tests {
             vec![
                 "capture.screenshot_display",
                 "capture.screenshot_window",
+                "capture.wait_for_window_image_change",
                 "input.click",
+                "input.delay",
+                "input.double_click",
+                "input.drag",
+                "input.key_down",
+                "input.key_up",
+                "input.mouse_move",
+                "input.scroll",
+                "input.shortcut",
                 "input.type_text",
                 "process.describe",
                 "process.kill",
                 "process.launch",
                 "process.list",
+                "process.wait_for_exit",
                 "server.ping",
                 "windows.bind",
                 "windows.describe",
@@ -1156,6 +1355,7 @@ mod tests {
                 "windows.focus",
                 "windows.list",
                 "windows.monitors",
+                "windows.wait_for_state",
                 "windows.wait_for_window",
                 "windows.window_from_point",
             ]
