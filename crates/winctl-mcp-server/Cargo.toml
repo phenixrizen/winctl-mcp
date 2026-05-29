@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -14,6 +15,7 @@ tracing-subscriber.workspace = true
 rmcp.workspace = true
 axum.workspace = true
 winctl = { path = "../winctl" }
+winctl-macro = { path = "../winctl-macro" }
 winctl-memory = { path = "../winctl-memory" }
 
 [dev-dependencies]

@@ -37,6 +37,15 @@
 | `winctl-cmp` | [`input.shortcut`](INPUT_SHORTCUT.md) | Focus a bound window and dispatch a virtual-key shortcut after identity revalidation. |
 | `winctl-cmp` | [`input.delay`](INPUT_DELAY.md) | Wait for a bounded number of milliseconds and return timing metadata for replay manifests. |
 | `winctl-cmp` | [`input.type_text`](INPUT_TYPE_TEXT.md) | Focus a bound window and type Unicode text with `SendInput` after identity revalidation. |
+| `winctl-cmp` | [`macro.validate`](MACRO_VALIDATE.md) | Validate a winctl macro manifest version, tool names, target identity requirements, and coordinate fallback metadata. |
+| `winctl-cmp` | [`macro.dry_run`](MACRO_DRY_RUN.md) | Build a dry-run plan for a macro manifest without performing mutating UI actions. |
+| `winctl-cmp` | [`macro.run`](MACRO_RUN.md) | Execute a macro manifest through the existing MCP tool implementations with target revalidation before control actions. |
+| `winctl-cmp` | [`macro.run_step`](MACRO_RUN_STEP.md) | Execute one macro step by ID for stepwise debugging. |
+| `winctl-cmp` | [`macro.abort`](MACRO_ABORT.md) | Request a safe abort for an active macro run. |
+| `winctl-cmp` | [`macro.list`](MACRO_LIST.md) | List session-promoted macros and memory-backed macro items. |
+| `winctl-cmp` | [`macro.get`](MACRO_GET.md) | Get a promoted macro manifest by session macro ID or memory item ID. |
+| `winctl-cmp` | [`macro.promote`](MACRO_PROMOTE.md) | Promote an approved macro manifest into the session registry and optionally explicit memory storage. |
+| `winctl-cmp` | [`macro.export_result`](MACRO_EXPORT_RESULT.md) | Export a structured macro run result and artifact metadata by run ID. |
 | `winctl-cmp` | [`capture.screenshot_window`](CAPTURE_SCREENSHOT_WINDOW.md) | Capture a screenshot of a bound window and return exact virtual desktop region metadata. |
 | `winctl-cmp` | [`capture.screenshot_display`](CAPTURE_SCREENSHOT_DISPLAY.md) | Capture a screenshot of a display by zero-based monitor index and return exact virtual desktop region metadata. |
 | `winctl-cmp` | [`capture.wait_for_window_image_change`](CAPTURE_WAIT_FOR_WINDOW_IMAGE_CHANGE.md) | Poll bound-window screenshots until the image bytes change, returning replay-safe capture diagnostics. |

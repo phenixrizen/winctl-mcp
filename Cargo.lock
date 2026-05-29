@@ -2623,6 +2623,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "reqwest",
  "rmcp",
  "serde",
@@ -2631,6 +2632,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "winctl",
+ "winctl-macro",
  "winctl-memory",
 ]
 

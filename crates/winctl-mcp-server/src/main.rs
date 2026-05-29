@@ -47,6 +47,7 @@ pub struct AppState {
     pub capture_dir: Arc<PathBuf>,
     pub launched: Arc<Mutex<HashMap<String, TrackedProcess>>>,
     pub memory: Arc<Mutex<winctl_memory::MemoryStore>>,
+    pub macro_runtime: Arc<Mutex<tools::macros::MacroRuntimeState>>,
     launch_counter: Arc<AtomicU64>,
 }
 
@@ -71,6 +72,7 @@ impl AppState {
             capture_dir: Arc::new(capture_dir),
             launched: Arc::new(Mutex::new(HashMap::new())),
             memory: Arc::new(Mutex::new(memory_store)),
+            macro_runtime: Arc::new(Mutex::new(tools::macros::MacroRuntimeState::default())),
             launch_counter: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -385,7 +387,60 @@ pub struct UiResolveRequest {
     pub max_elements: Option<usize>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct MacroManifestRequest {
+    pub manifest: winctl_macro::MacroManifest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct MacroRunRequest {
+    pub manifest: winctl_macro::MacroManifest,
+    pub max_steps: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct MacroRunStepRequest {
+    pub manifest: winctl_macro::MacroManifest,
+    pub step_id: String,
+    #[serde(default)]
+    pub context_json: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct MacroAbortRequest {
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct MacroGetRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct MacroListRequest {
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct MacroPromoteRequest {
+    pub manifest: winctl_macro::MacroManifest,
+    #[serde(default = "default_true")]
+    pub remember: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct MacroExportResultRequest {
+    pub run_id: String,
+}
+
 fn default_force() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 
@@ -521,6 +576,142 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         run_blocking_tool("memory.reindex", move || {
             tools::memory::memory_reindex(&state)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.validate",
+        description = "Validate a winctl macro manifest version, tool names, target identity requirements, and coordinate fallback metadata."
+    )]
+    pub async fn macro_validate(
+        &self,
+        request: Parameters<MacroManifestRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        run_blocking_tool("macro.validate", move || {
+            tools::macros::macro_validate(request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.dry_run",
+        description = "Build a dry-run plan for a macro manifest without performing mutating UI actions."
+    )]
+    pub async fn macro_dry_run(
+        &self,
+        request: Parameters<MacroManifestRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        run_blocking_tool("macro.dry_run", move || {
+            tools::macros::macro_dry_run(request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.run",
+        description = "Execute a macro manifest through the existing MCP tool implementations with target revalidation before control actions."
+    )]
+    pub async fn macro_run(&self, request: Parameters<MacroRunRequest>) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("macro.run", move || {
+            tools::macros::macro_run(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.run_step",
+        description = "Execute one macro step by ID for stepwise debugging."
+    )]
+    pub async fn macro_run_step(
+        &self,
+        request: Parameters<MacroRunStepRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("macro.run_step", move || {
+            tools::macros::macro_run_step(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.abort",
+        description = "Request a safe abort for an active macro run."
+    )]
+    pub async fn macro_abort(
+        &self,
+        request: Parameters<MacroAbortRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("macro.abort", move || {
+            tools::macros::macro_abort(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.list",
+        description = "List session-promoted macros and memory-backed macro items."
+    )]
+    pub async fn macro_list(
+        &self,
+        request: Parameters<MacroListRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("macro.list", move || {
+            tools::macros::macro_list(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.get",
+        description = "Get a promoted macro manifest by session macro ID or memory item ID."
+    )]
+    pub async fn macro_get(&self, request: Parameters<MacroGetRequest>) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("macro.get", move || {
+            tools::macros::macro_get(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.promote",
+        description = "Promote an approved macro manifest into the session registry and optionally explicit memory storage."
+    )]
+    pub async fn macro_promote(
+        &self,
+        request: Parameters<MacroPromoteRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("macro.promote", move || {
+            tools::macros::macro_promote(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.export_result",
+        description = "Export a structured macro run result and artifact metadata by run ID."
+    )]
+    pub async fn macro_export_result(
+        &self,
+        request: Parameters<MacroExportResultRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("macro.export_result", move || {
+            tools::macros::macro_export_result(&state, request)
         })
         .await
     }
@@ -1539,6 +1730,15 @@ mod tests {
                 "input.scroll",
                 "input.shortcut",
                 "input.type_text",
+                "macro.abort",
+                "macro.dry_run",
+                "macro.export_result",
+                "macro.get",
+                "macro.list",
+                "macro.promote",
+                "macro.run",
+                "macro.run_step",
+                "macro.validate",
                 "memory.delete",
                 "memory.get",
                 "memory.list",
@@ -1607,6 +1807,52 @@ mod tests {
             tools::memory::memory_delete(&state, winctl_memory::MemoryIdRequest { id: id.clone() });
         assert_eq!(deleted["ok"], true);
         assert_eq!(deleted["deleted"], true);
+    }
+
+    #[test]
+    fn macro_run_executes_delay_step_and_exports_result() {
+        let state = AppState::with_capture_dir_and_memory(
+            std::env::temp_dir().join("winctl-mcp-test-captures"),
+            winctl_memory::MemoryStore::open_in_memory().unwrap(),
+        );
+        let value = tools::macros::macro_run(
+            &state,
+            MacroRunRequest {
+                manifest: delay_manifest(),
+                max_steps: None,
+            },
+        );
+        assert_eq!(value["ok"], true);
+        let run_id = value["run_id"].as_str().unwrap().to_owned();
+        assert_eq!(value["result"]["status"], "succeeded");
+        assert_eq!(value["result"]["step_results"][0]["tool"], "input.delay");
+
+        let exported =
+            tools::macros::macro_export_result(&state, MacroExportResultRequest { run_id });
+        assert_eq!(exported["ok"], true);
+        assert_eq!(exported["result"]["status"], "succeeded");
+    }
+
+    #[test]
+    fn macro_promote_stores_session_and_memory_backed_macro() {
+        let state = AppState::with_capture_dir_and_memory(
+            std::env::temp_dir().join("winctl-mcp-test-captures"),
+            winctl_memory::MemoryStore::open_in_memory().unwrap(),
+        );
+        let promoted = tools::macros::macro_promote(
+            &state,
+            MacroPromoteRequest {
+                manifest: delay_manifest(),
+                remember: true,
+            },
+        );
+        assert_eq!(promoted["ok"], true);
+        assert!(promoted["macro"]["memory_id"].as_str().is_some());
+
+        let listed = tools::macros::macro_list(&state, MacroListRequest::default());
+        assert_eq!(listed["ok"], true);
+        assert_eq!(listed["session_macros"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["memory_items"].as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -1696,5 +1942,35 @@ mod tests {
             cli.command,
             Command::SelfTest(SelfTestCommand::WindowsList)
         ));
+    }
+
+    fn delay_manifest() -> winctl_macro::MacroManifest {
+        winctl_macro::MacroManifest {
+            version: winctl_macro::MACRO_MANIFEST_VERSION.into(),
+            kind: "test_procedure".into(),
+            title: "Delay-only macro".into(),
+            description: "Exercise the macro runner with a non-mutating timing step.".into(),
+            tags: vec!["test".into()],
+            app_identity: None,
+            launch: None,
+            bind: None,
+            preconditions: vec![],
+            steps: vec![winctl_macro::MacroStep {
+                id: "delay".into(),
+                tool: "input.delay".into(),
+                args: serde_json::json!({"duration_ms": 1}),
+                target: None,
+                timeout_ms: None,
+                required: true,
+                continue_on_failure: false,
+                coordinate_fallback: None,
+                audit: Default::default(),
+            }],
+            waits: vec![],
+            assertions: vec![],
+            cleanup: vec![],
+            artifacts: Default::default(),
+            replay: Default::default(),
+        }
     }
 }
