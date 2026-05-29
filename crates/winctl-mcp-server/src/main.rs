@@ -339,6 +339,29 @@ pub struct WindowImageChangeWaitRequest {
     pub poll_interval_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct UiSnapshotRequest {
+    pub bound_id: String,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct UiFindRequest {
+    pub bound_id: String,
+    pub selector: winctl::UiElementSelector,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct UiResolveRequest {
+    pub bound_id: String,
+    pub element_ref: String,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+}
+
 fn default_force() -> bool {
     true
 }
@@ -369,6 +392,48 @@ impl WinctlMcpServer {
     pub async fn server_ping(&self) -> Json<serde_json::Value> {
         tracing::info!("server.ping requested");
         Json(serde_json::json!({"ok": true, "pong": true}))
+    }
+
+    #[tool(
+        name = "uia.snapshot",
+        description = "Capture a UI Automation tree for a bound window with element roles, names, automation IDs, bounds, state, hierarchy, and stable element references."
+    )]
+    pub async fn uia_snapshot(
+        &self,
+        request: Parameters<UiSnapshotRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("uia.snapshot", move || {
+            tools::uia::uia_snapshot(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.find",
+        description = "Find UI Automation elements in a fresh bound-window snapshot by semantic selector fields."
+    )]
+    pub async fn uia_find(&self, request: Parameters<UiFindRequest>) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("uia.find", move || tools::uia::uia_find(&state, request)).await
+    }
+
+    #[tool(
+        name = "uia.resolve",
+        description = "Revalidate a UI Automation element reference path against the current bound window snapshot."
+    )]
+    pub async fn uia_resolve(
+        &self,
+        request: Parameters<UiResolveRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("uia.resolve", move || {
+            tools::uia::uia_resolve(&state, request)
+        })
+        .await
     }
 
     #[tool(
@@ -1349,6 +1414,9 @@ mod tests {
                 "process.list",
                 "process.wait_for_exit",
                 "server.ping",
+                "uia.find",
+                "uia.resolve",
+                "uia.snapshot",
                 "windows.bind",
                 "windows.describe",
                 "windows.find",

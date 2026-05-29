@@ -3,6 +3,9 @@
 | Agent name | Tool name | Description |
 | --- | --- | --- |
 | `winctl-cmp` | [`server.ping`](SERVER_PING.md) | Return a minimal health response without touching Win32 APIs. |
+| `winctl-cmp` | [`uia.snapshot`](UIA_SNAPSHOT.md) | Capture a UI Automation tree for a bound window with element roles, names, automation IDs, bounds, state, hierarchy, and stable element references. |
+| `winctl-cmp` | [`uia.find`](UIA_FIND.md) | Find UI Automation elements in a fresh bound-window snapshot by semantic selector fields. |
+| `winctl-cmp` | [`uia.resolve`](UIA_RESOLVE.md) | Revalidate a UI Automation element reference path against the current bound window snapshot. |
 | `winctl-cmp` | [`windows.list`](WINDOWS_LIST.md) | List visible and discoverable top-level Windows windows with HWND, PID, executable, class, title, and virtual desktop geometry. |
 | `winctl-cmp` | [`windows.find`](WINDOWS_FIND.md) | Find windows matching a selector and return scored diagnostics without binding or controlling them. |
 | `winctl-cmp` | [`windows.bind`](WINDOWS_BIND.md) | Bind one strict window target by stable identity before any control action. |
