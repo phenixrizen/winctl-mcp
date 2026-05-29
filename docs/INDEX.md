@@ -3,12 +3,26 @@
 | Agent name | Tool name | Description |
 | --- | --- | --- |
 | `winctl-mcp` | [`app.launch`](APP_LAUNCH.md) | Launch an executable, protocol handler, packaged app, or Start Menu app target without shell command concatenation. |
+| `winctl-mcp` | [`artifact.export`](ARTIFACT_EXPORT.md) | Export a captured artifact to the capture export directory or an allowlisted destination. |
 | `winctl-mcp` | [`browser.list`](BROWSER_LIST.md) | List Chrome, Edge, and Firefox process/window state with explicit PID/HWND identity metadata. |
 | `winctl-mcp` | [`browser.describe`](BROWSER_DESCRIBE.md) | Describe one browser target by bound window, PID, or HWND without tab-title selection. |
 | `winctl-mcp` | [`browser.wait_for_navigation`](BROWSER_WAIT_FOR_NAVIGATION.md) | Wait for a bound browser window title transition while revalidating browser PID/HWND/executable identity. |
 | `winctl-mcp` | [`browser.assert`](BROWSER_ASSERT.md) | Assert browser kind and window title/class conditions against a revalidated bound browser window. |
 | `winctl-mcp` | [`browser.extract_content`](BROWSER_EXTRACT_CONTENT.md) | Return safe browser window content hints and identity metadata for a revalidated bound browser window. |
 | `winctl-mcp` | [`browser.screenshot_checkpoint`](BROWSER_SCREENSHOT_CHECKPOINT.md) | Capture a screenshot checkpoint for a revalidated bound browser window. |
+| `winctl-mcp` | [`clipboard.read`](CLIPBOARD_READ.md) | Read Unicode clipboard text with optional truncation. |
+| `winctl-mcp` | [`clipboard.write`](CLIPBOARD_WRITE.md) | Write Unicode clipboard text only when clipboard mutation is explicitly enabled. |
+| `winctl-mcp` | [`filesystem.read`](FILESYSTEM_READ.md) | Read a UTF-8 file from an allowlisted filesystem root with bounded size. |
+| `winctl-mcp` | [`filesystem.list`](FILESYSTEM_LIST.md) | List files and directories beneath an allowlisted filesystem root. |
+| `winctl-mcp` | [`filesystem.search`](FILESYSTEM_SEARCH.md) | Search file names and bounded UTF-8 file content beneath an allowlisted filesystem root. |
+| `winctl-mcp` | [`filesystem.copy`](FILESYSTEM_COPY.md) | Copy a file within allowlisted roots only when filesystem mutation is explicitly enabled. |
+| `winctl-mcp` | [`filesystem.move`](FILESYSTEM_MOVE.md) | Move a file within allowlisted roots only when filesystem mutation is explicitly enabled. |
+| `winctl-mcp` | [`filesystem.delete`](FILESYSTEM_DELETE.md) | Delete an allowlisted filesystem path only when filesystem mutation is explicitly enabled. |
+| `winctl-mcp` | [`notifications.list`](NOTIFICATIONS_LIST.md) | Return Windows notification inspection status and any available provider-backed notifications. |
+| `winctl-mcp` | [`registry.list`](REGISTRY_LIST.md) | List Windows registry subkeys and optional values from a selected hive. |
+| `winctl-mcp` | [`registry.read`](REGISTRY_READ.md) | Read a Windows registry value from a selected hive. |
+| `winctl-mcp` | [`registry.write`](REGISTRY_WRITE.md) | Write a Windows registry value only when registry mutation is explicitly enabled. |
+| `winctl-mcp` | [`registry.delete`](REGISTRY_DELETE.md) | Delete a Windows registry value only when registry mutation is explicitly enabled. |
 | `winctl-mcp` | [`server.ping`](SERVER_PING.md) | Return a minimal health response without touching Win32 APIs. |
 | `winctl-mcp` | [`memory.remember`](MEMORY_REMEMBER.md) | Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata. |
 | `winctl-mcp` | [`memory.search`](MEMORY_SEARCH.md) | Search remembered procedures, observations, macros, and recipes using hybrid sqlite-vec, FTS5, tag, identity, recency, and usefulness ranking. |
@@ -40,6 +54,7 @@
 | `winctl-mcp` | [`process.launch`](PROCESS_LAUNCH.md) | Launch a Windows executable via `CreateProcessW` and optionally wait for visible PID-owned window candidates. |
 | `winctl-mcp` | [`process.list`](PROCESS_LIST.md) | List Windows process metadata, with optional top-level window candidates and MCP-launched process markers. |
 | `winctl-mcp` | [`process.describe`](PROCESS_DESCRIBE.md) | Describe one process with executable metadata, tracked launch status, children, and top-level windows. |
+| `winctl-mcp` | [`process.diagnostics`](PROCESS_DIAGNOSTICS.md) | Return additional process diagnostics with optional windows and child-process metadata. |
 | `winctl-mcp` | [`process.kill`](PROCESS_KILL.md) | Terminate only a process launched and tracked by this MCP server session. |
 | `winctl-mcp` | [`process.wait_for_exit`](PROCESS_WAIT_FOR_EXIT.md) | Wait for a process identified by PID or MCP launch ID to exit and return lifecycle timing metadata. |
 | `winctl-mcp` | [`input.click`](INPUT_CLICK.md) | Click a bound window coordinate after identity revalidation and window-from-point preflight. |

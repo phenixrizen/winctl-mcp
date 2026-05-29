@@ -433,6 +433,112 @@ pub struct BrowserExtractContentRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct ClipboardReadRequest {
+    pub max_chars: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ClipboardWriteRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct FilesystemReadRequest {
+    pub path: String,
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct FilesystemListRequest {
+    pub path: String,
+    #[serde(default)]
+    pub recursive: bool,
+    pub max_entries: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct FilesystemSearchRequest {
+    pub root: String,
+    pub pattern: String,
+    pub max_results: Option<usize>,
+    pub max_file_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct FilesystemCopyRequest {
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct FilesystemMoveRequest {
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct FilesystemDeleteRequest {
+    pub path: String,
+    #[serde(default)]
+    pub recursive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ArtifactExportRequest {
+    pub source_path: String,
+    pub destination_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct RegistryListRequest {
+    pub hive: winctl::RegistryHive,
+    pub path: String,
+    #[serde(default)]
+    pub include_values: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct RegistryReadRequest {
+    pub hive: winctl::RegistryHive,
+    pub path: String,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct RegistryWriteRequest {
+    pub hive: winctl::RegistryHive,
+    pub path: String,
+    pub name: Option<String>,
+    pub kind: winctl::RegistryValueKind,
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct RegistryDeleteRequest {
+    pub hive: winctl::RegistryHive,
+    pub path: String,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct NotificationsListRequest {
+    pub max_items: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ProcessDiagnosticsRequest {
+    pub pid: u32,
+    #[serde(default)]
+    pub include_windows: bool,
+    #[serde(default)]
+    pub include_children: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct WindowImageChangeWaitRequest {
     pub bound_id: String,
     pub timeout_ms: Option<u64>,
@@ -1210,6 +1316,246 @@ impl WinctlMcpServer {
         let request = request.0;
         run_blocking_tool("browser.screenshot_checkpoint", move || {
             tools::browser::browser_screenshot_checkpoint(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "clipboard.read",
+        description = "Read Unicode clipboard text with optional truncation."
+    )]
+    pub async fn clipboard_read(
+        &self,
+        request: Parameters<ClipboardReadRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("clipboard.read", move || {
+            tools::system::clipboard_read(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "clipboard.write",
+        description = "Write Unicode clipboard text only when clipboard mutation is explicitly enabled."
+    )]
+    pub async fn clipboard_write(
+        &self,
+        request: Parameters<ClipboardWriteRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("clipboard.write", move || {
+            tools::system::clipboard_write(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "filesystem.read",
+        description = "Read a UTF-8 file from an allowlisted filesystem root with bounded size."
+    )]
+    pub async fn filesystem_read(
+        &self,
+        request: Parameters<FilesystemReadRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("filesystem.read", move || {
+            tools::system::filesystem_read(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "filesystem.list",
+        description = "List files and directories beneath an allowlisted filesystem root."
+    )]
+    pub async fn filesystem_list(
+        &self,
+        request: Parameters<FilesystemListRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("filesystem.list", move || {
+            tools::system::filesystem_list(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "filesystem.search",
+        description = "Search file names and bounded UTF-8 file content beneath an allowlisted filesystem root."
+    )]
+    pub async fn filesystem_search(
+        &self,
+        request: Parameters<FilesystemSearchRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("filesystem.search", move || {
+            tools::system::filesystem_search(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "filesystem.copy",
+        description = "Copy a file within allowlisted roots only when filesystem mutation is explicitly enabled."
+    )]
+    pub async fn filesystem_copy(
+        &self,
+        request: Parameters<FilesystemCopyRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("filesystem.copy", move || {
+            tools::system::filesystem_copy(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "filesystem.move",
+        description = "Move a file within allowlisted roots only when filesystem mutation is explicitly enabled."
+    )]
+    pub async fn filesystem_move(
+        &self,
+        request: Parameters<FilesystemMoveRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("filesystem.move", move || {
+            tools::system::filesystem_move(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "filesystem.delete",
+        description = "Delete an allowlisted filesystem path only when filesystem mutation is explicitly enabled."
+    )]
+    pub async fn filesystem_delete(
+        &self,
+        request: Parameters<FilesystemDeleteRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("filesystem.delete", move || {
+            tools::system::filesystem_delete(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "artifact.export",
+        description = "Export a captured artifact to the capture export directory or an allowlisted destination."
+    )]
+    pub async fn artifact_export(
+        &self,
+        request: Parameters<ArtifactExportRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("artifact.export", move || {
+            tools::system::artifact_export(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "registry.list",
+        description = "List Windows registry subkeys and optional values from a selected hive."
+    )]
+    pub async fn registry_list(
+        &self,
+        request: Parameters<RegistryListRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("registry.list", move || {
+            tools::system::registry_list(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "registry.read",
+        description = "Read a Windows registry value from a selected hive."
+    )]
+    pub async fn registry_read(
+        &self,
+        request: Parameters<RegistryReadRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("registry.read", move || {
+            tools::system::registry_read(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "registry.write",
+        description = "Write a Windows registry value only when registry mutation is explicitly enabled."
+    )]
+    pub async fn registry_write(
+        &self,
+        request: Parameters<RegistryWriteRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("registry.write", move || {
+            tools::system::registry_write(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "registry.delete",
+        description = "Delete a Windows registry value only when registry mutation is explicitly enabled."
+    )]
+    pub async fn registry_delete(
+        &self,
+        request: Parameters<RegistryDeleteRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("registry.delete", move || {
+            tools::system::registry_delete(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "notifications.list",
+        description = "Return Windows notification inspection status and any available provider-backed notifications."
+    )]
+    pub async fn notifications_list(
+        &self,
+        request: Parameters<NotificationsListRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("notifications.list", move || {
+            tools::system::notifications_list(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "process.diagnostics",
+        description = "Return additional process diagnostics with optional windows and child-process metadata."
+    )]
+    pub async fn process_diagnostics(
+        &self,
+        request: Parameters<ProcessDiagnosticsRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("process.diagnostics", move || {
+            tools::system::process_diagnostics(&state, request)
         })
         .await
     }
@@ -2042,6 +2388,7 @@ mod tests {
             names,
             vec![
                 "app.launch",
+                "artifact.export",
                 "browser.assert",
                 "browser.describe",
                 "browser.extract_content",
@@ -2051,6 +2398,14 @@ mod tests {
                 "capture.screenshot_display",
                 "capture.screenshot_window",
                 "capture.wait_for_window_image_change",
+                "clipboard.read",
+                "clipboard.write",
+                "filesystem.copy",
+                "filesystem.delete",
+                "filesystem.list",
+                "filesystem.move",
+                "filesystem.read",
+                "filesystem.search",
                 "input.click",
                 "input.delay",
                 "input.double_click",
@@ -2077,11 +2432,17 @@ mod tests {
                 "memory.remember",
                 "memory.search",
                 "memory.update",
+                "notifications.list",
                 "process.describe",
+                "process.diagnostics",
                 "process.kill",
                 "process.launch",
                 "process.list",
                 "process.wait_for_exit",
+                "registry.delete",
+                "registry.list",
+                "registry.read",
+                "registry.write",
                 "server.ping",
                 "uia.find",
                 "uia.resolve",

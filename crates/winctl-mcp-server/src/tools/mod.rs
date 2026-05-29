@@ -4,5 +4,6 @@ pub mod input;
 pub mod macros;
 pub mod memory;
 pub mod process;
+pub mod system;
 pub mod uia;
 pub mod windows;
