@@ -36,7 +36,7 @@ See [docs/windows-runbook.md](docs/windows-runbook.md) for Windows host setup, p
 
 ## Tool Reference
 
-See [docs/INDEX.md](docs/INDEX.md) for the MCP tool list. Current tools cover strict window/process control, input, capture, UI Automation snapshots, and explicit local memory operations.
+See [docs/INDEX.md](docs/INDEX.md) for the MCP tool list. Current tools cover strict window/process control, input, capture, UI Automation snapshots, and explicit local memory operations. See [docs/MACRO_MANIFEST.md](docs/MACRO_MANIFEST.md) for the versioned macro manifest format.
 
 ## Server Commands
 

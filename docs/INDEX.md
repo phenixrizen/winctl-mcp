@@ -40,3 +40,7 @@
 | `winctl-cmp` | [`capture.screenshot_window`](CAPTURE_SCREENSHOT_WINDOW.md) | Capture a screenshot of a bound window and return exact virtual desktop region metadata. |
 | `winctl-cmp` | [`capture.screenshot_display`](CAPTURE_SCREENSHOT_DISPLAY.md) | Capture a screenshot of a display by zero-based monitor index and return exact virtual desktop region metadata. |
 | `winctl-cmp` | [`capture.wait_for_window_image_change`](CAPTURE_WAIT_FOR_WINDOW_IMAGE_CHANGE.md) | Poll bound-window screenshots until the image bytes change, returning replay-safe capture diagnostics. |
+
+## Related Docs
+
+- [Macro manifest](MACRO_MANIFEST.md)

@@ -2607,6 +2607,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "winctl-macro"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "winctl-mcp-server"
 version = "0.1.0"
 dependencies = [

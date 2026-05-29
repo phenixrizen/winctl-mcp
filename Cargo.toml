@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/winctl",
+  "crates/winctl-macro",
   "crates/winctl-memory",
   "crates/winctl-mcp-server",
   "crates/winctl-test-target",
