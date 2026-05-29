@@ -172,6 +172,14 @@ async fn streamable_http_health_and_tool_listing_work() {
         .expect("dashboard state should be JSON");
     assert_eq!(dashboard_state["ok"], true);
     assert_eq!(dashboard_state["service"], "winctl-mcp-server");
+    let recorder = client
+        .get(format!("{base}/recorder"))
+        .send()
+        .await
+        .expect("recorder should respond");
+    assert_eq!(recorder.status(), reqwest::StatusCode::OK);
+    let recorder_body = recorder.text().await.expect("recorder body");
+    assert!(recorder_body.contains("winctl-mcp recorder"));
 
     let init = post_mcp(
         &client,

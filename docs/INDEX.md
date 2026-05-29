@@ -60,6 +60,11 @@
 | `winctl-mcp` | [`process.diagnostics`](PROCESS_DIAGNOSTICS.md) | Return additional process diagnostics with optional windows and child-process metadata. |
 | `winctl-mcp` | [`process.kill`](PROCESS_KILL.md) | Terminate only a process launched and tracked by this MCP server session. |
 | `winctl-mcp` | [`process.wait_for_exit`](PROCESS_WAIT_FOR_EXIT.md) | Wait for a process identified by PID or MCP launch ID to exit and return lifecycle timing metadata. |
+| `winctl-mcp` | [`recorder.start`](RECORDER_START.md) | Start a local recording session that can be exported as a macro manifest. |
+| `winctl-mcp` | [`recorder.record_step`](RECORDER_RECORD_STEP.md) | Append one recorded MCP tool step with optional target, note, and replay metadata. |
+| `winctl-mcp` | [`recorder.stop`](RECORDER_STOP.md) | Stop the active recording session and return its macro manifest. |
+| `winctl-mcp` | [`recorder.export_manifest`](RECORDER_EXPORT_MANIFEST.md) | Export the active or completed recording session as a macro manifest. |
+| `winctl-mcp` | [`recorder.state`](RECORDER_STATE.md) | Return active and completed local recording sessions. |
 | `winctl-mcp` | [`input.click`](INPUT_CLICK.md) | Click a bound window coordinate after identity revalidation and window-from-point preflight. |
 | `winctl-mcp` | [`input.mouse_move`](INPUT_MOUSE_MOVE.md) | Move the mouse to a bound window coordinate after identity revalidation and point preflight. |
 | `winctl-mcp` | [`input.double_click`](INPUT_DOUBLE_CLICK.md) | Double-click a bound window coordinate after identity revalidation and point preflight. |
@@ -89,3 +94,4 @@
 - [Configuration](CONFIGURATION.md)
 - [Dashboard](DASHBOARD.md)
 - [Tray controller](TRAY_CONTROLLER.md)
+- [Recorder](RECORDER.md)

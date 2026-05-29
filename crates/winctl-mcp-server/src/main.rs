@@ -49,6 +49,7 @@ pub struct AppState {
     pub launched: Arc<Mutex<HashMap<String, TrackedProcess>>>,
     pub memory: Arc<Mutex<winctl_memory::MemoryStore>>,
     pub macro_runtime: Arc<Mutex<tools::macros::MacroRuntimeState>>,
+    pub recorder_runtime: Arc<Mutex<tools::recorder::RecorderRuntimeState>>,
     launch_counter: Arc<AtomicU64>,
 }
 
@@ -153,6 +154,9 @@ impl AppState {
             launched: Arc::new(Mutex::new(HashMap::new())),
             memory: Arc::new(Mutex::new(memory_store)),
             macro_runtime: Arc::new(Mutex::new(tools::macros::MacroRuntimeState::default())),
+            recorder_runtime: Arc::new(
+                Mutex::new(tools::recorder::RecorderRuntimeState::default()),
+            ),
             launch_counter: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -641,6 +645,42 @@ pub struct NetworkScrapeRequest {
     pub include_links: bool,
     #[serde(default = "default_true")]
     pub include_text: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct RecorderStartRequest {
+    pub title: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub app_identity: Option<winctl_macro::AppIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct RecorderRecordStepRequest {
+    pub id: Option<String>,
+    pub tool: String,
+    pub args: Option<serde_json::Value>,
+    pub target: Option<winctl_macro::MacroTarget>,
+    pub timeout_ms: Option<u64>,
+    #[serde(default = "default_true")]
+    pub required: bool,
+    #[serde(default)]
+    pub continue_on_failure: bool,
+    pub coordinate_fallback: Option<winctl_macro::CoordinateFallbackMetadata>,
+    pub audit: Option<winctl_macro::StepAudit>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct RecorderStopRequest {
+    #[serde(default)]
+    pub save_to_memory: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct RecorderExportRequest {
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
@@ -1708,6 +1748,82 @@ impl WinctlMcpServer {
     }
 
     #[tool(
+        name = "recorder.start",
+        description = "Start a local recording session that can be exported as a macro manifest."
+    )]
+    pub async fn recorder_start(
+        &self,
+        request: Parameters<RecorderStartRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("recorder.start", move || {
+            tools::recorder::recorder_start(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "recorder.record_step",
+        description = "Append one recorded MCP tool step with optional target, note, and replay metadata."
+    )]
+    pub async fn recorder_record_step(
+        &self,
+        request: Parameters<RecorderRecordStepRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("recorder.record_step", move || {
+            tools::recorder::recorder_record_step(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "recorder.stop",
+        description = "Stop the active recording session and return its macro manifest."
+    )]
+    pub async fn recorder_stop(
+        &self,
+        request: Parameters<RecorderStopRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("recorder.stop", move || {
+            tools::recorder::recorder_stop(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "recorder.export_manifest",
+        description = "Export the active or completed recording session as a macro manifest."
+    )]
+    pub async fn recorder_export_manifest(
+        &self,
+        request: Parameters<RecorderExportRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("recorder.export_manifest", move || {
+            tools::recorder::recorder_export(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "recorder.state",
+        description = "Return active and completed local recording sessions."
+    )]
+    pub async fn recorder_state(&self) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        run_blocking_tool("recorder.state", move || {
+            tools::recorder::recorder_state(&state)
+        })
+        .await
+    }
+
+    #[tool(
         name = "process.launch",
         description = "Launch a Windows executable via CreateProcessW and optionally wait for visible PID-owned window candidates."
     )]
@@ -2159,6 +2275,8 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     let dashboard_router = Router::new()
         .route("/dashboard", get(dashboard_html))
         .route("/dashboard/state", get(dashboard_state_json))
+        .route("/recorder", get(recorder_html))
+        .route("/recorder/state", get(recorder_state_json))
         .with_state(dashboard_state);
     let dashboard_router = if config.auth_token.is_some() || !config.listen.ip().is_loopback() {
         dashboard_router.route_layer(middleware::from_fn_with_state(
@@ -2206,6 +2324,10 @@ async fn healthz() -> impl IntoResponse {
 
 async fn dashboard_html() -> impl IntoResponse {
     Html(DASHBOARD_HTML)
+}
+
+async fn recorder_html() -> impl IntoResponse {
+    Html(RECORDER_HTML)
 }
 
 async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoResponse {
@@ -2256,6 +2378,14 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
         "warnings": [
             "connected client and request-history tracking are not enabled yet"
         ]
+    }))
+}
+
+async fn recorder_state_json(State(state): State<DashboardState>) -> impl IntoResponse {
+    AxumJson(serde_json::json!({
+        "ok": true,
+        "windows": winctl::list_windows(),
+        "recording": tools::recorder::recorder_state(&state.app_state),
     }))
 }
 
@@ -2413,6 +2543,146 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       } catch (error) {
         status.textContent = String(error);
       }
+    }
+    loadState();
+  </script>
+</body>
+</html>"#;
+
+const RECORDER_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>winctl-mcp recorder</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f7f8fa;
+      color: #15171a;
+    }
+    body { margin: 0; min-height: 100vh; }
+    header {
+      border-bottom: 1px solid #d9dde3;
+      background: #ffffff;
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+    h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
+    main {
+      padding: 20px 24px 32px;
+      display: grid;
+      grid-template-columns: minmax(280px, 420px) 1fr;
+      gap: 16px;
+    }
+    section {
+      background: #ffffff;
+      border: 1px solid #d9dde3;
+      border-radius: 6px;
+      overflow: hidden;
+      min-height: 220px;
+    }
+    h2 {
+      font-size: 13px;
+      text-transform: uppercase;
+      margin: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid #e4e7ec;
+      color: #5f6b7a;
+      letter-spacing: 0;
+    }
+    label { display: block; font-size: 12px; color: #4e5967; margin: 12px 14px 6px; }
+    input, textarea {
+      box-sizing: border-box;
+      width: calc(100% - 28px);
+      margin: 0 14px;
+      border: 1px solid #aeb7c2;
+      border-radius: 6px;
+      padding: 8px 9px;
+      font: inherit;
+      background: #ffffff;
+      color: inherit;
+    }
+    textarea { min-height: 120px; resize: vertical; }
+    button {
+      appearance: none;
+      border: 1px solid #aeb7c2;
+      background: #ffffff;
+      color: inherit;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      margin: 12px 0 0 14px;
+    }
+    button:hover { background: #eef3f8; }
+    pre {
+      margin: 0;
+      padding: 14px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .status { font-size: 13px; color: #4e5967; }
+    @media (max-width: 840px) { main { grid-template-columns: 1fr; } }
+    @media (prefers-color-scheme: dark) {
+      :root { background: #111418; color: #e9edf2; }
+      header, section, button, input, textarea { background: #181c22; }
+      header, section, h2, button, input, textarea { border-color: #303741; }
+      h2 { background: #15191f; color: #aeb7c2; }
+      button:hover { background: #202731; }
+      label, .status { color: #aeb7c2; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>winctl-mcp recorder</h1>
+      <div class="status" id="status">Loading</div>
+    </div>
+    <button type="button" onclick="loadState()">Refresh</button>
+  </header>
+  <main>
+    <section>
+      <h2>Draft Step</h2>
+      <label for="tool">Tool</label>
+      <input id="tool" value="input.click">
+      <label for="args">Arguments JSON</label>
+      <textarea id="args">{"bound_id":"${bound_id}","x":0,"y":0}</textarea>
+      <button type="button" onclick="copyStep()">Copy step JSON</button>
+      <pre id="draft"></pre>
+    </section>
+    <section><h2>Recorder State</h2><pre id="state"></pre></section>
+    <section><h2>Windows</h2><pre id="windows"></pre></section>
+  </main>
+  <script>
+    function pretty(value) { return JSON.stringify(value, null, 2); }
+    async function loadState() {
+      const status = document.getElementById('status');
+      status.textContent = 'Loading';
+      try {
+        const response = await fetch('/recorder/state', { cache: 'no-store' });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        document.getElementById('state').textContent = pretty(data.recording);
+        document.getElementById('windows').textContent = pretty(data.windows);
+        status.textContent = 'Ready';
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    }
+    async function copyStep() {
+      let args = {};
+      try { args = JSON.parse(document.getElementById('args').value); } catch (_) {}
+      const step = { tool: document.getElementById('tool').value, args };
+      document.getElementById('draft').textContent = pretty(step);
+      await navigator.clipboard.writeText(pretty(step)).catch(() => {});
     }
     loadState();
   </script>
@@ -3103,6 +3373,11 @@ mod tests {
                 "process.launch",
                 "process.list",
                 "process.wait_for_exit",
+                "recorder.export_manifest",
+                "recorder.record_step",
+                "recorder.start",
+                "recorder.state",
+                "recorder.stop",
                 "registry.delete",
                 "registry.list",
                 "registry.read",
@@ -3197,6 +3472,52 @@ mod tests {
             tools::macros::macro_export_result(&state, MacroExportResultRequest { run_id });
         assert_eq!(exported["ok"], true);
         assert_eq!(exported["result"]["status"], "succeeded");
+    }
+
+    #[test]
+    fn recorder_builds_macro_manifest() {
+        let state = AppState::with_capture_dir_and_memory(
+            std::env::temp_dir().join("winctl-mcp-test-captures"),
+            winctl_memory::MemoryStore::open_in_memory().unwrap(),
+        );
+        let started = tools::recorder::recorder_start(
+            &state,
+            RecorderStartRequest {
+                title: "Recorded flow".into(),
+                description: Some("Recorded by test".into()),
+                tags: vec!["test".into()],
+                app_identity: None,
+            },
+        );
+        assert_eq!(started["ok"], true);
+
+        let recorded = tools::recorder::recorder_record_step(
+            &state,
+            RecorderRecordStepRequest {
+                id: Some("delay".into()),
+                tool: "input.delay".into(),
+                args: Some(serde_json::json!({"duration_ms": 1})),
+                target: None,
+                timeout_ms: None,
+                required: true,
+                continue_on_failure: false,
+                coordinate_fallback: None,
+                audit: None,
+                note: Some("wait briefly".into()),
+            },
+        );
+        assert_eq!(recorded["ok"], true);
+        assert_eq!(recorded["step_count"], 1);
+
+        let stopped = tools::recorder::recorder_stop(
+            &state,
+            RecorderStopRequest {
+                save_to_memory: false,
+            },
+        );
+        assert_eq!(stopped["ok"], true);
+        assert_eq!(stopped["manifest"]["steps"][0]["tool"], "input.delay");
+        assert_eq!(stopped["validation"]["valid"], true);
     }
 
     #[test]

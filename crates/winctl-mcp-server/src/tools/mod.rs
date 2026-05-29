@@ -5,6 +5,7 @@ pub mod macros;
 pub mod memory;
 pub mod network;
 pub mod process;
+pub mod recorder;
 pub mod system;
 pub mod uia;
 pub mod windows;

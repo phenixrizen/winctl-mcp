@@ -62,6 +62,8 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for transport, auth, logging,
 
 With HTTP transport, the local diagnostic dashboard is available at `/dashboard`. See [docs/DASHBOARD.md](docs/DASHBOARD.md).
 
+The recorder UI is available at `/recorder` and records MCP tool steps into macro manifests. See [docs/RECORDER.md](docs/RECORDER.md).
+
 Optional server controller:
 
 ```powershell
