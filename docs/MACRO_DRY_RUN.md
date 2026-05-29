@@ -8,8 +8,9 @@ Description: Build a dry-run plan for a macro manifest without performing mutati
 
 ## Inputs
 
-- `manifest`: a `winctl.macro.v1` JSON manifest.
+- `manifest`: optional `winctl.macro.v1` JSON manifest.
+- `memory_id`: optional memory item ID containing a macro manifest.
 
 ## Notes
 
-The plan marks mutating steps, bound-window requirements, artifact-producing steps, categories, and target strategies.
+Provide either `manifest` or `memory_id`. The plan marks mutating steps, bound-window requirements, artifact-producing steps, categories, and target strategies.

@@ -14,7 +14,7 @@ use winctl_macro::{
 use winctl_memory::{MemoryListRequest, RememberRequest};
 
 use crate::{
-    AppState, BoundIdRequest, DisplayScreenshotRequest, MacroAbortRequest,
+    AppState, BoundIdRequest, DisplayScreenshotRequest, MacroAbortRequest, MacroDryRunRequest,
     MacroExportResultRequest, MacroGetRequest, MacroListRequest, MacroManifestRequest,
     MacroPromoteRequest, MacroRunRequest, MacroRunStepRequest, ProcessDescribeRequest,
     ProcessKillRequest, UiFindRequest, WaitForStateRequest, WaitForWindowRequest,
@@ -93,26 +93,46 @@ pub fn macro_validate(request: MacroManifestRequest) -> serde_json::Value {
     })
 }
 
-pub fn macro_dry_run(request: MacroManifestRequest) -> serde_json::Value {
-    tracing::info!(title = %request.manifest.title, "macro.dry_run requested");
-    match dry_run_plan(&request.manifest) {
-        Ok(plan) => serde_json::json!({"ok": true, "valid": true, "plan": plan}),
-        Err(report) => serde_json::json!({"ok": false, "valid": false, "report": report}),
+pub fn macro_dry_run(state: &AppState, request: MacroDryRunRequest) -> serde_json::Value {
+    tracing::info!(memory_id = ?request.memory_id, "macro.dry_run requested");
+    let (manifest, source_memory_id) =
+        match resolve_macro_manifest(state, request.manifest, request.memory_id.as_deref()) {
+            Ok(resolved) => resolved,
+            Err(error) => return error,
+        };
+    match dry_run_plan(&manifest) {
+        Ok(plan) => serde_json::json!({
+            "ok": true,
+            "valid": true,
+            "source_memory_id": source_memory_id,
+            "plan": plan
+        }),
+        Err(report) => serde_json::json!({
+            "ok": false,
+            "valid": false,
+            "source_memory_id": source_memory_id,
+            "report": report
+        }),
     }
 }
 
 pub fn macro_run(state: &AppState, request: MacroRunRequest) -> serde_json::Value {
     tracing::info!(
-        title = %request.manifest.title,
+        memory_id = ?request.memory_id,
         max_steps = ?request.max_steps,
         "macro.run requested"
     );
-    match dry_run_plan(&request.manifest) {
+    let (manifest, source_memory_id) =
+        match resolve_macro_manifest(state, request.manifest, request.memory_id.as_deref()) {
+            Ok(resolved) => resolved,
+            Err(error) => return error,
+        };
+    match dry_run_plan(&manifest) {
         Ok(plan) => {
             let (run_id, abort_flag) = start_run(state);
             let result = execute_manifest(
                 state,
-                &request.manifest,
+                &manifest,
                 &plan,
                 &run_id,
                 request.max_steps,
@@ -120,10 +140,12 @@ pub fn macro_run(state: &AppState, request: MacroRunRequest) -> serde_json::Valu
                 ExecutionContext::default(),
                 abort_flag.clone(),
             );
+            record_successful_memory_use(state, source_memory_id.as_deref(), &result);
             finish_run(state, &run_id, result.clone());
             serde_json::json!({
                 "ok": matches!(result.status, MacroExecutionStatus::Succeeded),
                 "run_id": run_id,
+                "source_memory_id": source_memory_id,
                 "result": result,
             })
         }
@@ -140,13 +162,18 @@ pub fn macro_run(state: &AppState, request: MacroRunRequest) -> serde_json::Valu
 
 pub fn macro_run_step(state: &AppState, request: MacroRunStepRequest) -> serde_json::Value {
     tracing::info!(
-        title = %request.manifest.title,
+        memory_id = ?request.memory_id,
         step_id = %request.step_id,
         "macro.run_step requested"
     );
-    match dry_run_plan(&request.manifest) {
+    let (manifest, source_memory_id) =
+        match resolve_macro_manifest(state, request.manifest, request.memory_id.as_deref()) {
+            Ok(resolved) => resolved,
+            Err(error) => return error,
+        };
+    match dry_run_plan(&manifest) {
         Ok(plan) => {
-            if !manifest_contains_step(&request.manifest, &request.step_id) {
+            if !manifest_contains_step(&manifest, &request.step_id) {
                 return serde_json::json!({
                     "ok": false,
                     "error": {
@@ -158,7 +185,7 @@ pub fn macro_run_step(state: &AppState, request: MacroRunStepRequest) -> serde_j
             let (run_id, abort_flag) = start_run(state);
             let result = execute_manifest(
                 state,
-                &request.manifest,
+                &manifest,
                 &plan,
                 &run_id,
                 Some(1),
@@ -166,10 +193,12 @@ pub fn macro_run_step(state: &AppState, request: MacroRunStepRequest) -> serde_j
                 ExecutionContext::from_json(request.context_json),
                 abort_flag,
             );
+            record_successful_memory_use(state, source_memory_id.as_deref(), &result);
             finish_run(state, &run_id, result.clone());
             serde_json::json!({
                 "ok": matches!(result.status, MacroExecutionStatus::Succeeded),
                 "run_id": run_id,
+                "source_memory_id": source_memory_id,
                 "result": result,
             })
         }
@@ -381,6 +410,96 @@ pub fn macro_export_result(
                 "message": format!("macro result {} was not found", request.run_id)
             }
         }),
+    }
+}
+
+fn resolve_macro_manifest(
+    state: &AppState,
+    manifest: Option<MacroManifest>,
+    memory_id: Option<&str>,
+) -> Result<(MacroManifest, Option<String>), serde_json::Value> {
+    if let Some(manifest) = manifest {
+        return Ok((manifest, memory_id.map(ToOwned::to_owned)));
+    }
+    let Some(memory_id) = memory_id else {
+        return Err(serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "missing_macro_manifest",
+                "message": "provide either manifest or memory_id"
+            }
+        }));
+    };
+    let memory = state.memory.lock().expect("memory store mutex poisoned");
+    let item = match memory.get_without_touch(memory_id) {
+        Ok(Some(item)) => item,
+        Ok(None) => {
+            return Err(serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "macro_memory_item_not_found",
+                    "message": format!("memory item {memory_id} was not found")
+                }
+            }));
+        }
+        Err(error) => {
+            return Err(serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "macro_memory_load_failed",
+                    "message": error.to_string()
+                }
+            }));
+        }
+    };
+    let Some(manifest_json) = item.manifest_json else {
+        return Err(serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "macro_manifest_not_found",
+                "message": "memory item does not contain manifest_json"
+            }
+        }));
+    };
+    match serde_json::from_value::<MacroManifest>(manifest_json) {
+        Ok(manifest) => Ok((manifest, Some(memory_id.to_owned()))),
+        Err(error) => Err(serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "macro_manifest_invalid",
+                "message": error.to_string()
+            }
+        })),
+    }
+}
+
+fn record_successful_memory_use(
+    state: &AppState,
+    source_memory_id: Option<&str>,
+    result: &MacroExecutionResult,
+) {
+    if !matches!(result.status, MacroExecutionStatus::Succeeded) {
+        return;
+    }
+    let Some(memory_id) = source_memory_id else {
+        return;
+    };
+    let mut memory = state.memory.lock().expect("memory store mutex poisoned");
+    match memory.record_use(memory_id) {
+        Ok(Some(item)) => tracing::info!(
+            memory_id = %item.id,
+            use_count = item.use_count,
+            "memory-backed macro run recorded successful use"
+        ),
+        Ok(None) => tracing::warn!(
+            memory_id = %memory_id,
+            "memory-backed macro run succeeded but source memory item was not found"
+        ),
+        Err(error) => tracing::warn!(
+            memory_id = %memory_id,
+            error = %error,
+            "failed to record memory-backed macro use"
+        ),
     }
 }
 

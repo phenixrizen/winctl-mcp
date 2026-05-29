@@ -50,6 +50,8 @@ By default screenshots are written under the user's local app-data directory on 
 
 The local memory database defaults to `%LOCALAPPDATA%\winctl-mcp\memory.sqlite` on Windows, or the system temp directory when local app-data is unavailable. Override it with `WINCTL_MEMORY_DB`.
 
+Saved macro workflows are explicit: call `macro.promote` or `memory.remember`, find them later with `memory.search`, then run them by manifest or memory ID with `macro.dry_run` and `macro.run`.
+
 Compatibility stdio transport:
 
 ```powershell

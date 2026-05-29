@@ -393,14 +393,22 @@ pub struct MacroManifestRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct MacroDryRunRequest {
+    pub manifest: Option<winctl_macro::MacroManifest>,
+    pub memory_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroRunRequest {
-    pub manifest: winctl_macro::MacroManifest,
+    pub manifest: Option<winctl_macro::MacroManifest>,
+    pub memory_id: Option<String>,
     pub max_steps: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroRunStepRequest {
-    pub manifest: winctl_macro::MacroManifest,
+    pub manifest: Option<winctl_macro::MacroManifest>,
+    pub memory_id: Option<String>,
     pub step_id: String,
     #[serde(default)]
     pub context_json: Option<serde_json::Value>,
@@ -601,11 +609,12 @@ impl WinctlMcpServer {
     )]
     pub async fn macro_dry_run(
         &self,
-        request: Parameters<MacroManifestRequest>,
+        request: Parameters<MacroDryRunRequest>,
     ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.dry_run", move || {
-            tools::macros::macro_dry_run(request)
+            tools::macros::macro_dry_run(&state, request)
         })
         .await
     }
@@ -1818,7 +1827,8 @@ mod tests {
         let value = tools::macros::macro_run(
             &state,
             MacroRunRequest {
-                manifest: delay_manifest(),
+                manifest: Some(delay_manifest()),
+                memory_id: None,
                 max_steps: None,
             },
         );
@@ -1853,6 +1863,53 @@ mod tests {
         assert_eq!(listed["ok"], true);
         assert_eq!(listed["session_macros"].as_array().unwrap().len(), 1);
         assert_eq!(listed["memory_items"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn memory_backed_macro_dry_run_and_run_update_use_metadata() {
+        let state = AppState::with_capture_dir_and_memory(
+            std::env::temp_dir().join("winctl-mcp-test-captures"),
+            winctl_memory::MemoryStore::open_in_memory().unwrap(),
+        );
+        let promoted = tools::macros::macro_promote(
+            &state,
+            MacroPromoteRequest {
+                manifest: delay_manifest(),
+                remember: true,
+            },
+        );
+        let memory_id = promoted["macro"]["memory_id"].as_str().unwrap().to_owned();
+
+        let dry_run = tools::macros::macro_dry_run(
+            &state,
+            MacroDryRunRequest {
+                manifest: None,
+                memory_id: Some(memory_id.clone()),
+            },
+        );
+        assert_eq!(dry_run["ok"], true);
+        assert_eq!(dry_run["source_memory_id"], memory_id);
+
+        let run = tools::macros::macro_run(
+            &state,
+            MacroRunRequest {
+                manifest: None,
+                memory_id: Some(memory_id.clone()),
+                max_steps: None,
+            },
+        );
+        assert_eq!(run["ok"], true);
+        assert_eq!(run["source_memory_id"], memory_id);
+
+        let item = state
+            .memory
+            .lock()
+            .unwrap()
+            .get_without_touch(&memory_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.use_count, 1);
+        assert!(item.last_used_at.is_some());
     }
 
     #[test]

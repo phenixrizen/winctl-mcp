@@ -8,9 +8,10 @@ Description: Execute a macro manifest through the existing MCP tool implementati
 
 ## Inputs
 
-- `manifest`: a `winctl.macro.v1` JSON manifest.
+- `manifest`: optional `winctl.macro.v1` JSON manifest.
+- `memory_id`: optional memory item ID containing a macro manifest.
 - `max_steps`: optional execution step limit.
 
 ## Notes
 
-The runner dispatches to the same underlying tools used by direct MCP calls, so bound-window actions still perform identity revalidation.
+Provide either `manifest` or `memory_id`. The runner dispatches to the same underlying tools used by direct MCP calls, so bound-window actions still perform identity revalidation. A successful memory-backed run updates the source memory item's use metadata.

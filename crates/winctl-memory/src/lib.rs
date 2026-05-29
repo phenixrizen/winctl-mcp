@@ -191,6 +191,10 @@ impl MemoryStore {
     }
 
     pub fn get(&mut self, id: &str) -> Result<Option<MemoryItem>> {
+        self.record_use(id)
+    }
+
+    pub fn record_use(&mut self, id: &str) -> Result<Option<MemoryItem>> {
         let item = self.get_without_touch(id)?;
         if item.is_some() {
             self.touch(id)?;
