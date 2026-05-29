@@ -14,9 +14,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 rmcp.workspace = true
 axum.workspace = true
+reqwest.workspace = true
 winctl = { path = "../winctl" }
 winctl-macro = { path = "../winctl-macro" }
 winctl-memory = { path = "../winctl-memory" }
-
-[dev-dependencies]
-reqwest.workspace = true

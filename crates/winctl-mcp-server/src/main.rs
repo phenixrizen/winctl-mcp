@@ -539,6 +539,31 @@ pub struct ProcessDiagnosticsRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct NetworkFetchRequest {
+    pub url: String,
+    pub method: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+    pub body: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub max_bytes: Option<usize>,
+    #[serde(default)]
+    pub follow_redirects: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct NetworkScrapeRequest {
+    pub url: String,
+    pub timeout_ms: Option<u64>,
+    pub max_bytes: Option<usize>,
+    #[serde(default)]
+    pub follow_redirects: bool,
+    #[serde(default = "default_true")]
+    pub include_links: bool,
+    #[serde(default = "default_true")]
+    pub include_text: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct WindowImageChangeWaitRequest {
     pub bound_id: String,
     pub timeout_ms: Option<u64>,
@@ -1561,6 +1586,30 @@ impl WinctlMcpServer {
     }
 
     #[tool(
+        name = "network.fetch",
+        description = "Fetch an HTTP/HTTPS URL with timeout, response-size, redirect, and private-network guards."
+    )]
+    pub async fn network_fetch(
+        &self,
+        request: Parameters<NetworkFetchRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        Json(tools::network::network_fetch(request).await)
+    }
+
+    #[tool(
+        name = "network.scrape",
+        description = "Fetch and extract basic title, link, and text content from an HTTP/HTTPS page under network policy."
+    )]
+    pub async fn network_scrape(
+        &self,
+        request: Parameters<NetworkScrapeRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        Json(tools::network::network_scrape(request).await)
+    }
+
+    #[tool(
         name = "process.launch",
         description = "Launch a Windows executable via CreateProcessW and optionally wait for visible PID-owned window candidates."
     )]
@@ -2432,6 +2481,8 @@ mod tests {
                 "memory.remember",
                 "memory.search",
                 "memory.update",
+                "network.fetch",
+                "network.scrape",
                 "notifications.list",
                 "process.describe",
                 "process.diagnostics",

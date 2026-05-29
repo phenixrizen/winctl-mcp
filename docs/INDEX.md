@@ -18,6 +18,8 @@
 | `winctl-mcp` | [`filesystem.copy`](FILESYSTEM_COPY.md) | Copy a file within allowlisted roots only when filesystem mutation is explicitly enabled. |
 | `winctl-mcp` | [`filesystem.move`](FILESYSTEM_MOVE.md) | Move a file within allowlisted roots only when filesystem mutation is explicitly enabled. |
 | `winctl-mcp` | [`filesystem.delete`](FILESYSTEM_DELETE.md) | Delete an allowlisted filesystem path only when filesystem mutation is explicitly enabled. |
+| `winctl-mcp` | [`network.fetch`](NETWORK_FETCH.md) | Fetch an HTTP/HTTPS URL with timeout, response-size, redirect, and private-network guards. |
+| `winctl-mcp` | [`network.scrape`](NETWORK_SCRAPE.md) | Fetch and extract basic title, link, and text content from an HTTP/HTTPS page under network policy. |
 | `winctl-mcp` | [`notifications.list`](NOTIFICATIONS_LIST.md) | Return Windows notification inspection status and any available provider-backed notifications. |
 | `winctl-mcp` | [`registry.list`](REGISTRY_LIST.md) | List Windows registry subkeys and optional values from a selected hive. |
 | `winctl-mcp` | [`registry.read`](REGISTRY_READ.md) | Read a Windows registry value from a selected hive. |
