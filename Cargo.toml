@@ -52,3 +52,4 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sqlite-vec = "=0.1.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+toml = "0.8"

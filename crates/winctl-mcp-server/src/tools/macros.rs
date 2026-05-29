@@ -124,6 +124,12 @@ pub fn macro_run(state: &AppState, request: MacroRunRequest) -> serde_json::Valu
         max_steps = ?request.max_steps,
         "macro.run requested"
     );
+    if !state.policy.macro_execution_enabled {
+        return policy_denied(
+            "macro_execution_disabled",
+            "macro.run is disabled by runtime policy",
+        );
+    }
     let (manifest, source_memory_id) =
         match resolve_macro_manifest(state, request.manifest, request.memory_id.as_deref()) {
             Ok(resolved) => resolved,
@@ -132,12 +138,13 @@ pub fn macro_run(state: &AppState, request: MacroRunRequest) -> serde_json::Valu
     match dry_run_plan(&manifest) {
         Ok(plan) => {
             let (run_id, abort_flag) = start_run(state);
+            let max_steps = request.max_steps.or(state.policy.max_macro_steps);
             let result = execute_manifest(
                 state,
                 &manifest,
                 &plan,
                 &run_id,
-                request.max_steps,
+                max_steps,
                 None,
                 ExecutionContext::default(),
                 abort_flag.clone(),
@@ -168,6 +175,12 @@ pub fn macro_run_step(state: &AppState, request: MacroRunStepRequest) -> serde_j
         step_id = %request.step_id,
         "macro.run_step requested"
     );
+    if !state.policy.macro_execution_enabled {
+        return policy_denied(
+            "macro_execution_disabled",
+            "macro.run_step is disabled by runtime policy",
+        );
+    }
     let (manifest, source_memory_id) =
         match resolve_macro_manifest(state, request.manifest, request.memory_id.as_deref()) {
             Ok(resolved) => resolved,
@@ -340,6 +353,12 @@ pub fn macro_promote(state: &AppState, request: MacroPromoteRequest) -> serde_js
     }
 
     let memory_id = if request.remember {
+        if !state.policy.memory_mutation_enabled {
+            return policy_denied(
+                "memory_mutation_disabled",
+                "macro.promote remember=true is disabled by runtime policy",
+            );
+        }
         let mut memory = state.memory.lock().expect("memory store mutex poisoned");
         match memory.remember(RememberRequest {
             kind: "macro".into(),
@@ -1189,4 +1208,15 @@ fn macro_search_text(manifest: &MacroManifest) -> String {
         }
     }
     text
+}
+
+fn policy_denied(code: &str, message: &str) -> serde_json::Value {
+    tracing::warn!(code = code, "macro request denied by policy");
+    serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": code,
+            "message": message,
+        }
+    })
 }

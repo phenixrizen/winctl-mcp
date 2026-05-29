@@ -48,12 +48,12 @@ pub fn clipboard_read(_state: &AppState, request: ClipboardReadRequest) -> serde
     }
 }
 
-pub fn clipboard_write(_state: &AppState, request: ClipboardWriteRequest) -> serde_json::Value {
+pub fn clipboard_write(state: &AppState, request: ClipboardWriteRequest) -> serde_json::Value {
     tracing::info!(
         chars = request.text.chars().count(),
         "clipboard.write requested"
     );
-    if !env_flag("WINCTL_ENABLE_CLIPBOARD_WRITE") {
+    if !state.policy.enable_clipboard_write {
         return denied(
             "clipboard_write_disabled",
             "clipboard.write requires WINCTL_ENABLE_CLIPBOARD_WRITE=1",
@@ -163,7 +163,7 @@ pub fn filesystem_search(state: &AppState, request: FilesystemSearchRequest) -> 
 
 pub fn filesystem_copy(state: &AppState, request: FilesystemCopyRequest) -> serde_json::Value {
     tracing::info!(from = %request.from, to = %request.to, overwrite = request.overwrite, "filesystem.copy requested");
-    if !env_flag("WINCTL_ENABLE_FILESYSTEM_MUTATION") {
+    if !state.policy.enable_filesystem_mutation {
         return denied(
             "filesystem_mutation_disabled",
             "filesystem.copy requires WINCTL_ENABLE_FILESYSTEM_MUTATION=1",
@@ -191,7 +191,7 @@ pub fn filesystem_copy(state: &AppState, request: FilesystemCopyRequest) -> serd
 
 pub fn filesystem_move(state: &AppState, request: FilesystemMoveRequest) -> serde_json::Value {
     tracing::info!(from = %request.from, to = %request.to, overwrite = request.overwrite, "filesystem.move requested");
-    if !env_flag("WINCTL_ENABLE_FILESYSTEM_MUTATION") {
+    if !state.policy.enable_filesystem_mutation {
         return denied(
             "filesystem_mutation_disabled",
             "filesystem.move requires WINCTL_ENABLE_FILESYSTEM_MUTATION=1",
@@ -224,7 +224,7 @@ pub fn filesystem_move(state: &AppState, request: FilesystemMoveRequest) -> serd
 
 pub fn filesystem_delete(state: &AppState, request: FilesystemDeleteRequest) -> serde_json::Value {
     tracing::info!(path = %request.path, recursive = request.recursive, "filesystem.delete requested");
-    if !env_flag("WINCTL_ENABLE_FILESYSTEM_MUTATION") {
+    if !state.policy.enable_filesystem_mutation {
         return denied(
             "filesystem_mutation_disabled",
             "filesystem.delete requires WINCTL_ENABLE_FILESYSTEM_MUTATION=1",
@@ -265,7 +265,11 @@ pub fn artifact_export(state: &AppState, request: ArtifactExportRequest) -> serd
             Err(error) => return error,
         },
         None => {
-            let export_dir = state.capture_dir.join("exports");
+            let export_dir = state
+                .policy
+                .artifact_dir
+                .clone()
+                .unwrap_or_else(|| state.capture_dir.join("exports"));
             if let Err(error) = fs::create_dir_all(&export_dir) {
                 return io_error("artifact_export_dir_failed", &export_dir, error);
             }
@@ -299,9 +303,9 @@ pub fn registry_read(_state: &AppState, request: RegistryReadRequest) -> serde_j
     }
 }
 
-pub fn registry_write(_state: &AppState, request: RegistryWriteRequest) -> serde_json::Value {
+pub fn registry_write(state: &AppState, request: RegistryWriteRequest) -> serde_json::Value {
     tracing::info!(hive = ?request.hive, path = %request.path, name = ?request.name, kind = ?request.kind, "registry.write requested");
-    if !env_flag("WINCTL_ENABLE_REGISTRY_MUTATION") {
+    if !state.policy.enable_registry_mutation {
         return denied(
             "registry_mutation_disabled",
             "registry.write requires WINCTL_ENABLE_REGISTRY_MUTATION=1",
@@ -319,9 +323,9 @@ pub fn registry_write(_state: &AppState, request: RegistryWriteRequest) -> serde
     }
 }
 
-pub fn registry_delete(_state: &AppState, request: RegistryDeleteRequest) -> serde_json::Value {
+pub fn registry_delete(state: &AppState, request: RegistryDeleteRequest) -> serde_json::Value {
     tracing::info!(hive = ?request.hive, path = %request.path, name = ?request.name, "registry.delete requested");
-    if !env_flag("WINCTL_ENABLE_REGISTRY_MUTATION") {
+    if !state.policy.enable_registry_mutation {
         return denied(
             "registry_mutation_disabled",
             "registry.delete requires WINCTL_ENABLE_REGISTRY_MUTATION=1",
@@ -419,25 +423,7 @@ fn ensure_allowed(state: &AppState, path: &Path) -> Result<(), serde_json::Value
 }
 
 fn allowed_roots(state: &AppState) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = std::env::var("WINCTL_FS_ROOTS")
-        .ok()
-        .into_iter()
-        .flat_map(|value| {
-            value
-                .split(';')
-                .map(str::trim)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .filter(|value| !value.is_empty())
-        .filter_map(|value| fs::canonicalize(value).ok())
-        .collect();
-    if let Ok(path) = fs::canonicalize(state.capture_dir.as_ref()) {
-        roots.push(path);
-    }
-    if let Ok(path) = fs::canonicalize(std::env::temp_dir()) {
-        roots.push(path);
-    }
+    let mut roots = state.policy.filesystem_roots.clone();
     roots.sort();
     roots.dedup();
     roots
@@ -576,12 +562,6 @@ fn denied(code: &str, message: &str) -> serde_json::Value {
             "message": message,
         }
     })
-}
-
-fn env_flag(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(false)
 }
 
 #[allow(dead_code)]

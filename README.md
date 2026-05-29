@@ -52,6 +52,14 @@ The local memory database defaults to `%LOCALAPPDATA%\winctl-mcp\memory.sqlite` 
 
 Saved macro workflows are explicit: call `macro.promote` or `memory.remember`, find them later with `memory.search`, then run them by manifest or memory ID with `macro.dry_run` and `macro.run`.
 
+Configuration file:
+
+```powershell
+winctl-mcp-server.exe serve --config "$env:LOCALAPPDATA\winctl-mcp\config.toml"
+```
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for transport, auth, logging, filesystem root, mutation policy, memory, embedding, and macro execution settings.
+
 Compatibility stdio transport:
 
 ```powershell

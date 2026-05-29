@@ -45,10 +45,80 @@ pub struct AppState {
     pub bound: Arc<Mutex<HashMap<String, BoundWindow>>>,
     pub capture_lock: Arc<Mutex<()>>,
     pub capture_dir: Arc<PathBuf>,
+    pub policy: Arc<SecurityPolicy>,
     pub launched: Arc<Mutex<HashMap<String, TrackedProcess>>>,
     pub memory: Arc<Mutex<winctl_memory::MemoryStore>>,
     pub macro_runtime: Arc<Mutex<tools::macros::MacroRuntimeState>>,
     launch_counter: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct SecurityPolicy {
+    pub filesystem_roots: Vec<PathBuf>,
+    pub artifact_dir: Option<PathBuf>,
+    pub enable_filesystem_mutation: bool,
+    pub enable_clipboard_write: bool,
+    pub enable_registry_mutation: bool,
+    pub allow_private_network: bool,
+    pub memory_mutation_enabled: bool,
+    pub macro_execution_enabled: bool,
+    pub macro_destructive_tools_allowed: bool,
+    pub max_macro_runtime_ms: Option<u64>,
+    pub max_macro_steps: Option<usize>,
+    pub screenshot_retention_count: Option<usize>,
+    pub embedding_model_path: Option<PathBuf>,
+    pub embedding_dimension: Option<usize>,
+    pub tool_allowlist: Vec<String>,
+    pub tool_denylist: Vec<String>,
+}
+
+impl Default for SecurityPolicy {
+    fn default() -> Self {
+        Self {
+            filesystem_roots: env_paths("WINCTL_FS_ROOTS"),
+            artifact_dir: std::env::var_os("WINCTL_ARTIFACT_DIR").map(PathBuf::from),
+            enable_filesystem_mutation: env_flag("WINCTL_ENABLE_FILESYSTEM_MUTATION"),
+            enable_clipboard_write: env_flag("WINCTL_ENABLE_CLIPBOARD_WRITE"),
+            enable_registry_mutation: env_flag("WINCTL_ENABLE_REGISTRY_MUTATION"),
+            allow_private_network: env_flag("WINCTL_ALLOW_PRIVATE_NETWORK"),
+            memory_mutation_enabled: true,
+            macro_execution_enabled: true,
+            macro_destructive_tools_allowed: false,
+            max_macro_runtime_ms: None,
+            max_macro_steps: None,
+            screenshot_retention_count: None,
+            embedding_model_path: None,
+            embedding_dimension: Some(winctl_memory::DEFAULT_EMBEDDING_DIM),
+            tool_allowlist: Vec::new(),
+            tool_denylist: Vec::new(),
+        }
+    }
+}
+
+impl SecurityPolicy {
+    fn with_runtime_roots(mut self, capture_dir: &PathBuf) -> Self {
+        self.filesystem_roots.push(capture_dir.clone());
+        self.filesystem_roots.push(std::env::temp_dir());
+        self.filesystem_roots = self
+            .filesystem_roots
+            .into_iter()
+            .filter_map(|path| std::fs::canonicalize(&path).ok().or(Some(path)))
+            .collect();
+        self.filesystem_roots.sort();
+        self.filesystem_roots.dedup();
+        self
+    }
+
+    pub fn denies_tool(&self, tool_name: &str) -> bool {
+        self.tool_denylist
+            .iter()
+            .any(|tool| tool.eq_ignore_ascii_case(tool_name))
+            || (!self.tool_allowlist.is_empty()
+                && !self
+                    .tool_allowlist
+                    .iter()
+                    .any(|tool| tool.eq_ignore_ascii_case(tool_name)))
+    }
 }
 
 impl Default for AppState {
@@ -66,10 +136,20 @@ impl AppState {
         capture_dir: PathBuf,
         memory_store: winctl_memory::MemoryStore,
     ) -> Self {
+        Self::with_capture_dir_memory_policy(capture_dir, memory_store, SecurityPolicy::default())
+    }
+
+    pub fn with_capture_dir_memory_policy(
+        capture_dir: PathBuf,
+        memory_store: winctl_memory::MemoryStore,
+        policy: SecurityPolicy,
+    ) -> Self {
+        let policy = policy.with_runtime_roots(&capture_dir);
         Self {
             bound: Arc::new(Mutex::new(HashMap::new())),
             capture_lock: Arc::new(Mutex::new(())),
             capture_dir: Arc::new(capture_dir),
+            policy: Arc::new(policy),
             launched: Arc::new(Mutex::new(HashMap::new())),
             memory: Arc::new(Mutex::new(memory_store)),
             macro_runtime: Arc::new(Mutex::new(tools::macros::MacroRuntimeState::default())),
@@ -684,6 +764,24 @@ impl WinctlMcpServer {
     pub async fn server_ping(&self) -> Json<serde_json::Value> {
         tracing::info!("server.ping requested");
         Json(serde_json::json!({"ok": true, "pong": true}))
+    }
+
+    #[tool(
+        name = "server.config",
+        description = "Return effective runtime configuration and security policy diagnostics."
+    )]
+    pub async fn server_config(&self) -> Json<serde_json::Value> {
+        tracing::info!("server.config requested");
+        Json(serde_json::json!({
+            "ok": true,
+            "capture_dir": self.state.capture_dir.as_ref(),
+            "policy": self.state.policy.as_ref(),
+            "memory": {
+                "embedding_model": winctl_memory::DEFAULT_EMBEDDING_MODEL,
+                "embedding_dimension": winctl_memory::DEFAULT_EMBEDDING_DIM,
+                "schema_version": winctl_memory::MEMORY_SCHEMA_VERSION,
+            }
+        }))
     }
 
     #[tool(
@@ -1594,7 +1692,7 @@ impl WinctlMcpServer {
         request: Parameters<NetworkFetchRequest>,
     ) -> Json<serde_json::Value> {
         let request = request.0;
-        Json(tools::network::network_fetch(request).await)
+        Json(tools::network::network_fetch(request, self.state.policy.allow_private_network).await)
     }
 
     #[tool(
@@ -1606,7 +1704,7 @@ impl WinctlMcpServer {
         request: Parameters<NetworkScrapeRequest>,
     ) -> Json<serde_json::Value> {
         let request = request.0;
-        Json(tools::network::network_scrape(request).await)
+        Json(tools::network::network_scrape(request, self.state.policy.allow_private_network).await)
     }
 
     #[tool(
@@ -1966,11 +2064,27 @@ async fn run(_cli: Cli) -> anyhow::Result<()> {
     match _cli.command {
         Command::SelfTest(command) => run_self_test(command),
         Command::Serve(config) => {
-            let state = config
+            let capture_dir = config
                 .capture_dir
                 .clone()
-                .map(AppState::with_capture_dir)
-                .unwrap_or_default();
+                .unwrap_or_else(tools::capture::default_capture_dir);
+            let memory_store = if let Some(path) = &config.memory_db_path {
+                winctl_memory::MemoryStore::open(path.clone()).unwrap_or_else(|error| {
+                    tracing::warn!(
+                        memory_db_path = %path.display(),
+                        error = %error,
+                        "failed to open configured memory store; falling back to default"
+                    );
+                    default_memory_store()
+                })
+            } else {
+                default_memory_store()
+            };
+            let state = AppState::with_capture_dir_memory_policy(
+                capture_dir,
+                memory_store,
+                config.policy.clone(),
+            );
             match config.transport {
                 TransportMode::Stdio => run_mcp_stdio(state).await,
                 TransportMode::Http => run_mcp_http(config, state).await,
@@ -1983,8 +2097,12 @@ async fn run_mcp_stdio(state: AppState) -> anyhow::Result<()> {
     tools::capture::ensure_capture_dir(state.capture_dir.as_ref())?;
     tracing::info!(
         capture_dir = %state.capture_dir.as_ref().display(),
+        memory_mutation_enabled = state.policy.memory_mutation_enabled,
+        macro_execution_enabled = state.policy.macro_execution_enabled,
+        filesystem_roots = ?state.policy.filesystem_roots,
         "winctl-mcp-server starting on stdio"
     );
+    log_startup_diagnostics("stdio", None, &state);
     let service = WinctlMcpServer::with_state(state)
         .serve(stdio())
         .await
@@ -2007,6 +2125,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
         auth_required = !config.listen.ip().is_loopback() || config.auth_token.is_some(),
         "winctl-mcp-server starting on HTTP"
     );
+    log_startup_diagnostics("http", Some(config.listen), &state);
 
     let session_manager = Arc::new(LocalSessionManager::default());
     let service = StreamableHttpService::new(
@@ -2148,6 +2267,7 @@ fn run_self_test(command: SelfTestCommand) -> anyhow::Result<()> {
 struct Cli {
     command: Command,
     log_file: Option<PathBuf>,
+    config_file: Option<PathBuf>,
 }
 
 impl Default for Cli {
@@ -2155,6 +2275,7 @@ impl Default for Cli {
         Self {
             command: Command::Serve(ServeConfig::stdio()),
             log_file: None,
+            config_file: None,
         }
     }
 }
@@ -2171,6 +2292,9 @@ struct ServeConfig {
     listen: SocketAddr,
     auth_token: Option<String>,
     capture_dir: Option<PathBuf>,
+    memory_db_path: Option<PathBuf>,
+    policy: SecurityPolicy,
+    config_file: Option<PathBuf>,
 }
 
 impl ServeConfig {
@@ -2180,8 +2304,170 @@ impl ServeConfig {
             listen: default_http_listen(),
             auth_token: None,
             capture_dir: None,
+            memory_db_path: std::env::var_os("WINCTL_MEMORY_DB").map(PathBuf::from),
+            policy: SecurityPolicy::default(),
+            config_file: None,
         }
     }
+
+    fn from_file(file: &WinctlConfigFile) -> anyhow::Result<Self> {
+        let mut config = Self::stdio();
+        if let Some(transport) = &file.transport {
+            if let Some(mode) = &transport.mode {
+                config.transport = parse_transport_str(mode)?;
+            }
+            if let Some(listen) = &transport.listen {
+                config.listen = listen
+                    .parse()
+                    .with_context(|| format!("invalid configured listen address {listen}"))?;
+            }
+        }
+        if let Some(auth) = &file.auth {
+            if let Some(token) = &auth.token {
+                config.auth_token = Some(token.clone());
+            }
+        }
+        if let Some(paths) = &file.paths {
+            if let Some(path) = &paths.capture_dir {
+                config.capture_dir = Some(path.clone());
+            }
+            if let Some(path) = &paths.memory_db {
+                config.memory_db_path = Some(path.clone());
+            }
+            if let Some(path) = &paths.artifact_dir {
+                config.policy.artifact_dir = Some(path.clone());
+            }
+            if let Some(roots) = &paths.filesystem_roots {
+                config.policy.filesystem_roots = roots.clone();
+            }
+        }
+        if let Some(policy) = &file.policy {
+            if let Some(value) = policy.enable_filesystem_mutation {
+                config.policy.enable_filesystem_mutation = value;
+            }
+            if let Some(value) = policy.enable_clipboard_write {
+                config.policy.enable_clipboard_write = value;
+            }
+            if let Some(value) = policy.enable_registry_mutation {
+                config.policy.enable_registry_mutation = value;
+            }
+            if let Some(value) = policy.allow_private_network {
+                config.policy.allow_private_network = value;
+            }
+            if let Some(value) = policy.memory_mutation_enabled {
+                config.policy.memory_mutation_enabled = value;
+            }
+            if let Some(value) = policy.macro_execution_enabled {
+                config.policy.macro_execution_enabled = value;
+            }
+            if let Some(value) = policy.macro_destructive_tools_allowed {
+                config.policy.macro_destructive_tools_allowed = value;
+            }
+            if let Some(value) = policy.max_macro_runtime_ms {
+                config.policy.max_macro_runtime_ms = Some(value);
+            }
+            if let Some(value) = policy.max_macro_steps {
+                config.policy.max_macro_steps = Some(value);
+            }
+            if let Some(value) = policy.screenshot_retention_count {
+                config.policy.screenshot_retention_count = Some(value);
+            }
+            if let Some(values) = &policy.tool_allowlist {
+                config.policy.tool_allowlist = values.clone();
+            }
+            if let Some(values) = &policy.tool_denylist {
+                config.policy.tool_denylist = values.clone();
+            }
+        }
+        if let Some(embedding) = &file.embedding {
+            if let Some(path) = &embedding.model_path {
+                config.policy.embedding_model_path = Some(path.clone());
+            }
+            if let Some(dimension) = embedding.dimension {
+                config.policy.embedding_dimension = Some(dimension);
+            }
+        }
+        if let Some(macros) = &file.macro_execution {
+            if let Some(value) = macros.enabled {
+                config.policy.macro_execution_enabled = value;
+            }
+            if let Some(value) = macros.allow_destructive_tools {
+                config.policy.macro_destructive_tools_allowed = value;
+            }
+            if let Some(value) = macros.max_runtime_ms {
+                config.policy.max_macro_runtime_ms = Some(value);
+            }
+            if let Some(value) = macros.max_steps {
+                config.policy.max_macro_steps = Some(value);
+            }
+        }
+        Ok(config)
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct WinctlConfigFile {
+    transport: Option<TransportFileConfig>,
+    auth: Option<AuthFileConfig>,
+    logging: Option<LoggingFileConfig>,
+    paths: Option<PathsFileConfig>,
+    policy: Option<PolicyFileConfig>,
+    embedding: Option<EmbeddingFileConfig>,
+    macro_execution: Option<MacroExecutionFileConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct TransportFileConfig {
+    mode: Option<String>,
+    listen: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AuthFileConfig {
+    token: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct LoggingFileConfig {
+    log_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PathsFileConfig {
+    capture_dir: Option<PathBuf>,
+    artifact_dir: Option<PathBuf>,
+    filesystem_roots: Option<Vec<PathBuf>>,
+    memory_db: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PolicyFileConfig {
+    enable_filesystem_mutation: Option<bool>,
+    enable_clipboard_write: Option<bool>,
+    enable_registry_mutation: Option<bool>,
+    allow_private_network: Option<bool>,
+    memory_mutation_enabled: Option<bool>,
+    macro_execution_enabled: Option<bool>,
+    macro_destructive_tools_allowed: Option<bool>,
+    max_macro_runtime_ms: Option<u64>,
+    max_macro_steps: Option<usize>,
+    screenshot_retention_count: Option<usize>,
+    tool_allowlist: Option<Vec<String>>,
+    tool_denylist: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct EmbeddingFileConfig {
+    model_path: Option<PathBuf>,
+    dimension: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct MacroExecutionFileConfig {
+    enabled: Option<bool>,
+    allow_destructive_tools: Option<bool>,
+    max_runtime_ms: Option<u64>,
+    max_steps: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2213,6 +2499,12 @@ impl Cli {
                     anyhow::bail!("--log-file requires a path");
                 };
                 cli.log_file = Some(PathBuf::from(path));
+            } else if arg == "--config" {
+                index += 1;
+                let Some(path) = args.get(index) else {
+                    anyhow::bail!("--config requires a path");
+                };
+                cli.config_file = Some(PathBuf::from(path));
             } else if arg == "--self-test" {
                 cli.command = Command::SelfTest(SelfTestCommand::Basic);
                 command_seen = true;
@@ -2232,10 +2524,14 @@ impl Cli {
                 if command_seen {
                     anyhow::bail!("only one command may be provided");
                 }
-                let (serve, next_index, log_file) = parse_serve_args(&args, index + 1)?;
+                let (serve, next_index, log_file, config_file) =
+                    parse_serve_args(&args, index + 1, cli.config_file.clone())?;
                 cli.command = Command::Serve(serve);
                 if let Some(log_file) = log_file {
                     cli.log_file = Some(log_file);
+                }
+                if let Some(config_file) = config_file {
+                    cli.config_file = Some(config_file);
                 }
                 index = next_index;
                 command_seen = true;
@@ -2253,9 +2549,23 @@ impl Cli {
 fn parse_serve_args(
     args: &[OsString],
     mut index: usize,
-) -> anyhow::Result<(ServeConfig, usize, Option<PathBuf>)> {
-    let mut config = ServeConfig::stdio();
-    let mut log_file = None;
+    inherited_config_file: Option<PathBuf>,
+) -> anyhow::Result<(ServeConfig, usize, Option<PathBuf>, Option<PathBuf>)> {
+    let config_file = scan_config_file(args, index).or(inherited_config_file);
+    let file_config = match &config_file {
+        Some(path) => Some(load_config_file(path)?),
+        None => None,
+    };
+    let mut config = file_config
+        .as_ref()
+        .map(ServeConfig::from_file)
+        .transpose()?
+        .unwrap_or_else(ServeConfig::stdio);
+    config.config_file = config_file.clone();
+    let mut log_file = file_config
+        .as_ref()
+        .and_then(|config| config.logging.as_ref())
+        .and_then(|logging| logging.log_file.clone());
     while index < args.len() {
         let arg = &args[index];
         if arg == "--transport" {
@@ -2279,6 +2589,11 @@ fn parse_serve_args(
                 anyhow::bail!("--auth-token requires a value");
             };
             config.auth_token = Some(value.to_string_lossy().to_string());
+        } else if arg == "--config" {
+            index += 1;
+            if args.get(index).is_none() {
+                anyhow::bail!("--config requires a path");
+            }
         } else if arg == "--capture-dir" {
             index += 1;
             let Some(path) = args.get(index) else {
@@ -2296,15 +2611,35 @@ fn parse_serve_args(
         }
         index += 1;
     }
-    Ok((config, index, log_file))
+    Ok((config, index, log_file, config_file))
 }
 
 fn parse_transport(value: &OsString) -> anyhow::Result<TransportMode> {
-    match value.to_string_lossy().as_ref() {
+    parse_transport_str(value.to_string_lossy().as_ref())
+}
+
+fn parse_transport_str(value: &str) -> anyhow::Result<TransportMode> {
+    match value {
         "stdio" => Ok(TransportMode::Stdio),
         "http" => Ok(TransportMode::Http),
         other => anyhow::bail!("unsupported transport {other}; expected stdio or http"),
     }
+}
+
+fn scan_config_file(args: &[OsString], mut index: usize) -> Option<PathBuf> {
+    while index < args.len() {
+        if args[index] == "--config" {
+            return args.get(index + 1).map(PathBuf::from);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn load_config_file(path: &PathBuf) -> anyhow::Result<WinctlConfigFile> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read config file {}", path.display()))?;
+    toml::from_str(&text).with_context(|| format!("failed to parse config file {}", path.display()))
 }
 
 fn parse_self_test_command(value: &OsString) -> anyhow::Result<SelfTestCommand> {
@@ -2316,6 +2651,46 @@ fn parse_self_test_command(value: &OsString) -> anyhow::Result<SelfTestCommand> 
 
 fn default_http_listen() -> SocketAddr {
     SocketAddr::new(IpAddr::from([127, 0, 0, 1]), 8765)
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+fn env_paths(name: &str) -> Vec<PathBuf> {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            value
+                .split(';')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn log_startup_diagnostics(transport: &str, listen: Option<SocketAddr>, state: &AppState) {
+    tracing::info!(
+        transport = transport,
+        listen = ?listen,
+        capture_dir = %state.capture_dir.as_ref().display(),
+        filesystem_roots = ?state.policy.filesystem_roots,
+        artifact_dir = ?state.policy.artifact_dir,
+        filesystem_mutation = state.policy.enable_filesystem_mutation,
+        clipboard_write = state.policy.enable_clipboard_write,
+        registry_mutation = state.policy.enable_registry_mutation,
+        allow_private_network = state.policy.allow_private_network,
+        memory_mutation_enabled = state.policy.memory_mutation_enabled,
+        macro_execution_enabled = state.policy.macro_execution_enabled,
+        macro_destructive_tools_allowed = state.policy.macro_destructive_tools_allowed,
+        tool_allowlist = ?state.policy.tool_allowlist,
+        tool_denylist = ?state.policy.tool_denylist,
+        "effective winctl-mcp startup policy"
+    );
 }
 
 #[derive(Clone)]
@@ -2494,6 +2869,7 @@ mod tests {
                 "registry.list",
                 "registry.read",
                 "registry.write",
+                "server.config",
                 "server.ping",
                 "uia.find",
                 "uia.resolve",
@@ -2741,6 +3117,70 @@ mod tests {
             cli.command,
             Command::SelfTest(SelfTestCommand::WindowsList)
         ));
+    }
+
+    #[test]
+    fn cli_loads_toml_config_policy() {
+        let path =
+            std::env::temp_dir().join(format!("winctl-config-test-{}.toml", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"
+[transport]
+mode = "http"
+listen = "127.0.0.1:8765"
+
+[auth]
+token = "test-token"
+
+[paths]
+capture_dir = "D:/captures"
+filesystem_roots = ["D:/captures", "D:/artifacts"]
+memory_db = "D:/memory.sqlite"
+artifact_dir = "D:/artifacts"
+
+[policy]
+enable_filesystem_mutation = true
+enable_clipboard_write = true
+enable_registry_mutation = true
+allow_private_network = true
+memory_mutation_enabled = false
+macro_execution_enabled = false
+macro_destructive_tools_allowed = false
+max_macro_steps = 12
+tool_denylist = ["registry.delete"]
+
+[embedding]
+model_path = "D:/models/minilm.onnx"
+dimension = 384
+"#,
+        )
+        .unwrap();
+        let cli = Cli::parse([
+            OsString::from("serve"),
+            OsString::from("--config"),
+            OsString::from(path.as_os_str()),
+        ])
+        .unwrap();
+        let _ = std::fs::remove_file(&path);
+        match cli.command {
+            Command::Serve(config) => {
+                assert_eq!(config.transport, TransportMode::Http);
+                assert_eq!(config.auth_token.as_deref(), Some("test-token"));
+                assert_eq!(config.capture_dir, Some(PathBuf::from("D:/captures")));
+                assert_eq!(
+                    config.memory_db_path,
+                    Some(PathBuf::from("D:/memory.sqlite"))
+                );
+                assert!(config.policy.enable_filesystem_mutation);
+                assert!(config.policy.allow_private_network);
+                assert!(!config.policy.memory_mutation_enabled);
+                assert!(!config.policy.macro_execution_enabled);
+                assert_eq!(config.policy.max_macro_steps, Some(12));
+                assert_eq!(config.policy.tool_denylist, vec!["registry.delete"]);
+            }
+            _ => panic!("expected serve command"),
+        }
     }
 
     fn delay_manifest() -> winctl_macro::MacroManifest {

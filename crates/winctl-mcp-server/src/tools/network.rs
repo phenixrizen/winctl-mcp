@@ -9,7 +9,10 @@ const MAX_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_MAX_BYTES: usize = 256 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
-pub async fn network_fetch(request: NetworkFetchRequest) -> serde_json::Value {
+pub async fn network_fetch(
+    request: NetworkFetchRequest,
+    allow_private_network: bool,
+) -> serde_json::Value {
     tracing::info!(
         url = %request.url,
         method = ?request.method,
@@ -18,7 +21,7 @@ pub async fn network_fetch(request: NetworkFetchRequest) -> serde_json::Value {
         follow_redirects = request.follow_redirects,
         "network.fetch requested"
     );
-    match fetch_bytes(request).await {
+    match fetch_bytes(request, allow_private_network).await {
         Ok(response) => serde_json::json!({
             "ok": true,
             "response": response,
@@ -30,7 +33,10 @@ pub async fn network_fetch(request: NetworkFetchRequest) -> serde_json::Value {
     }
 }
 
-pub async fn network_scrape(request: NetworkScrapeRequest) -> serde_json::Value {
+pub async fn network_scrape(
+    request: NetworkScrapeRequest,
+    allow_private_network: bool,
+) -> serde_json::Value {
     tracing::info!(
         url = %request.url,
         timeout_ms = ?request.timeout_ms,
@@ -47,7 +53,7 @@ pub async fn network_scrape(request: NetworkScrapeRequest) -> serde_json::Value 
         max_bytes: request.max_bytes,
         follow_redirects: request.follow_redirects,
     };
-    match fetch_bytes(fetch_request).await {
+    match fetch_bytes(fetch_request, allow_private_network).await {
         Ok(response) => {
             let text = response
                 .get("text")
@@ -70,14 +76,17 @@ pub async fn network_scrape(request: NetworkScrapeRequest) -> serde_json::Value 
     }
 }
 
-async fn fetch_bytes(request: NetworkFetchRequest) -> Result<serde_json::Value, NetworkError> {
+async fn fetch_bytes(
+    request: NetworkFetchRequest,
+    allow_private_network: bool,
+) -> Result<serde_json::Value, NetworkError> {
     let url = reqwest::Url::parse(&request.url).map_err(|error| NetworkError {
         code: "invalid_url".into(),
         message: format!("invalid URL: {error}"),
         warnings: vec![],
     })?;
     validate_url(&url)?;
-    validate_destination(&url)?;
+    validate_destination(&url, allow_private_network)?;
 
     let timeout_ms = request
         .timeout_ms
@@ -143,7 +152,7 @@ async fn fetch_bytes(request: NetworkFetchRequest) -> Result<serde_json::Value, 
     let status = response.status();
     let final_url = response.url().to_string();
     validate_url(response.url())?;
-    validate_destination(response.url())?;
+    validate_destination(response.url(), allow_private_network)?;
     let headers = response_headers(response.headers());
     if let Some(content_length) = response.content_length() {
         if content_length > max_bytes as u64 {
@@ -214,8 +223,11 @@ fn validate_url(url: &reqwest::Url) -> Result<(), NetworkError> {
     Ok(())
 }
 
-fn validate_destination(url: &reqwest::Url) -> Result<(), NetworkError> {
-    if env_flag("WINCTL_ALLOW_PRIVATE_NETWORK") {
+fn validate_destination(
+    url: &reqwest::Url,
+    allow_private_network: bool,
+) -> Result<(), NetworkError> {
+    if allow_private_network {
         return Ok(());
     }
     let host = url.host_str().ok_or_else(|| NetworkError {
@@ -282,7 +294,7 @@ fn private_network_error(host: &str, ip: Option<IpAddr>) -> NetworkError {
                 .unwrap_or_else(|| "unresolved".into())
         ),
         warnings: vec![
-            "set WINCTL_ALLOW_PRIVATE_NETWORK=1 to allow local/private destinations".into(),
+            "enable allow_private_network in config or WINCTL_ALLOW_PRIVATE_NETWORK=1 to allow local/private destinations".into(),
         ],
     }
 }
@@ -357,12 +369,6 @@ fn decode_entities(text: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
-}
-
-fn env_flag(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(false)
 }
 
 #[derive(Debug, serde::Serialize)]

@@ -25,6 +25,7 @@
 | `winctl-mcp` | [`registry.read`](REGISTRY_READ.md) | Read a Windows registry value from a selected hive. |
 | `winctl-mcp` | [`registry.write`](REGISTRY_WRITE.md) | Write a Windows registry value only when registry mutation is explicitly enabled. |
 | `winctl-mcp` | [`registry.delete`](REGISTRY_DELETE.md) | Delete a Windows registry value only when registry mutation is explicitly enabled. |
+| `winctl-mcp` | [`server.config`](SERVER_CONFIG.md) | Return effective runtime configuration and security policy diagnostics. |
 | `winctl-mcp` | [`server.ping`](SERVER_PING.md) | Return a minimal health response without touching Win32 APIs. |
 | `winctl-mcp` | [`memory.remember`](MEMORY_REMEMBER.md) | Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata. |
 | `winctl-mcp` | [`memory.search`](MEMORY_SEARCH.md) | Search remembered procedures, observations, macros, and recipes using hybrid sqlite-vec, FTS5, tag, identity, recency, and usefulness ranking. |
@@ -85,3 +86,4 @@
 ## Related Docs
 
 - [Macro manifest](MACRO_MANIFEST.md)
+- [Configuration](CONFIGURATION.md)

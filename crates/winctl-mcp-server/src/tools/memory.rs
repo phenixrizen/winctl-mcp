@@ -13,6 +13,12 @@ pub fn memory_remember(state: &AppState, request: RememberRequest) -> serde_json
         has_target_identity = request.target_identity_json.is_some(),
         "memory.remember requested"
     );
+    if !state.policy.memory_mutation_enabled {
+        return policy_denied(
+            "memory_mutation_disabled",
+            "memory.remember is disabled by runtime policy",
+        );
+    }
     let mut store = state.memory.lock().expect("memory store mutex poisoned");
     match store.remember(request) {
         Ok(item) => {
@@ -110,6 +116,12 @@ pub fn memory_update(state: &AppState, request: MemoryUpdateRequest) -> serde_js
         target_identity_updated = request.target_identity_json.is_some(),
         "memory.update requested"
     );
+    if !state.policy.memory_mutation_enabled {
+        return policy_denied(
+            "memory_mutation_disabled",
+            "memory.update is disabled by runtime policy",
+        );
+    }
     let mut store = state.memory.lock().expect("memory store mutex poisoned");
     match store.update(request) {
         Ok(Some(item)) => {
@@ -132,6 +144,12 @@ pub fn memory_update(state: &AppState, request: MemoryUpdateRequest) -> serde_js
 
 pub fn memory_delete(state: &AppState, request: MemoryIdRequest) -> serde_json::Value {
     tracing::info!(memory_id = %request.id, "memory.delete requested");
+    if !state.policy.memory_mutation_enabled {
+        return policy_denied(
+            "memory_mutation_disabled",
+            "memory.delete is disabled by runtime policy",
+        );
+    }
     let mut store = state.memory.lock().expect("memory store mutex poisoned");
     match store.delete(&request.id) {
         Ok(deleted) => {
@@ -167,6 +185,12 @@ pub fn memory_list(state: &AppState, request: MemoryListRequest) -> serde_json::
 
 pub fn memory_reindex(state: &AppState) -> serde_json::Value {
     tracing::info!("memory.reindex requested");
+    if !state.policy.memory_mutation_enabled {
+        return policy_denied(
+            "memory_mutation_disabled",
+            "memory.reindex is disabled by runtime policy",
+        );
+    }
     let store = state.memory.lock().expect("memory store mutex poisoned");
     match store.reindex() {
         Ok(()) => {
@@ -191,5 +215,16 @@ fn memory_error(code: &'static str, error: winctl_memory::MemoryError) -> serde_
     serde_json::json!({
         "code": code,
         "message": error.to_string()
+    })
+}
+
+fn policy_denied(code: &str, message: &str) -> serde_json::Value {
+    tracing::warn!(code = code, "memory request denied by policy");
+    serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": code,
+            "message": message,
+        }
     })
 }
