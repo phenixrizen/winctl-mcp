@@ -1,3 +1,4 @@
+pub mod browser;
 pub mod capture;
 pub mod input;
 pub mod macros;

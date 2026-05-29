@@ -14,12 +14,13 @@ use winctl_macro::{
 use winctl_memory::{MemoryListRequest, RememberRequest};
 
 use crate::{
-    AppLaunchRequest, AppState, BoundIdRequest, DisplayScreenshotRequest, MacroAbortRequest,
-    MacroDryRunRequest, MacroExportResultRequest, MacroGetRequest, MacroListRequest,
-    MacroManifestRequest, MacroPromoteRequest, MacroRunRequest, MacroRunStepRequest,
-    ProcessDescribeRequest, ProcessKillRequest, UiFindRequest, WaitForStateRequest,
-    WaitForWindowRequest, WindowImageChangeWaitRequest, WindowMoveRequest, WindowResizeRequest,
-    WindowsForProcessRequest,
+    AppLaunchRequest, AppState, BoundIdRequest, BrowserAssertRequest, BrowserDescribeRequest,
+    BrowserExtractContentRequest, BrowserListRequest, BrowserWaitForNavigationRequest,
+    DisplayScreenshotRequest, MacroAbortRequest, MacroDryRunRequest, MacroExportResultRequest,
+    MacroGetRequest, MacroListRequest, MacroManifestRequest, MacroPromoteRequest, MacroRunRequest,
+    MacroRunStepRequest, ProcessDescribeRequest, ProcessKillRequest, UiFindRequest,
+    WaitForStateRequest, WaitForWindowRequest, WindowImageChangeWaitRequest, WindowMoveRequest,
+    WindowResizeRequest, WindowsForProcessRequest,
 };
 
 #[derive(Default)]
@@ -741,6 +742,32 @@ fn dispatch_tool(
             state,
             parse_args::<WindowsForProcessRequest>(args)?,
         )),
+        "browser.list" => Ok(crate::tools::browser::browser_list(
+            state,
+            parse_args::<BrowserListRequest>(args)?,
+        )),
+        "browser.describe" => Ok(crate::tools::browser::browser_describe(
+            state,
+            parse_args::<BrowserDescribeRequest>(args)?,
+        )),
+        "browser.wait_for_navigation" => Ok(crate::tools::browser::browser_wait_for_navigation(
+            state,
+            parse_args::<BrowserWaitForNavigationRequest>(args)?,
+        )),
+        "browser.assert" => Ok(crate::tools::browser::browser_assert(
+            state,
+            parse_args::<BrowserAssertRequest>(args)?,
+        )),
+        "browser.extract_content" => Ok(crate::tools::browser::browser_extract_content(
+            state,
+            parse_args::<BrowserExtractContentRequest>(args)?,
+        )),
+        "browser.screenshot_checkpoint" => {
+            Ok(crate::tools::browser::browser_screenshot_checkpoint(
+                state,
+                parse_args::<BrowserExtractContentRequest>(args)?,
+            ))
+        }
         "capture.screenshot_window" => Ok(crate::tools::capture::screenshot_window(
             state,
             bound_id_from_args(args, context)?,

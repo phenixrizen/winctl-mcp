@@ -394,6 +394,45 @@ pub struct WindowsForProcessRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct BrowserListRequest {
+    pub browser: Option<winctl::BrowserKind>,
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub include_windows: bool,
+    #[serde(default)]
+    pub only_mcp_launched: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct BrowserDescribeRequest {
+    pub bound_id: Option<String>,
+    pub pid: Option<u32>,
+    pub hwnd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct BrowserWaitForNavigationRequest {
+    pub bound_id: String,
+    pub title_contains: Option<String>,
+    pub title_not_contains: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub poll_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct BrowserAssertRequest {
+    pub bound_id: String,
+    pub browser: Option<winctl::BrowserKind>,
+    pub title_contains: Option<String>,
+    pub class_name_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct BrowserExtractContentRequest {
+    pub bound_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct WindowImageChangeWaitRequest {
     pub bound_id: String,
     pub timeout_ms: Option<u64>,
@@ -1075,6 +1114,102 @@ impl WinctlMcpServer {
         let request = request.0;
         run_blocking_tool("app.launch", move || {
             tools::process::app_launch(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "browser.list",
+        description = "List Chrome, Edge, and Firefox process/window state with explicit PID/HWND identity metadata."
+    )]
+    pub async fn browser_list(
+        &self,
+        request: Parameters<BrowserListRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("browser.list", move || {
+            tools::browser::browser_list(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "browser.describe",
+        description = "Describe one browser target by bound window, PID, or HWND without tab-title selection."
+    )]
+    pub async fn browser_describe(
+        &self,
+        request: Parameters<BrowserDescribeRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("browser.describe", move || {
+            tools::browser::browser_describe(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "browser.wait_for_navigation",
+        description = "Wait for a bound browser window title transition while revalidating browser PID/HWND/executable identity."
+    )]
+    pub async fn browser_wait_for_navigation(
+        &self,
+        request: Parameters<BrowserWaitForNavigationRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("browser.wait_for_navigation", move || {
+            tools::browser::browser_wait_for_navigation(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "browser.assert",
+        description = "Assert browser kind and window title/class conditions against a revalidated bound browser window."
+    )]
+    pub async fn browser_assert(
+        &self,
+        request: Parameters<BrowserAssertRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("browser.assert", move || {
+            tools::browser::browser_assert(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "browser.extract_content",
+        description = "Return safe browser window content hints and identity metadata for a revalidated bound browser window."
+    )]
+    pub async fn browser_extract_content(
+        &self,
+        request: Parameters<BrowserExtractContentRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("browser.extract_content", move || {
+            tools::browser::browser_extract_content(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "browser.screenshot_checkpoint",
+        description = "Capture a screenshot checkpoint for a revalidated bound browser window."
+    )]
+    pub async fn browser_screenshot_checkpoint(
+        &self,
+        request: Parameters<BrowserExtractContentRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("browser.screenshot_checkpoint", move || {
+            tools::browser::browser_screenshot_checkpoint(&state, request)
         })
         .await
     }
@@ -1907,6 +2042,12 @@ mod tests {
             names,
             vec![
                 "app.launch",
+                "browser.assert",
+                "browser.describe",
+                "browser.extract_content",
+                "browser.list",
+                "browser.screenshot_checkpoint",
+                "browser.wait_for_navigation",
                 "capture.screenshot_display",
                 "capture.screenshot_window",
                 "capture.wait_for_window_image_change",

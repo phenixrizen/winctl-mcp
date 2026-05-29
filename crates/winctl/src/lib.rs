@@ -1,3 +1,4 @@
+pub mod browser;
 pub mod capture;
 pub mod input;
 pub mod monitors;
@@ -8,6 +9,7 @@ pub mod window_identity;
 pub mod window_management;
 pub mod window_match;
 
+pub use browser::*;
 pub use capture::*;
 pub use input::*;
 pub use monitors::*;

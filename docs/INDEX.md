@@ -3,6 +3,12 @@
 | Agent name | Tool name | Description |
 | --- | --- | --- |
 | `winctl-mcp` | [`app.launch`](APP_LAUNCH.md) | Launch an executable, protocol handler, packaged app, or Start Menu app target without shell command concatenation. |
+| `winctl-mcp` | [`browser.list`](BROWSER_LIST.md) | List Chrome, Edge, and Firefox process/window state with explicit PID/HWND identity metadata. |
+| `winctl-mcp` | [`browser.describe`](BROWSER_DESCRIBE.md) | Describe one browser target by bound window, PID, or HWND without tab-title selection. |
+| `winctl-mcp` | [`browser.wait_for_navigation`](BROWSER_WAIT_FOR_NAVIGATION.md) | Wait for a bound browser window title transition while revalidating browser PID/HWND/executable identity. |
+| `winctl-mcp` | [`browser.assert`](BROWSER_ASSERT.md) | Assert browser kind and window title/class conditions against a revalidated bound browser window. |
+| `winctl-mcp` | [`browser.extract_content`](BROWSER_EXTRACT_CONTENT.md) | Return safe browser window content hints and identity metadata for a revalidated bound browser window. |
+| `winctl-mcp` | [`browser.screenshot_checkpoint`](BROWSER_SCREENSHOT_CHECKPOINT.md) | Capture a screenshot checkpoint for a revalidated bound browser window. |
 | `winctl-mcp` | [`server.ping`](SERVER_PING.md) | Return a minimal health response without touching Win32 APIs. |
 | `winctl-mcp` | [`memory.remember`](MEMORY_REMEMBER.md) | Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata. |
 | `winctl-mcp` | [`memory.search`](MEMORY_SEARCH.md) | Search remembered procedures, observations, macros, and recipes using hybrid sqlite-vec, FTS5, tag, identity, recency, and usefulness ranking. |
