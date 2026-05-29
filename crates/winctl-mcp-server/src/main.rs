@@ -16,7 +16,7 @@ use anyhow::Context;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware;
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json as AxumJson, Router};
 use rmcp::schemars;
@@ -2153,8 +2153,26 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
                 auth_state,
                 require_bearer_auth,
             ));
+    let dashboard_state = DashboardState {
+        app_state: state.clone(),
+    };
+    let dashboard_router = Router::new()
+        .route("/dashboard", get(dashboard_html))
+        .route("/dashboard/state", get(dashboard_state_json))
+        .with_state(dashboard_state);
+    let dashboard_router = if config.auth_token.is_some() || !config.listen.ip().is_loopback() {
+        dashboard_router.route_layer(middleware::from_fn_with_state(
+            HttpAuthState {
+                required_token: config.auth_token.clone(),
+            },
+            require_bearer_auth,
+        ))
+    } else {
+        dashboard_router
+    };
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .merge(dashboard_router)
         .merge(mcp_router);
     let listener = tokio::net::TcpListener::bind(config.listen)
         .await
@@ -2173,6 +2191,11 @@ struct HttpAuthState {
     required_token: Option<String>,
 }
 
+#[derive(Clone)]
+struct DashboardState {
+    app_state: AppState,
+}
+
 async fn healthz() -> impl IntoResponse {
     tracing::info!("HTTP health check requested");
     AxumJson(serde_json::json!({
@@ -2180,6 +2203,221 @@ async fn healthz() -> impl IntoResponse {
         "service": "winctl-mcp-server"
     }))
 }
+
+async fn dashboard_html() -> impl IntoResponse {
+    Html(DASHBOARD_HTML)
+}
+
+async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoResponse {
+    let bound: Vec<_> = state
+        .app_state
+        .bound
+        .lock()
+        .expect("bound mutex poisoned")
+        .values()
+        .cloned()
+        .collect();
+    let launched: Vec<_> = state
+        .app_state
+        .launched
+        .lock()
+        .expect("launched process mutex poisoned")
+        .values()
+        .cloned()
+        .collect();
+    let memory = tools::memory::memory_list(
+        &state.app_state,
+        winctl_memory::MemoryListRequest {
+            kind: None,
+            tags: Vec::new(),
+            limit: Some(20),
+        },
+    );
+    let macros = tools::macros::macro_list(
+        &state.app_state,
+        MacroListRequest {
+            kind: None,
+            tags: Vec::new(),
+            limit: Some(20),
+        },
+    );
+    AxumJson(serde_json::json!({
+        "ok": true,
+        "service": "winctl-mcp-server",
+        "version": env!("CARGO_PKG_VERSION"),
+        "capture_dir": state.app_state.capture_dir.as_ref(),
+        "policy": state.app_state.policy.as_ref(),
+        "bound_windows": bound,
+        "launched_processes": launched,
+        "memory": memory,
+        "macros": macros,
+        "connected_clients": serde_json::Value::Null,
+        "recent_requests": [],
+        "warnings": [
+            "connected client and request-history tracking are not enabled yet"
+        ]
+    }))
+}
+
+const DASHBOARD_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>winctl-mcp dashboard</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f7f8fa;
+      color: #15171a;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+    }
+    header {
+      border-bottom: 1px solid #d9dde3;
+      padding: 16px 24px;
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    h1 {
+      font-size: 18px;
+      line-height: 1.2;
+      margin: 0;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+    main {
+      padding: 20px 24px 32px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    section {
+      background: #ffffff;
+      border: 1px solid #d9dde3;
+      border-radius: 6px;
+      min-height: 180px;
+      overflow: hidden;
+    }
+    h2 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      color: #5f6b7a;
+      margin: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid #e4e7ec;
+      background: #fafbfc;
+    }
+    pre {
+      margin: 0;
+      padding: 14px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    button {
+      appearance: none;
+      border: 1px solid #aeb7c2;
+      background: #ffffff;
+      color: inherit;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #eef3f8;
+    }
+    .status {
+      font-size: 13px;
+      color: #4e5967;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        background: #111418;
+        color: #e9edf2;
+      }
+      header,
+      section,
+      button {
+        background: #181c22;
+      }
+      header,
+      section,
+      h2,
+      button {
+        border-color: #303741;
+      }
+      h2 {
+        background: #15191f;
+        color: #aeb7c2;
+      }
+      button:hover {
+        background: #202731;
+      }
+      .status {
+        color: #aeb7c2;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>winctl-mcp dashboard</h1>
+      <div class="status" id="status">Loading</div>
+    </div>
+    <button type="button" onclick="loadState()">Refresh</button>
+  </header>
+  <main>
+    <section><h2>Server</h2><pre id="server"></pre></section>
+    <section><h2>Policy</h2><pre id="policy"></pre></section>
+    <section><h2>Bound Windows</h2><pre id="bound"></pre></section>
+    <section><h2>Launched Processes</h2><pre id="launched"></pre></section>
+    <section><h2>Memory</h2><pre id="memory"></pre></section>
+    <section><h2>Macros</h2><pre id="macros"></pre></section>
+  </main>
+  <script>
+    function pretty(value) {
+      return JSON.stringify(value, null, 2);
+    }
+    async function loadState() {
+      const status = document.getElementById('status');
+      status.textContent = 'Loading';
+      try {
+        const response = await fetch('/dashboard/state', { cache: 'no-store' });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        document.getElementById('server').textContent = pretty({
+          service: data.service,
+          version: data.version,
+          capture_dir: data.capture_dir,
+          connected_clients: data.connected_clients,
+          recent_requests: data.recent_requests,
+          warnings: data.warnings
+        });
+        document.getElementById('policy').textContent = pretty(data.policy);
+        document.getElementById('bound').textContent = pretty(data.bound_windows);
+        document.getElementById('launched').textContent = pretty(data.launched_processes);
+        document.getElementById('memory').textContent = pretty(data.memory);
+        document.getElementById('macros').textContent = pretty(data.macros);
+        status.textContent = 'Healthy';
+      } catch (error) {
+        status.textContent = String(error);
+      }
+    }
+    loadState();
+  </script>
+</body>
+</html>"#;
 
 async fn require_bearer_auth(
     State(state): State<HttpAuthState>,

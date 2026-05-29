@@ -60,6 +60,8 @@ winctl-mcp-server.exe serve --config "$env:LOCALAPPDATA\winctl-mcp\config.toml"
 
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for transport, auth, logging, filesystem root, mutation policy, memory, embedding, and macro execution settings.
 
+With HTTP transport, the local diagnostic dashboard is available at `/dashboard`. See [docs/DASHBOARD.md](docs/DASHBOARD.md).
+
 Compatibility stdio transport:
 
 ```powershell

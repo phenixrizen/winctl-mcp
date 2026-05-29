@@ -150,6 +150,28 @@ async fn streamable_http_health_and_tool_listing_work() {
     let client = reqwest::Client::new();
     let base = format!("http://{addr}");
     wait_for_health(&client, &base).await;
+    let dashboard = client
+        .get(format!("{base}/dashboard"))
+        .send()
+        .await
+        .expect("dashboard should respond");
+    assert_eq!(dashboard.status(), reqwest::StatusCode::OK);
+    let dashboard_body = dashboard
+        .text()
+        .await
+        .expect("dashboard body should be readable");
+    assert!(dashboard_body.contains("winctl-mcp dashboard"));
+
+    let dashboard_state: Value = client
+        .get(format!("{base}/dashboard/state"))
+        .send()
+        .await
+        .expect("dashboard state should respond")
+        .json()
+        .await
+        .expect("dashboard state should be JSON");
+    assert_eq!(dashboard_state["ok"], true);
+    assert_eq!(dashboard_state["service"], "winctl-mcp-server");
 
     let init = post_mcp(
         &client,

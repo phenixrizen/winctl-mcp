@@ -59,3 +59,12 @@ max_steps = 200
 - Filesystem access is limited to configured roots plus the capture directory and system temp directory.
 
 The environment variables `WINCTL_FS_ROOTS`, `WINCTL_ENABLE_FILESYSTEM_MUTATION`, `WINCTL_ENABLE_CLIPBOARD_WRITE`, `WINCTL_ENABLE_REGISTRY_MUTATION`, `WINCTL_ALLOW_PRIVATE_NETWORK`, `WINCTL_ARTIFACT_DIR`, and `WINCTL_MEMORY_DB` remain supported as compatibility defaults.
+
+## Dashboard
+
+When HTTP transport is enabled, the server also exposes:
+
+- `/dashboard`: local read-only dashboard HTML.
+- `/dashboard/state`: dashboard JSON state.
+
+Loopback dashboard access is unauthenticated by default. Non-loopback dashboard access uses the same bearer-token policy as the MCP endpoint.
