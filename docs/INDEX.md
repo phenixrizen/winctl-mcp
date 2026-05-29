@@ -88,3 +88,4 @@
 - [Macro manifest](MACRO_MANIFEST.md)
 - [Configuration](CONFIGURATION.md)
 - [Dashboard](DASHBOARD.md)
+- [Tray controller](TRAY_CONTROLLER.md)

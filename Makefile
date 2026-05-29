@@ -24,6 +24,7 @@ help:
 	@echo "  build-linux         Build workspace for host (Linux)"
 	@echo "  build-win           Build workspace for Windows target"
 	@echo "  build-win-server    Build only winctl-mcp-server for Windows"
+	@echo "  build-win-tray      Build only winctl-tray for Windows"
 	@echo "  build-win-fixture   Build the Windows integration fixture"
 	@echo "  package-win         Copy Windows server artifact and runbook into dist/"
 	@echo "  check               Run fmt + test + build-linux"
@@ -52,6 +53,10 @@ build-win:
 .PHONY: build-win-server
 build-win-server:
 	$(CARGO) build -p winctl-mcp-server --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
+
+.PHONY: build-win-tray
+build-win-tray:
+	$(CARGO) build -p winctl-tray --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
 
 .PHONY: build-win-fixture
 build-win-fixture:

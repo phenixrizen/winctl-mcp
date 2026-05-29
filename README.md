@@ -62,6 +62,15 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for transport, auth, logging,
 
 With HTTP transport, the local diagnostic dashboard is available at `/dashboard`. See [docs/DASHBOARD.md](docs/DASHBOARD.md).
 
+Optional server controller:
+
+```powershell
+winctl-tray.exe status
+winctl-tray.exe start --server-exe C:\winctl\winctl-mcp-server.exe
+```
+
+See [docs/TRAY_CONTROLLER.md](docs/TRAY_CONTROLLER.md).
+
 Compatibility stdio transport:
 
 ```powershell

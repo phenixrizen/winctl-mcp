@@ -5,6 +5,7 @@ members = [
   "crates/winctl-memory",
   "crates/winctl-mcp-server",
   "crates/winctl-test-target",
+  "crates/winctl-tray",
 ]
 resolver = "2"
 
