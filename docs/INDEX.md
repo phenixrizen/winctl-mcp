@@ -3,6 +3,13 @@
 | Agent name | Tool name | Description |
 | --- | --- | --- |
 | `winctl-cmp` | [`server.ping`](SERVER_PING.md) | Return a minimal health response without touching Win32 APIs. |
+| `winctl-cmp` | [`memory.remember`](MEMORY_REMEMBER.md) | Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata. |
+| `winctl-cmp` | [`memory.search`](MEMORY_SEARCH.md) | Search remembered procedures, observations, macros, and recipes using hybrid sqlite-vec, FTS5, tag, identity, recency, and usefulness ranking. |
+| `winctl-cmp` | [`memory.get`](MEMORY_GET.md) | Fetch one memory item by ID and update its explicit use metadata. |
+| `winctl-cmp` | [`memory.update`](MEMORY_UPDATE.md) | Explicitly update a remembered item and rebuild its FTS5 and sqlite-vec indexes. |
+| `winctl-cmp` | [`memory.delete`](MEMORY_DELETE.md) | Explicitly delete one remembered item by ID and remove it from memory indexes. |
+| `winctl-cmp` | [`memory.list`](MEMORY_LIST.md) | List remembered items with optional kind and tag filtering. |
+| `winctl-cmp` | [`memory.reindex`](MEMORY_REINDEX.md) | Rebuild memory FTS5 and sqlite-vec indexes for the local memory database. |
 | `winctl-cmp` | [`uia.snapshot`](UIA_SNAPSHOT.md) | Capture a UI Automation tree for a bound window with element roles, names, automation IDs, bounds, state, hierarchy, and stable element references. |
 | `winctl-cmp` | [`uia.find`](UIA_FIND.md) | Find UI Automation elements in a fresh bound-window snapshot by semantic selector fields. |
 | `winctl-cmp` | [`uia.resolve`](UIA_RESOLVE.md) | Revalidate a UI Automation element reference path against the current bound window snapshot. |

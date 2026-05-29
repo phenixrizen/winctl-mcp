@@ -46,6 +46,7 @@ pub struct AppState {
     pub capture_lock: Arc<Mutex<()>>,
     pub capture_dir: Arc<PathBuf>,
     pub launched: Arc<Mutex<HashMap<String, TrackedProcess>>>,
+    pub memory: Arc<Mutex<winctl_memory::MemoryStore>>,
     launch_counter: Arc<AtomicU64>,
 }
 
@@ -57,12 +58,34 @@ impl Default for AppState {
 
 impl AppState {
     pub fn with_capture_dir(capture_dir: PathBuf) -> Self {
+        Self::with_capture_dir_and_memory(capture_dir, default_memory_store())
+    }
+
+    pub fn with_capture_dir_and_memory(
+        capture_dir: PathBuf,
+        memory_store: winctl_memory::MemoryStore,
+    ) -> Self {
         Self {
             bound: Arc::new(Mutex::new(HashMap::new())),
             capture_lock: Arc::new(Mutex::new(())),
             capture_dir: Arc::new(capture_dir),
             launched: Arc::new(Mutex::new(HashMap::new())),
+            memory: Arc::new(Mutex::new(memory_store)),
             launch_counter: Arc::new(AtomicU64::new(1)),
+        }
+    }
+}
+
+fn default_memory_store() -> winctl_memory::MemoryStore {
+    match winctl_memory::MemoryStore::open_default() {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "failed to open default memory store; falling back to in-memory store"
+            );
+            winctl_memory::MemoryStore::open_in_memory()
+                .expect("in-memory memory store initialization failed")
         }
     }
 }
@@ -392,6 +415,114 @@ impl WinctlMcpServer {
     pub async fn server_ping(&self) -> Json<serde_json::Value> {
         tracing::info!("server.ping requested");
         Json(serde_json::json!({"ok": true, "pong": true}))
+    }
+
+    #[tool(
+        name = "memory.remember",
+        description = "Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata."
+    )]
+    pub async fn memory_remember(
+        &self,
+        request: Parameters<winctl_memory::RememberRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("memory.remember", move || {
+            tools::memory::memory_remember(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory.search",
+        description = "Search remembered procedures, observations, macros, and recipes using hybrid sqlite-vec, FTS5, tag, identity, recency, and usefulness ranking."
+    )]
+    pub async fn memory_search(
+        &self,
+        request: Parameters<winctl_memory::MemorySearchRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("memory.search", move || {
+            tools::memory::memory_search(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory.get",
+        description = "Fetch one memory item by ID and update its explicit use metadata."
+    )]
+    pub async fn memory_get(
+        &self,
+        request: Parameters<winctl_memory::MemoryIdRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("memory.get", move || {
+            tools::memory::memory_get(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory.update",
+        description = "Explicitly update a remembered item and rebuild its FTS5 and sqlite-vec indexes."
+    )]
+    pub async fn memory_update(
+        &self,
+        request: Parameters<winctl_memory::MemoryUpdateRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("memory.update", move || {
+            tools::memory::memory_update(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory.delete",
+        description = "Explicitly delete one remembered item by ID and remove it from memory indexes."
+    )]
+    pub async fn memory_delete(
+        &self,
+        request: Parameters<winctl_memory::MemoryIdRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("memory.delete", move || {
+            tools::memory::memory_delete(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory.list",
+        description = "List remembered items with optional kind and tag filtering."
+    )]
+    pub async fn memory_list(
+        &self,
+        request: Parameters<winctl_memory::MemoryListRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("memory.list", move || {
+            tools::memory::memory_list(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory.reindex",
+        description = "Rebuild memory FTS5 and sqlite-vec indexes for the local memory database."
+    )]
+    pub async fn memory_reindex(&self) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        run_blocking_tool("memory.reindex", move || {
+            tools::memory::memory_reindex(&state)
+        })
+        .await
     }
 
     #[tool(
@@ -1408,6 +1539,13 @@ mod tests {
                 "input.scroll",
                 "input.shortcut",
                 "input.type_text",
+                "memory.delete",
+                "memory.get",
+                "memory.list",
+                "memory.reindex",
+                "memory.remember",
+                "memory.search",
+                "memory.update",
                 "process.describe",
                 "process.kill",
                 "process.launch",
@@ -1428,6 +1566,47 @@ mod tests {
                 "windows.window_from_point",
             ]
         );
+    }
+
+    #[test]
+    fn memory_tools_round_trip() {
+        let state = AppState::with_capture_dir_and_memory(
+            std::env::temp_dir().join("winctl-mcp-test-captures"),
+            winctl_memory::MemoryStore::open_in_memory().unwrap(),
+        );
+
+        let remembered = tools::memory::memory_remember(
+            &state,
+            winctl_memory::RememberRequest {
+                kind: "test_procedure".into(),
+                title: "Betty settings smoke test".into(),
+                text: "Launch Betty and verify Settings opens.".into(),
+                manifest_json: Some(serde_json::json!({"version": "winctl.macro.v1"})),
+                tags: vec!["betty".into(), "settings".into()],
+                app_identity_json: Some(serde_json::json!({"executable_name": "Betty.exe"})),
+                target_identity_json: None,
+            },
+        );
+        assert_eq!(remembered["ok"], true);
+        let id = remembered["item"]["id"].as_str().unwrap().to_owned();
+
+        let search = tools::memory::memory_search(
+            &state,
+            winctl_memory::MemorySearchRequest {
+                query: Some("open settings".into()),
+                tags: vec!["betty".into()],
+                limit: Some(5),
+                ..Default::default()
+            },
+        );
+        assert_eq!(search["ok"], true);
+        assert_eq!(search["results"][0]["item"]["id"], id);
+        assert!(search["results"][0]["vector_score"].as_f64().unwrap() > 0.0);
+
+        let deleted =
+            tools::memory::memory_delete(&state, winctl_memory::MemoryIdRequest { id: id.clone() });
+        assert_eq!(deleted["ok"], true);
+        assert_eq!(deleted["deleted"], true);
     }
 
     #[test]
