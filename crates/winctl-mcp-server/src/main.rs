@@ -300,6 +300,20 @@ pub struct ProcessLaunchRequest {
     pub allow_child_process_windows: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct AppLaunchRequest {
+    pub mode: winctl::AppLaunchMode,
+    pub target: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub wait_for_window: bool,
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub allow_child_process_windows: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ProcessListRequest {
     pub name_contains: Option<String>,
@@ -355,6 +369,28 @@ pub struct WaitForStateRequest {
     pub cloaked: Option<bool>,
     pub title_contains: Option<String>,
     pub class_name_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct WindowMoveRequest {
+    pub bound_id: String,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct WindowResizeRequest {
+    pub bound_id: String,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct WindowsForProcessRequest {
+    pub pid: Option<u32>,
+    pub launch_id: Option<String>,
+    #[serde(default)]
+    pub include_child_process_windows: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
@@ -895,6 +931,150 @@ impl WinctlMcpServer {
         let request = request.0;
         run_blocking_tool("windows.wait_for_state", move || {
             tools::windows::windows_wait_for_state(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "windows.move",
+        description = "Move a bound window after revalidating HWND, PID, and executable identity."
+    )]
+    pub async fn windows_move(
+        &self,
+        request: Parameters<WindowMoveRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("windows.move", move || {
+            tools::windows::windows_move(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "windows.resize",
+        description = "Resize a bound window after revalidating HWND, PID, and executable identity."
+    )]
+    pub async fn windows_resize(
+        &self,
+        request: Parameters<WindowResizeRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("windows.resize", move || {
+            tools::windows::windows_resize(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "windows.minimize",
+        description = "Minimize a bound window after revalidating stable identity."
+    )]
+    pub async fn windows_minimize(
+        &self,
+        request: Parameters<BoundIdRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let bound_id = request.0.bound_id;
+        run_blocking_tool("windows.minimize", move || {
+            tools::windows::windows_minimize(&state, bound_id)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "windows.maximize",
+        description = "Maximize a bound window after revalidating stable identity."
+    )]
+    pub async fn windows_maximize(
+        &self,
+        request: Parameters<BoundIdRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let bound_id = request.0.bound_id;
+        run_blocking_tool("windows.maximize", move || {
+            tools::windows::windows_maximize(&state, bound_id)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "windows.restore",
+        description = "Restore a bound window after revalidating stable identity."
+    )]
+    pub async fn windows_restore(
+        &self,
+        request: Parameters<BoundIdRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let bound_id = request.0.bound_id;
+        run_blocking_tool("windows.restore", move || {
+            tools::windows::windows_restore(&state, bound_id)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "windows.close",
+        description = "Post WM_CLOSE to a bound window after revalidating stable identity."
+    )]
+    pub async fn windows_close(
+        &self,
+        request: Parameters<BoundIdRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let bound_id = request.0.bound_id;
+        run_blocking_tool("windows.close", move || {
+            tools::windows::windows_close(&state, bound_id)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "windows.foreground_diagnostics",
+        description = "Return foreground and replay diagnostics for a bound window after identity revalidation."
+    )]
+    pub async fn windows_foreground_diagnostics(
+        &self,
+        request: Parameters<BoundIdRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let bound_id = request.0.bound_id;
+        run_blocking_tool("windows.foreground_diagnostics", move || {
+            tools::windows::windows_foreground_diagnostics(&state, bound_id)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "windows.for_process",
+        description = "List visible top-level windows for a PID or MCP launch ID, with explicit child-process policy."
+    )]
+    pub async fn windows_for_process(
+        &self,
+        request: Parameters<WindowsForProcessRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("windows.for_process", move || {
+            tools::windows::windows_for_process(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "app.launch",
+        description = "Launch an executable, protocol handler, packaged app, or Start Menu app target without shell command concatenation."
+    )]
+    pub async fn app_launch(
+        &self,
+        request: Parameters<AppLaunchRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("app.launch", move || {
+            tools::process::app_launch(&state, request)
         })
         .await
     }
@@ -1726,6 +1906,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "app.launch",
                 "capture.screenshot_display",
                 "capture.screenshot_window",
                 "capture.wait_for_window_image_change",
@@ -1765,11 +1946,19 @@ mod tests {
                 "uia.resolve",
                 "uia.snapshot",
                 "windows.bind",
+                "windows.close",
                 "windows.describe",
                 "windows.find",
                 "windows.focus",
+                "windows.for_process",
+                "windows.foreground_diagnostics",
                 "windows.list",
+                "windows.maximize",
+                "windows.minimize",
                 "windows.monitors",
+                "windows.move",
+                "windows.resize",
+                "windows.restore",
                 "windows.wait_for_state",
                 "windows.wait_for_window",
                 "windows.window_from_point",

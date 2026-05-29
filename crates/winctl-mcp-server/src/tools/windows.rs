@@ -1,9 +1,12 @@
-use crate::{AppState, WaitForStateRequest};
+use crate::{
+    AppState, WaitForStateRequest, WindowMoveRequest, WindowResizeRequest, WindowsForProcessRequest,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 use winctl::{
-    find_windows, focus_window, list_windows, monitors, window_from_point, WindowInfo,
-    WindowSelector,
+    child_processes, close_window, find_windows, focus_window, foreground_diagnostics,
+    list_windows, maximize_window, minimize_window, monitors, move_window_to, resize_window_to,
+    restore_window, window_from_point, WindowInfo, WindowSelector,
 };
 
 pub fn windows_list() -> serde_json::Value {
@@ -181,6 +184,148 @@ pub fn windows_wait_for_state(state: &AppState, request: WaitForStateRequest) ->
         }
 
         thread::sleep(poll_interval);
+    }
+}
+
+pub fn windows_move(state: &AppState, request: WindowMoveRequest) -> serde_json::Value {
+    tracing::info!(
+        bound_id = %request.bound_id,
+        x = request.x,
+        y = request.y,
+        "windows.move requested"
+    );
+    with_revalidated_window(state, &request.bound_id, "windows.move", |window| {
+        move_window_to(&window, request.x, request.y)
+    })
+}
+
+pub fn windows_resize(state: &AppState, request: WindowResizeRequest) -> serde_json::Value {
+    tracing::info!(
+        bound_id = %request.bound_id,
+        width = request.width,
+        height = request.height,
+        "windows.resize requested"
+    );
+    with_revalidated_window(state, &request.bound_id, "windows.resize", |window| {
+        resize_window_to(&window, request.width, request.height)
+    })
+}
+
+pub fn windows_minimize(state: &AppState, bound_id: String) -> serde_json::Value {
+    tracing::info!(bound_id = %bound_id, "windows.minimize requested");
+    with_revalidated_window(state, &bound_id, "windows.minimize", |window| {
+        minimize_window(&window)
+    })
+}
+
+pub fn windows_maximize(state: &AppState, bound_id: String) -> serde_json::Value {
+    tracing::info!(bound_id = %bound_id, "windows.maximize requested");
+    with_revalidated_window(state, &bound_id, "windows.maximize", |window| {
+        maximize_window(&window)
+    })
+}
+
+pub fn windows_restore(state: &AppState, bound_id: String) -> serde_json::Value {
+    tracing::info!(bound_id = %bound_id, "windows.restore requested");
+    with_revalidated_window(state, &bound_id, "windows.restore", |window| {
+        restore_window(&window)
+    })
+}
+
+pub fn windows_close(state: &AppState, bound_id: String) -> serde_json::Value {
+    tracing::info!(bound_id = %bound_id, "windows.close requested");
+    with_revalidated_window(state, &bound_id, "windows.close", |window| {
+        close_window(&window)
+    })
+}
+
+pub fn windows_foreground_diagnostics(state: &AppState, bound_id: String) -> serde_json::Value {
+    tracing::info!(bound_id = %bound_id, "windows.foreground_diagnostics requested");
+    with_revalidated_window(
+        state,
+        &bound_id,
+        "windows.foreground_diagnostics",
+        |window| foreground_diagnostics(&window),
+    )
+}
+
+pub fn windows_for_process(
+    state: &AppState,
+    request: WindowsForProcessRequest,
+) -> serde_json::Value {
+    tracing::info!(
+        pid = ?request.pid,
+        launch_id = ?request.launch_id,
+        include_child_process_windows = request.include_child_process_windows,
+        "windows.for_process requested"
+    );
+    let Some(pid) = request.pid.or_else(|| {
+        request
+            .launch_id
+            .as_deref()
+            .and_then(|launch_id| state.tracked_by_launch_id(launch_id))
+            .map(|tracked| tracked.pid)
+    }) else {
+        return serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "missing_process_target",
+                "message": "pid or launch_id is required"
+            }
+        });
+    };
+    let child_pids: Vec<u32> = if request.include_child_process_windows {
+        child_processes(pid)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|process| process.pid)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let windows: Vec<_> = list_windows()
+        .into_iter()
+        .filter(|window| window.pid == pid || child_pids.contains(&window.pid))
+        .map(|window| {
+            serde_json::json!({
+                "window": window,
+                "belongs_to_original_pid": window.pid == pid,
+                "child_process_window": window.pid != pid,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "ok": true,
+        "pid": pid,
+        "launch_id": request.launch_id,
+        "windows": windows,
+        "child_pids": child_pids,
+    })
+}
+
+fn with_revalidated_window<F>(
+    state: &AppState,
+    bound_id: &str,
+    tool: &str,
+    operation: F,
+) -> serde_json::Value
+where
+    F: FnOnce(WindowInfo) -> Result<winctl::WindowManagementResult, winctl::WindowManagementError>,
+{
+    match state.revalidate_bound_window(bound_id) {
+        Ok(window) => match operation(window) {
+            Ok(result) => serde_json::json!({"ok": true, "bound_id": bound_id, "result": result}),
+            Err(error) => {
+                tracing::warn!(
+                    bound_id = %bound_id,
+                    error_code = %error.code,
+                    tool = tool,
+                    "window management operation failed"
+                );
+                serde_json::json!({"ok": false, "error": error})
+            }
+        },
+        Err(error) => serde_json::json!({"ok": false, "error": error}),
     }
 }
 

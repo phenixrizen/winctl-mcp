@@ -5,6 +5,7 @@ pub mod process;
 pub mod uia;
 pub mod window_enum;
 pub mod window_identity;
+pub mod window_management;
 pub mod window_match;
 
 pub use capture::*;
@@ -14,4 +15,5 @@ pub use process::*;
 pub use uia::*;
 pub use window_enum::*;
 pub use window_identity::*;
+pub use window_management::*;
 pub use window_match::*;

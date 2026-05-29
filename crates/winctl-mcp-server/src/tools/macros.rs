@@ -14,11 +14,12 @@ use winctl_macro::{
 use winctl_memory::{MemoryListRequest, RememberRequest};
 
 use crate::{
-    AppState, BoundIdRequest, DisplayScreenshotRequest, MacroAbortRequest, MacroDryRunRequest,
-    MacroExportResultRequest, MacroGetRequest, MacroListRequest, MacroManifestRequest,
-    MacroPromoteRequest, MacroRunRequest, MacroRunStepRequest, ProcessDescribeRequest,
-    ProcessKillRequest, UiFindRequest, WaitForStateRequest, WaitForWindowRequest,
-    WindowImageChangeWaitRequest,
+    AppLaunchRequest, AppState, BoundIdRequest, DisplayScreenshotRequest, MacroAbortRequest,
+    MacroDryRunRequest, MacroExportResultRequest, MacroGetRequest, MacroListRequest,
+    MacroManifestRequest, MacroPromoteRequest, MacroRunRequest, MacroRunStepRequest,
+    ProcessDescribeRequest, ProcessKillRequest, UiFindRequest, WaitForStateRequest,
+    WaitForWindowRequest, WindowImageChangeWaitRequest, WindowMoveRequest, WindowResizeRequest,
+    WindowsForProcessRequest,
 };
 
 #[derive(Default)]
@@ -670,6 +671,10 @@ fn dispatch_tool(
     step: &MacroStep,
 ) -> Result<Value, MacroStepError> {
     match tool {
+        "app.launch" => Ok(crate::tools::process::app_launch(
+            state,
+            parse_args::<AppLaunchRequest>(args)?,
+        )),
         "process.launch" => Ok(crate::tools::process::process_launch(
             state,
             parse_args(args)?,
@@ -701,6 +706,40 @@ fn dispatch_tool(
         "windows.wait_for_state" => Ok(crate::tools::windows::windows_wait_for_state(
             state,
             parse_args::<WaitForStateRequest>(args)?,
+        )),
+        "windows.move" => Ok(crate::tools::windows::windows_move(
+            state,
+            parse_args::<WindowMoveRequest>(args)?,
+        )),
+        "windows.resize" => Ok(crate::tools::windows::windows_resize(
+            state,
+            parse_args::<WindowResizeRequest>(args)?,
+        )),
+        "windows.minimize" => Ok(crate::tools::windows::windows_minimize(
+            state,
+            bound_id_from_args(args, context)?,
+        )),
+        "windows.maximize" => Ok(crate::tools::windows::windows_maximize(
+            state,
+            bound_id_from_args(args, context)?,
+        )),
+        "windows.restore" => Ok(crate::tools::windows::windows_restore(
+            state,
+            bound_id_from_args(args, context)?,
+        )),
+        "windows.close" => Ok(crate::tools::windows::windows_close(
+            state,
+            bound_id_from_args(args, context)?,
+        )),
+        "windows.foreground_diagnostics" => {
+            Ok(crate::tools::windows::windows_foreground_diagnostics(
+                state,
+                bound_id_from_args(args, context)?,
+            ))
+        }
+        "windows.for_process" => Ok(crate::tools::windows::windows_for_process(
+            state,
+            parse_args::<WindowsForProcessRequest>(args)?,
         )),
         "capture.screenshot_window" => Ok(crate::tools::capture::screenshot_window(
             state,

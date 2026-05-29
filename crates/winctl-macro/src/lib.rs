@@ -712,6 +712,13 @@ fn default_required() -> bool {
 
 const SUPPORTED_TOOLS: &[ToolDescriptor] = &[
     ToolDescriptor {
+        name: "app.launch",
+        category: "app",
+        mutates_ui: true,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
         name: "process.launch",
         category: "process",
         mutates_ui: true,
@@ -765,6 +772,62 @@ const SUPPORTED_TOOLS: &[ToolDescriptor] = &[
         category: "window",
         mutates_ui: false,
         requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "windows.move",
+        category: "window",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "windows.resize",
+        category: "window",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "windows.minimize",
+        category: "window",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "windows.maximize",
+        category: "window",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "windows.restore",
+        category: "window",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "windows.close",
+        category: "window",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "windows.foreground_diagnostics",
+        category: "window",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "windows.for_process",
+        category: "window",
+        mutates_ui: false,
+        requires_bound_window: false,
         produces_artifact: false,
     },
     ToolDescriptor {

@@ -41,6 +41,35 @@ pub struct ProcessLaunchResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppLaunchMode {
+    Executable,
+    Protocol,
+    PackagedApp,
+    StartMenu,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AppLaunchSpec {
+    pub mode: AppLaunchMode,
+    pub target: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AppLaunchResult {
+    pub mode: AppLaunchMode,
+    pub target: String,
+    pub pid: Option<u32>,
+    pub process_name: Option<String>,
+    pub executable_path: Option<String>,
+    pub launch_time_unix_ms: u64,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProcessKillResult {
     pub pid: u32,
@@ -97,6 +126,23 @@ pub fn launch_process(spec: ProcessLaunchSpec) -> Result<ProcessLaunchResult, Pr
         Err(ProcessError {
             code: "unsupported_platform".into(),
             message: "process.launch requires Windows runtime".into(),
+            warnings: vec![],
+        })
+    }
+}
+
+pub fn launch_app(spec: AppLaunchSpec) -> Result<AppLaunchResult, ProcessError> {
+    #[cfg(windows)]
+    {
+        windows_impl::launch_app(spec)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = spec;
+        Err(ProcessError {
+            code: "unsupported_platform".into(),
+            message: "app.launch requires Windows runtime".into(),
             warnings: vec![],
         })
     }
@@ -202,15 +248,18 @@ mod windows_impl {
         TH32CS_SNAPPROCESS,
     };
     use windows::Win32::System::Threading::{
-        CreateProcessW, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW,
+        CreateProcessW, GetExitCodeProcess, GetProcessId, OpenProcess, QueryFullProcessImageNameW,
         TerminateProcess, WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT, PROCESS_CREATION_FLAGS,
         PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
         PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTUPINFOW,
     };
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     use super::{
-        basename, is_terminal_process_name, windows_argv_command_line, ProcessError, ProcessInfo,
-        ProcessKillResult, ProcessLaunchResult, ProcessLaunchSpec,
+        basename, is_terminal_process_name, windows_argv_command_line, AppLaunchMode,
+        AppLaunchResult, AppLaunchSpec, ProcessError, ProcessInfo, ProcessKillResult,
+        ProcessLaunchResult, ProcessLaunchSpec,
     };
 
     const STILL_ACTIVE_CODE: u32 = 259;
@@ -326,6 +375,102 @@ mod windows_impl {
             process_name,
             executable_path,
             parent_pid,
+            launch_time_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_millis() as u64)
+                .unwrap_or_default(),
+            warnings,
+        })
+    }
+
+    pub(super) fn launch_app(spec: AppLaunchSpec) -> Result<AppLaunchResult, ProcessError> {
+        if spec.target.trim().is_empty() {
+            return Err(ProcessError {
+                code: "missing_app_target".into(),
+                message: "app.launch requires a non-empty target".into(),
+                warnings: vec![],
+            });
+        }
+        if spec.mode == AppLaunchMode::Executable {
+            let launch = launch_process(ProcessLaunchSpec {
+                exe: spec.target.clone(),
+                args: spec.args.clone(),
+                cwd: spec.cwd.clone(),
+                env: None,
+            })?;
+            return Ok(AppLaunchResult {
+                mode: spec.mode,
+                target: spec.target,
+                pid: Some(launch.pid),
+                process_name: launch.process_name,
+                executable_path: launch.executable_path,
+                launch_time_unix_ms: launch.launch_time_unix_ms,
+                warnings: launch.warnings,
+            });
+        }
+
+        let shell_target = match spec.mode {
+            AppLaunchMode::Protocol => spec.target.clone(),
+            AppLaunchMode::PackagedApp | AppLaunchMode::StartMenu => {
+                format!("shell:AppsFolder\\{}", spec.target)
+            }
+            AppLaunchMode::Executable => spec.target.clone(),
+        };
+        let mut target_wide = wide_null(&shell_target);
+        let mut verb_wide = wide_null("open");
+        let parameters = shell_parameters(&spec.args);
+        let mut parameters_wide = wide_null(&parameters);
+        let cwd_wide = spec.cwd.as_deref().map(wide_null);
+        let mut info = SHELLEXECUTEINFOW::default();
+        info.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOCLOSEPROCESS;
+        info.lpVerb = PCWSTR(verb_wide.as_mut_ptr());
+        info.lpFile = PCWSTR(target_wide.as_mut_ptr());
+        info.lpParameters = if parameters.is_empty() {
+            PCWSTR::null()
+        } else {
+            PCWSTR(parameters_wide.as_mut_ptr())
+        };
+        info.lpDirectory = cwd_wide
+            .as_ref()
+            .map(|cwd| PCWSTR(cwd.as_ptr()))
+            .unwrap_or_else(PCWSTR::null);
+        info.nShow = SW_SHOWNORMAL.0;
+
+        unsafe { ShellExecuteExW(&mut info) }.map_err(|error| ProcessError {
+            code: "shell_execute_failed".into(),
+            message: format!("ShellExecuteExW failed for {shell_target}: {error}"),
+            warnings: vec![],
+        })?;
+
+        let pid = if !info.hProcess.is_invalid() {
+            let pid = unsafe { GetProcessId(info.hProcess) };
+            let _ = unsafe { CloseHandle(info.hProcess) };
+            (pid != 0).then_some(pid)
+        } else {
+            None
+        };
+        let mut warnings = Vec::new();
+        if pid.is_none() {
+            warnings.push("ShellExecuteExW did not return a process handle".into());
+        }
+        let metadata = pid.and_then(|pid| super::describe_process(pid).ok().flatten());
+        warnings.extend(
+            metadata
+                .as_ref()
+                .map(|process| process.warnings.clone())
+                .unwrap_or_default(),
+        );
+        Ok(AppLaunchResult {
+            mode: spec.mode,
+            target: spec.target,
+            pid,
+            process_name: metadata
+                .as_ref()
+                .and_then(|process| process.process_name.clone()),
+            executable_path: metadata
+                .as_ref()
+                .and_then(|process| process.exe_path.clone()),
             launch_time_unix_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_millis() as u64)
@@ -471,6 +616,13 @@ mod windows_impl {
 
     fn wide_null(value: &str) -> Vec<u16> {
         OsStr::new(value).encode_wide().chain(Some(0)).collect()
+    }
+
+    fn shell_parameters(args: &[String]) -> String {
+        args.iter()
+            .map(|arg| super::windows_quote_arg(arg))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn wide_array_to_string(buffer: &[u16]) -> String {

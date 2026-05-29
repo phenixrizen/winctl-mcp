@@ -3,12 +3,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::{
-    AppState, ProcessDescribeRequest, ProcessKillRequest, ProcessLaunchRequest, ProcessListRequest,
-    ProcessWaitForExitRequest, WaitForWindowRequest,
+    AppLaunchRequest, AppState, ProcessDescribeRequest, ProcessKillRequest, ProcessLaunchRequest,
+    ProcessListRequest, ProcessWaitForExitRequest, WaitForWindowRequest,
 };
 use winctl::{
-    child_processes, describe_process, kill_process, launch_process, list_processes, list_windows,
-    ProcessInfo, ProcessLaunchSpec, WindowInfo,
+    child_processes, describe_process, kill_process, launch_app, launch_process, list_processes,
+    list_windows, AppLaunchSpec, ProcessInfo, ProcessLaunchResult, ProcessLaunchSpec, WindowInfo,
 };
 
 pub fn process_launch(state: &AppState, request: ProcessLaunchRequest) -> serde_json::Value {
@@ -78,6 +78,86 @@ pub fn process_launch(state: &AppState, request: ProcessLaunchRequest) -> serde_
                 error_code = %error.code,
                 "process.launch failed"
             );
+            serde_json::json!({"ok": false, "error": error})
+        }
+    }
+}
+
+pub fn app_launch(state: &AppState, request: AppLaunchRequest) -> serde_json::Value {
+    tracing::info!(
+        mode = ?request.mode,
+        target = %request.target,
+        args_count = request.args.len(),
+        cwd = ?request.cwd,
+        wait_for_window = request.wait_for_window,
+        timeout_ms = request.timeout_ms,
+        allow_child_process_windows = request.allow_child_process_windows,
+        "app.launch requested"
+    );
+    let spec = AppLaunchSpec {
+        mode: request.mode,
+        target: request.target,
+        args: request.args,
+        cwd: request.cwd,
+    };
+    match launch_app(spec.clone()) {
+        Ok(launch) => {
+            let tracked = launch.pid.map(|pid| {
+                state.track_launch(
+                    &ProcessLaunchSpec {
+                        exe: spec.target.clone(),
+                        args: spec.args.clone(),
+                        cwd: spec.cwd.clone(),
+                        env: None,
+                    },
+                    &ProcessLaunchResult {
+                        pid,
+                        process_name: launch.process_name.clone(),
+                        executable_path: launch.executable_path.clone(),
+                        parent_pid: None,
+                        launch_time_unix_ms: launch.launch_time_unix_ms,
+                        warnings: launch.warnings.clone(),
+                    },
+                )
+            });
+            let window_result = if request.wait_for_window {
+                launch.pid.map(|pid| {
+                    windows_wait_for_window(
+                        state,
+                        WaitForWindowRequest {
+                            pid: Some(pid),
+                            launch_id: tracked.as_ref().map(|tracked| tracked.launch_id.clone()),
+                            timeout_ms: request.timeout_ms,
+                            title_contains: None,
+                            class_name_contains: None,
+                            allow_child_process_windows: request.allow_child_process_windows,
+                        },
+                    )
+                })
+            } else {
+                None
+            };
+            serde_json::json!({
+                "ok": true,
+                "mode": launch.mode,
+                "target": launch.target,
+                "pid": launch.pid,
+                "process_name": launch.process_name,
+                "executable_path": launch.executable_path,
+                "launch_time_unix_ms": launch.launch_time_unix_ms,
+                "launched_by_this_server": tracked.is_some(),
+                "launch_id": tracked.as_ref().map(|tracked| tracked.launch_id.clone()),
+                "candidate_top_level_windows": window_result
+                    .as_ref()
+                    .and_then(|value| value.get("matched_windows"))
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([])),
+                "window_wait": window_result,
+                "warnings": launch.warnings,
+            })
+        }
+        Err(error) => {
+            tracing::warn!(error_code = %error.code, "app.launch failed");
             serde_json::json!({"ok": false, "error": error})
         }
     }

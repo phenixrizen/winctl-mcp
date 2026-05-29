@@ -2,6 +2,7 @@
 
 | Agent name | Tool name | Description |
 | --- | --- | --- |
+| `winctl-mcp` | [`app.launch`](APP_LAUNCH.md) | Launch an executable, protocol handler, packaged app, or Start Menu app target without shell command concatenation. |
 | `winctl-mcp` | [`server.ping`](SERVER_PING.md) | Return a minimal health response without touching Win32 APIs. |
 | `winctl-mcp` | [`memory.remember`](MEMORY_REMEMBER.md) | Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata. |
 | `winctl-mcp` | [`memory.search`](MEMORY_SEARCH.md) | Search remembered procedures, observations, macros, and recipes using hybrid sqlite-vec, FTS5, tag, identity, recency, and usefulness ranking. |
@@ -22,6 +23,14 @@
 | `winctl-mcp` | [`windows.monitors`](WINDOWS_MONITORS.md) | List monitor geometry, DPI scale, primary monitor flag, and total virtual desktop bounds. |
 | `winctl-mcp` | [`windows.wait_for_state`](WINDOWS_WAIT_FOR_STATE.md) | Wait for a bound window to satisfy state, foreground, title, or class conditions after identity revalidation. |
 | `winctl-mcp` | [`windows.wait_for_window`](WINDOWS_WAIT_FOR_WINDOW.md) | Wait for visible top-level window candidates owned by a PID or MCP launch ID without title-only selection. |
+| `winctl-mcp` | [`windows.move`](WINDOWS_MOVE.md) | Move a bound window after revalidating HWND, PID, and executable identity. |
+| `winctl-mcp` | [`windows.resize`](WINDOWS_RESIZE.md) | Resize a bound window after revalidating HWND, PID, and executable identity. |
+| `winctl-mcp` | [`windows.minimize`](WINDOWS_MINIMIZE.md) | Minimize a bound window after revalidating stable identity. |
+| `winctl-mcp` | [`windows.maximize`](WINDOWS_MAXIMIZE.md) | Maximize a bound window after revalidating stable identity. |
+| `winctl-mcp` | [`windows.restore`](WINDOWS_RESTORE.md) | Restore a bound window after revalidating stable identity. |
+| `winctl-mcp` | [`windows.close`](WINDOWS_CLOSE.md) | Post `WM_CLOSE` to a bound window after revalidating stable identity. |
+| `winctl-mcp` | [`windows.foreground_diagnostics`](WINDOWS_FOREGROUND_DIAGNOSTICS.md) | Return foreground and replay diagnostics for a bound window after identity revalidation. |
+| `winctl-mcp` | [`windows.for_process`](WINDOWS_FOR_PROCESS.md) | List visible top-level windows for a PID or MCP launch ID, with explicit child-process policy. |
 | `winctl-mcp` | [`process.launch`](PROCESS_LAUNCH.md) | Launch a Windows executable via `CreateProcessW` and optionally wait for visible PID-owned window candidates. |
 | `winctl-mcp` | [`process.list`](PROCESS_LIST.md) | List Windows process metadata, with optional top-level window candidates and MCP-launched process markers. |
 | `winctl-mcp` | [`process.describe`](PROCESS_DESCRIBE.md) | Describe one process with executable metadata, tracked launch status, children, and top-level windows. |
