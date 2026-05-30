@@ -65,3 +65,14 @@ Get-FileHash .\bin\winctl-mcp-server.exe -Algorithm SHA256
 ```
 
 The server checksum should match the corresponding line in `CHECKSUMS.sha256`.
+
+## Release Automation
+
+GitHub Actions contains two workflows:
+
+| Workflow | Purpose |
+| --- | --- |
+| `CI` | Runs formatting, workspace tests, and a Windows cross-build on every branch and pull request. |
+| `Release` | Computes SemVer, builds Windows binaries, signs release assets when signing secrets are configured, packages release assets, attests provenance, and publishes a GitHub release. |
+
+Signing configuration is managed through the protected GitHub release environment.

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  WINDOWS_TARGET: x86_64-pc-windows-gnu
+
+jobs:
+  rust:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Windows cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+          rustup default stable
+          rustup component add rustfmt
+          rustup target add "${WINDOWS_TARGET}"
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Build Windows MCP server
+        run: make build-win-server

@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: "Optional SemVer override, for example 1.2.3 or 1.2.3-beta.1"
+        required: false
+        type: string
+  push:
+    branches:
+      - main
+      - beta
+      - alpha
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  WINDOWS_TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  version:
+    name: Compute release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      should_release: ${{ steps.version.outputs.should_release }}
+      bump: ${{ steps.version.outputs.bump }}
+      base_version: ${{ steps.version.outputs.base_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute SemVer
+        id: version
+        env:
+          RELEASE_FORCE_VERSION: ${{ inputs.force_version }}
+        run: scripts/compute-release-version.sh
+
+  windows:
+    name: Build, sign, and publish Windows assets
+    needs: version
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: windows-2022
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup default stable
+          rustup update stable
+          rustup target add $env:WINDOWS_TARGET
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Build Windows binaries
+        run: |
+          cargo build -p winctl-mcp-server --release --target "$env:WINDOWS_TARGET"
+          cargo build -p winctl-tray --release --target "$env:WINDOWS_TARGET"
+
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign Windows executables
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\target\${{ env.WINDOWS_TARGET }}\release
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: winctl-mcp Windows release binaries
+          description-url: https://github.com/phenixrizen/winctl-mcp
+
+      - name: Package release directory and zip
+        shell: pwsh
+        run: |
+          $version = "${{ needs.version.outputs.version }}"
+          $dist = "dist/winctl-mcp-$version-windows-$env:WINDOWS_TARGET"
+          bash scripts/package-windows-release.sh "$env:WINDOWS_TARGET" "release" "$dist" "$version"
+          Compress-Archive -Path "$dist\*" -DestinationPath "dist\winctl-mcp-$version-windows-$env:WINDOWS_TARGET.zip" -Force
+          Copy-Item "$dist\CHECKSUMS.sha256" "dist\winctl-mcp-$version-windows-$env:WINDOWS_TARGET-CHECKSUMS.sha256" -Force
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: winctl-mcp-${{ needs.version.outputs.version }}-windows
+          path: |
+            dist/*.zip
+            dist/*-CHECKSUMS.sha256
+          if-no-files-found: error
+
+      - name: Generate provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*-CHECKSUMS.sha256
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ needs.version.outputs.version }}"
+          $tag = "${{ needs.version.outputs.tag }}"
+          $isPrerelease = "${{ needs.version.outputs.prerelease }}"
+          $assets = Get-ChildItem -Path dist -File | Where-Object {
+            $_.Name -like "*.zip" -or $_.Name -like "*-CHECKSUMS.sha256"
+          } | ForEach-Object { $_.FullName }
+          if ($assets.Count -eq 0) {
+            throw "No release assets found."
+          }
+
+          @"
+          winctl-mcp $version
+
+          Branch: $env:GITHUB_REF_NAME
+          Commit: $env:GITHUB_SHA
+          Bump: ${{ needs.version.outputs.bump }}
+          Base version: ${{ needs.version.outputs.base_version }}
+
+          Assets are built on Windows, signed with Azure Artifact Signing, and accompanied by SHA-256 checksums and GitHub provenance attestations.
+          "@ | Set-Content -Path release-notes.md -Encoding utf8
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $assets --repo $env:GITHUB_REPOSITORY --clobber
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --title "winctl-mcp $version" --notes-file release-notes.md
+            if ($isPrerelease -eq "true") {
+              gh release edit $tag --repo $env:GITHUB_REPOSITORY --prerelease
+            }
+          } else {
+            $args = @("release", "create", $tag) + $assets + @(
+              "--repo", $env:GITHUB_REPOSITORY,
+              "--target", $env:GITHUB_SHA,
+              "--title", "winctl-mcp $version",
+              "--notes-file", "release-notes.md"
+            )
+            if ($isPrerelease -eq "true") {
+              $args += "--prerelease"
+            }
+            gh @args
+          }
