@@ -58,6 +58,7 @@ struct TrayConfig {
     server_exe: PathBuf,
     listen: SocketAddr,
     listen_overridden: bool,
+    auth_token: Option<String>,
     log_file: Option<PathBuf>,
     log_file_overridden: bool,
     config_file: Option<PathBuf>,
@@ -92,6 +93,7 @@ impl Default for TrayConfig {
             server_exe,
             listen: "127.0.0.1:8765".parse().expect("default listen is valid"),
             listen_overridden: false,
+            auth_token: None,
             log_file: Some(data_dir.join("server.log")),
             log_file_overridden: false,
             config_file: None,
@@ -106,37 +108,69 @@ impl TrayConfig {
     }
 
     fn dashboard_url(&self) -> String {
-        format!("http://{}/dashboard", self.listen)
+        match &self.auth_token {
+            Some(token) if !token.is_empty() => format!(
+                "http://{}/dashboard?token={}",
+                self.listen,
+                percent_encode_query_value(token)
+            ),
+            _ => format!("http://{}/dashboard", self.listen),
+        }
     }
 
     fn apply_config_file_defaults(&mut self) -> anyhow::Result<()> {
         let Some(config_file) = &self.config_file else {
             return Ok(());
         };
-        if self.listen_overridden {
-            return Ok(());
-        }
         let text = fs::read_to_string(config_file)
             .with_context(|| format!("failed to read config file {}", config_file.display()))?;
         let config: TrayServerConfigFile = toml::from_str(&text)
             .with_context(|| format!("failed to parse config file {}", config_file.display()))?;
-        if let Some(listen) = config.transport.and_then(|transport| transport.listen) {
-            self.listen = listen
-                .parse()
-                .with_context(|| format!("invalid configured listen address {listen}"))?;
+        if !self.listen_overridden {
+            if let Some(listen) = config
+                .transport
+                .as_ref()
+                .and_then(|transport| transport.listen.as_ref())
+            {
+                self.listen = listen
+                    .parse()
+                    .with_context(|| format!("invalid configured listen address {listen}"))?;
+            }
+        }
+        if let Some(token) = config.auth.as_ref().and_then(|auth| auth.token.as_ref()) {
+            self.auth_token = Some(token.clone());
         }
         Ok(())
     }
 }
 
+fn percent_encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
 #[derive(Debug, Deserialize)]
 struct TrayServerConfigFile {
     transport: Option<TrayTransportConfig>,
+    auth: Option<TrayAuthConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TrayTransportConfig {
     listen: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrayAuthConfig {
+    token: Option<String>,
 }
 
 impl Cli {
@@ -874,6 +908,39 @@ listen = "172.26.16.1:8765"
 
         assert_eq!(cli.config.listen.to_string(), "172.26.16.1:8765");
         assert!(!cli.config.listen_overridden);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn config_file_sets_dashboard_auth_token() {
+        let path = std::env::temp_dir().join(format!(
+            "winctl-tray-auth-config-{}.toml",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::write(
+            &path,
+            r#"
+[transport]
+mode = "http"
+listen = "172.26.16.1:8765"
+
+[auth]
+token = "s e+cret?"
+"#,
+        )
+        .unwrap();
+
+        let cli = Cli::parse([
+            OsString::from("run"),
+            OsString::from("--config"),
+            path.clone().into(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.config.dashboard_url(),
+            "http://172.26.16.1:8765/dashboard?token=s%20e%2Bcret%3F"
+        );
         let _ = fs::remove_file(path);
     }
 

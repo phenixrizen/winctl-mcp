@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -2325,6 +2325,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
         } else {
             None
         },
+        allow_query_token: false,
     };
     let mcp_router =
         Router::new()
@@ -2346,6 +2347,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
         dashboard_router.route_layer(middleware::from_fn_with_state(
             HttpAuthState {
                 required_token: config.auth_token.clone(),
+                allow_query_token: true,
             },
             require_bearer_auth,
         ))
@@ -2371,6 +2373,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
 #[derive(Clone)]
 struct HttpAuthState {
     required_token: Option<String>,
+    allow_query_token: bool,
 }
 
 #[derive(Clone)]
@@ -2580,6 +2583,12 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
     <section><h2>Macros</h2><pre id="macros"></pre></section>
   </main>
   <script>
+    const authToken = new URLSearchParams(window.location.search).get('token');
+    function authFetch(path) {
+      const options = { cache: 'no-store' };
+      if (authToken) options.headers = { Authorization: 'Bearer ' + authToken };
+      return fetch(path, options);
+    }
     function pretty(value) {
       return JSON.stringify(value, null, 2);
     }
@@ -2587,7 +2596,7 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       const status = document.getElementById('status');
       status.textContent = 'Loading';
       try {
-        const response = await fetch('/dashboard/state', { cache: 'no-store' });
+        const response = await authFetch('/dashboard/state');
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const data = await response.json();
         document.getElementById('server').textContent = pretty({
@@ -2726,12 +2735,18 @@ const RECORDER_HTML: &str = r#"<!doctype html>
     <section><h2>Windows</h2><pre id="windows"></pre></section>
   </main>
   <script>
+    const authToken = new URLSearchParams(window.location.search).get('token');
+    function authFetch(path) {
+      const options = { cache: 'no-store' };
+      if (authToken) options.headers = { Authorization: 'Bearer ' + authToken };
+      return fetch(path, options);
+    }
     function pretty(value) { return JSON.stringify(value, null, 2); }
     async function loadState() {
       const status = document.getElementById('status');
       status.textContent = 'Loading';
       try {
-        const response = await fetch('/recorder/state', { cache: 'no-store' });
+        const response = await authFetch('/recorder/state');
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const data = await response.json();
         document.getElementById('state').textContent = pretty(data.recording);
@@ -2762,16 +2777,83 @@ async fn require_bearer_auth(
     let Some(required_token) = state.required_token else {
         return next.run(request).await;
     };
-    let authorized = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|header| header.to_str().ok())
-        .map(|header| header == format!("Bearer {required_token}"))
-        .unwrap_or(false);
+    let authorized = http_request_authorized(
+        &headers,
+        request.uri(),
+        &required_token,
+        state.allow_query_token,
+    );
     if authorized {
         next.run(request).await
     } else {
         tracing::warn!("HTTP MCP request rejected by bearer auth");
         (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+    }
+}
+
+fn http_request_authorized(
+    headers: &HeaderMap,
+    uri: &Uri,
+    required_token: &str,
+    allow_query_token: bool,
+) -> bool {
+    if headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .map(|header| header == format!("Bearer {required_token}"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    allow_query_token && query_token_authorized(uri.query(), required_token)
+}
+
+fn query_token_authorized(query: Option<&str>, required_token: &str) -> bool {
+    let Some(query) = query else {
+        return false;
+    };
+    query.split('&').any(|pair| {
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        percent_decode_query_component(name).as_deref() == Some("token")
+            && percent_decode_query_component(value).as_deref() == Some(required_token)
+    })
+}
+
+fn percent_decode_query_component(component: &str) -> Option<String> {
+    let bytes = component.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' => {
+                if index + 2 >= bytes.len() {
+                    return None;
+                }
+                let high = hex_value(bytes[index + 1])?;
+                let low = hex_value(bytes[index + 2])?;
+                decoded.push((high << 4) | low);
+                index += 3;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -3743,6 +3825,27 @@ mod tests {
         assert!(validate_http_config(addr, Some("secret")).is_ok());
         let loopback: SocketAddr = "127.0.0.1:8765".parse().unwrap();
         assert!(validate_http_config(loopback, None).is_ok());
+    }
+
+    #[test]
+    fn http_auth_accepts_bearer_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer secret".parse().unwrap(),
+        );
+        let uri: Uri = "/mcp".parse().unwrap();
+
+        assert!(http_request_authorized(&headers, &uri, "secret", false));
+    }
+
+    #[test]
+    fn http_auth_accepts_query_token_only_when_enabled() {
+        let headers = HeaderMap::new();
+        let uri: Uri = "/dashboard?token=s%20e%2Bcret".parse().unwrap();
+
+        assert!(http_request_authorized(&headers, &uri, "s e+cret", true));
+        assert!(!http_request_authorized(&headers, &uri, "s e+cret", false));
     }
 
     #[test]
