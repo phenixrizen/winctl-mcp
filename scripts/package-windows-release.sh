@@ -17,6 +17,8 @@ fi
 rm -rf "${dist_dir}"
 mkdir -p \
   "${dist_dir}/bin" \
+  "${dist_dir}/assets" \
+  "${dist_dir}/assets/brand" \
   "${dist_dir}/docs" \
   "${dist_dir}/examples" \
   "${dist_dir}/scripts" \
@@ -39,6 +41,9 @@ fi
 cp README.md "${dist_dir}/"
 cp ROADMAP.md "${dist_dir}/"
 
+cp assets/brand/winctl.ico "${dist_dir}/assets/"
+cp assets/brand/* "${dist_dir}/assets/brand/"
+
 cp \
   docs/INDEX.md \
   docs/windows-runbook.md \
@@ -55,6 +60,7 @@ cp \
   scripts/run-windows-integration.ps1 \
   scripts/diagnose-winctl-capture.ps1 \
   scripts/diagnose-winctl-mcp.ps1 \
+  scripts/build-windows-msi.ps1 \
   scripts/install-winctl-mcp.ps1 \
   "${dist_dir}/scripts/"
 

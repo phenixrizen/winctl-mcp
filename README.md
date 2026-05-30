@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/winctl-wordmark.svg" alt="winctl-mcp" width="520">
+</p>
+
 # winctl-mcp
 
 Reliable Windows MCP control server in Rust, with strict bound-window identity checks before focus, input, and capture actions.
@@ -89,6 +93,7 @@ Optional server controller:
 ```powershell
 winctl-tray.exe status
 winctl-tray.exe start --server-exe C:\winctl\winctl-mcp-server.exe
+winctl-tray.exe run
 ```
 
 See [docs/TRAY_CONTROLLER.md](docs/TRAY_CONTROLLER.md).

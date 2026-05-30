@@ -26,6 +26,8 @@ The package is written to `dist/winctl-mcp-<version>-windows-<target>/` and cont
 | `RELEASE.json` | Machine-readable release metadata. |
 | `CHECKSUMS.sha256` | SHA-256 checksums for every packaged file. |
 
+Release builds also produce `winctl-mcp-<version>-windows-x64.msi` with WiX. The MSI installs the packaged binaries/docs under `Program Files\winctl-mcp` and adds a Start Menu shortcut for the tray app.
+
 ## Install or Update
 
 Copy the package directory to Windows, then run:
@@ -73,6 +75,6 @@ GitHub Actions contains two workflows:
 | Workflow | Purpose |
 | --- | --- |
 | `CI` | Runs formatting, workspace tests, and a Windows cross-build on every branch and pull request. |
-| `Release` | Computes SemVer, builds Windows binaries, signs release assets when signing secrets are configured, packages release assets, attests provenance, and publishes a GitHub release. |
+| `Release` | Computes SemVer, builds Windows binaries, signs release assets when signing secrets are configured, packages ZIP and MSI assets, attests provenance, and publishes a GitHub release. |
 
 Signing configuration is managed through the protected GitHub release environment.

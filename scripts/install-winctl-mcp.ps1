@@ -17,6 +17,7 @@ if ([string]::IsNullOrWhiteSpace($AuthToken)) {
 }
 
 $binDir = Join-Path $InstallDir "bin"
+$assetsDir = Join-Path $InstallDir "assets"
 $docsDir = Join-Path $InstallDir "docs"
 $examplesDir = Join-Path $InstallDir "examples"
 $scriptsDir = Join-Path $InstallDir "scripts"
@@ -32,6 +33,7 @@ $exportsDir = Join-Path $InstallDir "exports"
 @(
     $InstallDir,
     $binDir,
+    $assetsDir,
     $docsDir,
     $examplesDir,
     $scriptsDir,
@@ -54,7 +56,7 @@ if (-not (Test-Path (Join-Path $sourceBin "winctl-mcp-server.exe"))) {
 
 Copy-Item -Path (Join-Path $sourceBin "*.exe") -Destination $binDir -Force
 
-foreach ($folder in @("docs", "examples", "scripts")) {
+foreach ($folder in @("assets", "docs", "examples", "scripts")) {
     $from = Join-Path $SourceDir $folder
     $to = Join-Path $InstallDir $folder
     if (Test-Path $from) {

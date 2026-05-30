@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 420" role="img" aria-labelledby="title desc">
+  <title id="title">winctl wordmark</title>
+  <desc id="desc">winctl wordmark with terminal window control icon and clear W-shaped trace.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1020"/>
+      <stop offset="1" stop-color="#111B33"/>
+    </linearGradient>
+  </defs>
+  <rect width="1400" height="420" rx="48" fill="url(#bg)"/>
+  <g transform="translate(62 54) scale(.31)">
+    <rect width="1024" height="1024" rx="220" fill="url(#bg)"/>
+    <rect x="150" y="214" width="678" height="500" rx="58" fill="none" stroke="#4CC9F0" stroke-width="28"/>
+    <line x1="150" y1="340" x2="828" y2="340" stroke="#4CC9F0" stroke-width="24"/>
+    <circle cx="230" cy="277" r="18" fill="#FF6B6B"/>
+    <circle cx="292" cy="277" r="18" fill="#FFD166"/>
+    <circle cx="354" cy="277" r="18" fill="#06D6A0"/>
+    <path d="M250 462 L348 512 L250 562" fill="none" stroke="#FFB454" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M410 438 L462 585 L526 438 L590 585 L655 438" fill="none" stroke="#F8FAFC" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+    <g fill="#72E6FF">
+      <circle cx="410" cy="438" r="15"/>
+      <circle cx="462" cy="585" r="15"/>
+      <circle cx="526" cy="438" r="15"/>
+      <circle cx="590" cy="585" r="15"/>
+      <circle cx="655" cy="438" r="15"/>
+    </g>
+    <rect x="682" y="585" width="88" height="43" rx="12" fill="#FFB454"/>
+  </g>
+  <text x="430" y="190" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="112" font-weight="800" fill="#F8FAFC">winctl</text>
+  <text x="435" y="270" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="38" font-weight="500" fill="#91A4B7">Native Windows control for AI agents</text>
+  <text x="435" y="332" font-family="Consolas, ui-monospace, monospace" font-size="28" fill="#72E6FF">MCP • HWND • Capture • Input</text>
+</svg>

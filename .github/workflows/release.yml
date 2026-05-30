@@ -76,6 +76,13 @@ jobs:
           cargo build -p winctl-mcp-server --release --target "$env:WINDOWS_TARGET"
           cargo build -p winctl-tray --release --target "$env:WINDOWS_TARGET"
 
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+          wix --version
+
       - name: Azure login
         uses: azure/login@v3
         with:
@@ -103,8 +110,23 @@ jobs:
           $version = "${{ needs.version.outputs.version }}"
           $dist = "dist/winctl-mcp-$version-windows-$env:WINDOWS_TARGET"
           bash scripts/package-windows-release.sh "$env:WINDOWS_TARGET" "release" "$dist" "$version"
+          scripts/build-windows-msi.ps1 -DistDir "$dist" -Version "$version" -OutputPath "dist\winctl-mcp-$version-windows-x64.msi"
           Compress-Archive -Path "$dist\*" -DestinationPath "dist\winctl-mcp-$version-windows-$env:WINDOWS_TARGET.zip" -Force
           Copy-Item "$dist\CHECKSUMS.sha256" "dist\winctl-mcp-$version-windows-$env:WINDOWS_TARGET-CHECKSUMS.sha256" -Force
+
+      - name: Sign Windows MSI
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: winctl-mcp Windows MSI
+          description-url: https://github.com/phenixrizen/winctl-mcp
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -112,6 +134,7 @@ jobs:
           name: winctl-mcp-${{ needs.version.outputs.version }}-windows
           path: |
             dist/*.zip
+            dist/*.msi
             dist/*-CHECKSUMS.sha256
           if-no-files-found: error
 
@@ -120,6 +143,7 @@ jobs:
         with:
           subject-path: |
             dist/*.zip
+            dist/*.msi
             dist/*-CHECKSUMS.sha256
 
       - name: Publish GitHub release
@@ -131,7 +155,7 @@ jobs:
           $tag = "${{ needs.version.outputs.tag }}"
           $isPrerelease = "${{ needs.version.outputs.prerelease }}"
           $assets = Get-ChildItem -Path dist -File | Where-Object {
-            $_.Name -like "*.zip" -or $_.Name -like "*-CHECKSUMS.sha256"
+            $_.Name -like "*.zip" -or $_.Name -like "*.msi" -or $_.Name -like "*-CHECKSUMS.sha256"
           } | ForEach-Object { $_.FullName }
           if ($assets.Count -eq 0) {
             throw "No release assets found."
