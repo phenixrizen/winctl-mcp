@@ -18,6 +18,7 @@ use std::{
 };
 
 pub(crate) const CAPTURE_HELPER_ENV: &str = "WINCTL_CAPTURE_HELPER";
+pub(crate) const CAPTURE_DIR_ENV: &str = "WINCTL_CAPTURE_DIR";
 const CAPTURE_HELPER_REQUEST_ENV: &str = "WINCTL_CAPTURE_REQUEST";
 const CAPTURE_HELPER_RESPONSE_ENV: &str = "WINCTL_CAPTURE_RESPONSE";
 #[cfg(windows)]
@@ -80,7 +81,10 @@ pub fn screenshot_window(state: &AppState, bound_id: String) -> serde_json::Valu
         }
     };
 
-    match capture_window_to_path(&window, screenshot_window_output_path(&window)) {
+    match capture_window_to_path(
+        &window,
+        screenshot_window_output_path(state.capture_dir.as_ref().as_path(), &window),
+    ) {
         Ok(screenshot) => {
             tracing::info!(
                 bound_id = %bound_id,
@@ -110,10 +114,13 @@ pub fn screenshot_window(state: &AppState, bound_id: String) -> serde_json::Valu
     }
 }
 
-pub(crate) fn screenshot_window_output_path(window: &winctl::WindowInfo) -> String {
-    format!(
-        "./captures/window-{}.png",
-        sanitize_path_component(&window.hwnd_hex)
+pub(crate) fn screenshot_window_output_path(
+    capture_dir: &Path,
+    window: &winctl::WindowInfo,
+) -> String {
+    capture_output_path(
+        capture_dir,
+        format!("window-{}.png", sanitize_path_component(&window.hwnd_hex)),
     )
 }
 
@@ -147,7 +154,7 @@ pub fn screenshot_display(state: &AppState, display_index: usize) -> serde_json:
     match capture_display_to_path(
         display_index,
         monitor,
-        format!("./captures/display-{display_index}.png"),
+        screenshot_display_output_path(state.capture_dir.as_ref().as_path(), display_index),
     ) {
         Ok(screenshot) => {
             tracing::info!(
@@ -172,6 +179,42 @@ pub fn screenshot_display(state: &AppState, display_index: usize) -> serde_json:
             serde_json::json!({"ok": false, "error": error})
         }
     }
+}
+
+pub(crate) fn default_capture_dir() -> PathBuf {
+    if let Some(value) = std::env::var_os(CAPTURE_DIR_ENV) {
+        if !value.is_empty() {
+            return PathBuf::from(value);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(value) = std::env::var_os("LOCALAPPDATA") {
+            if !value.is_empty() {
+                return PathBuf::from(value).join("winctl-mcp").join("captures");
+            }
+        }
+    }
+
+    std::env::temp_dir().join("winctl-mcp").join("captures")
+}
+
+pub(crate) fn ensure_capture_dir(capture_dir: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(capture_dir).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to create capture directory {}: {error}",
+            capture_dir.display()
+        )
+    })
+}
+
+fn screenshot_display_output_path(capture_dir: &Path, display_index: usize) -> String {
+    capture_output_path(capture_dir, format!("display-{display_index}.png"))
+}
+
+fn capture_output_path(capture_dir: &Path, file_name: String) -> String {
+    capture_dir.join(file_name).to_string_lossy().into_owned()
 }
 
 pub(crate) fn is_capture_helper_mode() -> bool {
@@ -582,6 +625,7 @@ mod tests {
 
     #[test]
     fn screenshot_window_output_path_uses_safe_hwnd_component() {
+        let capture_dir = PathBuf::from("captures-root");
         let window = winctl::WindowInfo {
             id: "hwnd:0x0000000000981332".into(),
             hwnd: 0x981332,
@@ -604,10 +648,27 @@ mod tests {
             top_level: true,
         };
 
-        let path = screenshot_window_output_path(&window);
+        let path = screenshot_window_output_path(&capture_dir, &window);
 
-        assert_eq!(path, "./captures/window-0x0000000000981332.png");
-        assert!(!path["./captures/".len()..].contains(':'));
+        assert_eq!(
+            path,
+            capture_dir
+                .join("window-0x0000000000981332.png")
+                .to_string_lossy()
+        );
+        assert!(!Path::new(&path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains(':'));
+    }
+
+    #[test]
+    fn default_capture_dir_does_not_depend_on_process_cwd() {
+        let path = default_capture_dir();
+
+        assert_ne!(path, PathBuf::from("./captures"));
+        assert!(!path.as_os_str().is_empty());
     }
 
     #[test]

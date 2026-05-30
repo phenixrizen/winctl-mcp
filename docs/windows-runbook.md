@@ -31,8 +31,10 @@ Run `winctl-mcp-server.exe` from an interactive Windows desktop session.
 Preferred HTTP transport for Windows/WSL development:
 
 ```powershell
-winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765
+winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765 --capture-dir "$env:LOCALAPPDATA\winctl-mcp\captures"
 ```
+
+Screenshot files default to `%LOCALAPPDATA%\winctl-mcp\captures` on Windows, with temp-directory fallback. Use `--capture-dir <path>` or `WINCTL_CAPTURE_DIR` when the server is launched from a restricted working directory.
 
 Compatibility stdio transport:
 

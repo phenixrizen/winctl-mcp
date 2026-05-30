@@ -39,8 +39,10 @@ See [docs/windows-runbook.md](docs/windows-runbook.md) for Windows host setup, p
 Preferred Windows/WSL development transport:
 
 ```powershell
-winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765
+winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765 --capture-dir "$env:LOCALAPPDATA\winctl-mcp\captures"
 ```
+
+By default screenshots are written under the user's local app-data directory on Windows, or under the system temp directory when that is unavailable. Override it with `--capture-dir <path>` or `WINCTL_CAPTURE_DIR`.
 
 Compatibility stdio transport:
 
