@@ -26,3 +26,6 @@ This file applies to the entire repository.
 ## Operational guidance
 - Include tracing logs for bind/focus/click/type/capture flows.
 - Every screenshot response should include virtual desktop coordinates for the captured region.
+- Keep public repository docs generic for release signing and deployment.
+- Do not publish project-specific Azure/GitHub signing account names, tenant IDs, subscription IDs, client IDs, resource group names, certificate profile names, or similar private setup details in repo docs.
+- Store signing configuration in protected GitHub environments/secrets or private operator notes, not in public markdown files.
