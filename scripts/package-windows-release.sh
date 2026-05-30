@@ -38,6 +38,20 @@ else
   echo "warning: tray binary not found: ${tray_bin}" >&2
 fi
 
+webview2_arch="x64"
+case "${target}" in
+  i686-*) webview2_arch="x86" ;;
+  aarch64-*) webview2_arch="arm64" ;;
+esac
+webview2_loader="$(
+  find "target/${target}/${profile}/build" \
+    -path "*/webview2-com-sys-*/out/${webview2_arch}/WebView2Loader.dll" \
+    -print -quit 2>/dev/null || true
+)"
+if [[ -n "${webview2_loader}" && -f "${webview2_loader}" ]]; then
+  cp "${webview2_loader}" "${dist_dir}/bin/"
+fi
+
 cp README.md "${dist_dir}/"
 cp ROADMAP.md "${dist_dir}/"
 
@@ -49,6 +63,7 @@ cp \
   docs/windows-runbook.md \
   docs/CONFIGURATION.md \
   docs/DISTRIBUTION.md \
+  docs/DASHBOARD.md \
   docs/CLIENT_CONFIGS.md \
   docs/DIRECTORY_LAYOUT.md \
   docs/TROUBLESHOOTING.md \

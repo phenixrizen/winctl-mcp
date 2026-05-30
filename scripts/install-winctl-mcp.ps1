@@ -55,6 +55,7 @@ if (-not (Test-Path (Join-Path $sourceBin "winctl-mcp-server.exe"))) {
 }
 
 Copy-Item -Path (Join-Path $sourceBin "*.exe") -Destination $binDir -Force
+Copy-Item -Path (Join-Path $sourceBin "*.dll") -Destination $binDir -Force -ErrorAction SilentlyContinue
 
 foreach ($folder in @("assets", "docs", "examples", "scripts")) {
     $from = Join-Path $SourceDir $folder

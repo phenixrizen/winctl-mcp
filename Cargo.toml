@@ -54,3 +54,5 @@ sqlite-vec = "=0.1.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
+winit = "0.30"
+wry = "0.55.1"

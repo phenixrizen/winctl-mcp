@@ -3,6 +3,7 @@ SHELL := /bin/bash
 # Linux/WSL host tools for building Windows binaries
 CARGO ?= cargo
 RUSTUP ?= rustup
+NPM ?= npm
 WINDOWS_TARGET ?= x86_64-pc-windows-gnu
 RELEASE ?= 1
 VERSION ?= $(shell awk -F\" '/^version = / { print $$2; exit }' Cargo.toml)
@@ -22,6 +23,7 @@ help:
 	@echo "  setup-win-target    Install Rust Windows target"
 	@echo "  fmt                 Run rustfmt"
 	@echo "  test                Run workspace tests"
+	@echo "  dashboard-build     Build embedded Vue dashboard assets"
 	@echo "  build-linux         Build workspace for host (Linux)"
 	@echo "  build-win           Build workspace for Windows target"
 	@echo "  build-win-server    Build only winctl-mcp-server for Windows"
@@ -42,6 +44,10 @@ fmt:
 .PHONY: test
 test:
 	$(CARGO) test --workspace
+
+.PHONY: dashboard-build
+dashboard-build:
+	cd crates/winctl-mcp-server/dashboard && $(NPM) ci && $(NPM) run build
 
 .PHONY: build-linux
 build-linux:
@@ -64,7 +70,7 @@ build-win-fixture:
 	$(CARGO) build -p winctl-test-target --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
 
 .PHONY: package-win
-package-win: build-win-server build-win-tray
+package-win: dashboard-build build-win-server build-win-tray
 	bash scripts/package-windows-release.sh "$(WINDOWS_TARGET)" "$(PROFILE_DIR)" "$(DIST_DIR)" "$(VERSION)"
 
 .PHONY: check

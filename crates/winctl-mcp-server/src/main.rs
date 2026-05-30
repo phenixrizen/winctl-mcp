@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::extract::{Path as AxumPath, State};
+use axum::http::{header::CONTENT_TYPE, HeaderMap, StatusCode, Uri};
 use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -2356,6 +2356,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     };
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/dashboard/assets/{*path}", get(dashboard_asset))
         .merge(dashboard_router)
         .merge(mcp_router);
     let listener = tokio::net::TcpListener::bind(config.listen)
@@ -2391,6 +2392,20 @@ async fn healthz() -> impl IntoResponse {
 
 async fn dashboard_html() -> impl IntoResponse {
     Html(DASHBOARD_HTML)
+}
+
+async fn dashboard_asset(AxumPath(path): AxumPath<String>) -> Response {
+    match path.as_str() {
+        "dashboard.css" => {
+            ([(CONTENT_TYPE, "text/css; charset=utf-8")], DASHBOARD_CSS).into_response()
+        }
+        "dashboard.js" => (
+            [(CONTENT_TYPE, "text/javascript; charset=utf-8")],
+            DASHBOARD_JS,
+        )
+            .into_response(),
+        _ => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
 }
 
 async fn recorder_html() -> impl IntoResponse {
@@ -2456,171 +2471,9 @@ async fn recorder_state_json(State(state): State<DashboardState>) -> impl IntoRe
     }))
 }
 
-const DASHBOARD_HTML: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>winctl-mcp dashboard</title>
-  <style>
-    :root {
-      color-scheme: light dark;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f7f8fa;
-      color: #15171a;
-    }
-    body {
-      margin: 0;
-      min-height: 100vh;
-    }
-    header {
-      border-bottom: 1px solid #d9dde3;
-      padding: 16px 24px;
-      background: #ffffff;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-    }
-    h1 {
-      font-size: 18px;
-      line-height: 1.2;
-      margin: 0;
-      font-weight: 650;
-      letter-spacing: 0;
-    }
-    main {
-      padding: 20px 24px 32px;
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 16px;
-    }
-    section {
-      background: #ffffff;
-      border: 1px solid #d9dde3;
-      border-radius: 6px;
-      min-height: 180px;
-      overflow: hidden;
-    }
-    h2 {
-      font-size: 13px;
-      text-transform: uppercase;
-      letter-spacing: 0;
-      color: #5f6b7a;
-      margin: 0;
-      padding: 12px 14px;
-      border-bottom: 1px solid #e4e7ec;
-      background: #fafbfc;
-    }
-    pre {
-      margin: 0;
-      padding: 14px;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      font-size: 12px;
-      line-height: 1.5;
-    }
-    button {
-      appearance: none;
-      border: 1px solid #aeb7c2;
-      background: #ffffff;
-      color: inherit;
-      border-radius: 6px;
-      padding: 8px 10px;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    button:hover {
-      background: #eef3f8;
-    }
-    .status {
-      font-size: 13px;
-      color: #4e5967;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        background: #111418;
-        color: #e9edf2;
-      }
-      header,
-      section,
-      button {
-        background: #181c22;
-      }
-      header,
-      section,
-      h2,
-      button {
-        border-color: #303741;
-      }
-      h2 {
-        background: #15191f;
-        color: #aeb7c2;
-      }
-      button:hover {
-        background: #202731;
-      }
-      .status {
-        color: #aeb7c2;
-      }
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <div>
-      <h1>winctl-mcp dashboard</h1>
-      <div class="status" id="status">Loading</div>
-    </div>
-    <button type="button" onclick="loadState()">Refresh</button>
-  </header>
-  <main>
-    <section><h2>Server</h2><pre id="server"></pre></section>
-    <section><h2>Policy</h2><pre id="policy"></pre></section>
-    <section><h2>Bound Windows</h2><pre id="bound"></pre></section>
-    <section><h2>Launched Processes</h2><pre id="launched"></pre></section>
-    <section><h2>Memory</h2><pre id="memory"></pre></section>
-    <section><h2>Macros</h2><pre id="macros"></pre></section>
-  </main>
-  <script>
-    const authToken = new URLSearchParams(window.location.search).get('token');
-    function authFetch(path) {
-      const options = { cache: 'no-store' };
-      if (authToken) options.headers = { Authorization: 'Bearer ' + authToken };
-      return fetch(path, options);
-    }
-    function pretty(value) {
-      return JSON.stringify(value, null, 2);
-    }
-    async function loadState() {
-      const status = document.getElementById('status');
-      status.textContent = 'Loading';
-      try {
-        const response = await authFetch('/dashboard/state');
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        const data = await response.json();
-        document.getElementById('server').textContent = pretty({
-          service: data.service,
-          version: data.version,
-          capture_dir: data.capture_dir,
-          connected_clients: data.connected_clients,
-          recent_requests: data.recent_requests,
-          warnings: data.warnings
-        });
-        document.getElementById('policy').textContent = pretty(data.policy);
-        document.getElementById('bound').textContent = pretty(data.bound_windows);
-        document.getElementById('launched').textContent = pretty(data.launched_processes);
-        document.getElementById('memory').textContent = pretty(data.memory);
-        document.getElementById('macros').textContent = pretty(data.macros);
-        status.textContent = 'Healthy';
-      } catch (error) {
-        status.textContent = String(error);
-      }
-    }
-    loadState();
-  </script>
-</body>
-</html>"#;
+const DASHBOARD_HTML: &str = include_str!("../dashboard/dist/index.html");
+const DASHBOARD_CSS: &str = include_str!("../dashboard/dist/assets/dashboard.css");
+const DASHBOARD_JS: &str = include_str!("../dashboard/dist/assets/dashboard.js");
 
 const RECORDER_HTML: &str = r#"<!doctype html>
 <html lang="en">

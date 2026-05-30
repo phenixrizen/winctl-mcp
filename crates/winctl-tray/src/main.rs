@@ -32,6 +32,7 @@ fn run() -> anyhow::Result<()> {
             Ok(())
         }
         CommandMode::OpenDashboard => open_dashboard(&cli.config),
+        CommandMode::DashboardWindow => run_dashboard_window(&cli.config),
         CommandMode::RunTray => run_tray(&cli.config),
     }
 }
@@ -50,6 +51,7 @@ enum CommandMode {
     Restart,
     CopyMcpUrl,
     OpenDashboard,
+    DashboardWindow,
     RunTray,
 }
 
@@ -59,6 +61,7 @@ struct TrayConfig {
     listen: SocketAddr,
     listen_overridden: bool,
     auth_token: Option<String>,
+    dashboard_url_override: Option<String>,
     log_file: Option<PathBuf>,
     log_file_overridden: bool,
     config_file: Option<PathBuf>,
@@ -94,6 +97,7 @@ impl Default for TrayConfig {
             listen: "127.0.0.1:8765".parse().expect("default listen is valid"),
             listen_overridden: false,
             auth_token: None,
+            dashboard_url_override: None,
             log_file: Some(data_dir.join("server.log")),
             log_file_overridden: false,
             config_file: None,
@@ -108,6 +112,9 @@ impl TrayConfig {
     }
 
     fn dashboard_url(&self) -> String {
+        if let Some(url) = &self.dashboard_url_override {
+            return url.clone();
+        }
         match &self.auth_token {
             Some(token) if !token.is_empty() => format!(
                 "http://{}/dashboard?token={}",
@@ -191,6 +198,7 @@ impl Cli {
                 "restart" => command = CommandMode::Restart,
                 "copy-mcp-url" => command = CommandMode::CopyMcpUrl,
                 "open-dashboard" => command = CommandMode::OpenDashboard,
+                "dashboard-window" => command = CommandMode::DashboardWindow,
                 "run" => command = CommandMode::RunTray,
                 "--server-exe" => {
                     index += 1;
@@ -217,6 +225,11 @@ impl Cli {
                     index += 1;
                     config.pid_file = required_path(&args, index, "--pid-file")?;
                 }
+                "--dashboard-url" => {
+                    index += 1;
+                    config.dashboard_url_override =
+                        Some(required_string(&args, index, "--dashboard-url")?);
+                }
                 other => anyhow::bail!("unknown argument {other}"),
             }
             index += 1;
@@ -227,12 +240,12 @@ impl Cli {
 }
 
 fn start_server(config: &TrayConfig) -> anyhow::Result<()> {
-    if let Some(pid) = server_pid(config) {
-        println!("winctl-mcp-server already running pid {pid}");
-        return Ok(());
-    }
     if server_listener_accepts(config.listen) {
         println!("winctl-mcp-server already listening on {}", config.listen);
+        return Ok(());
+    }
+    if let Some(pid) = server_pid(config) {
+        println!("winctl-mcp-server already running pid {pid}");
         return Ok(());
     }
 
@@ -241,6 +254,8 @@ fn start_server(config: &TrayConfig) -> anyhow::Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let mut command = Command::new(&config.server_exe);
+    #[cfg(windows)]
+    detach_child_process(&mut command);
     command
         .arg("serve")
         .arg("--transport")
@@ -308,7 +323,7 @@ fn open_dashboard(config: &TrayConfig) -> anyhow::Result<()> {
     let url = config.dashboard_url();
     #[cfg(windows)]
     {
-        open_url_with_shell(&url)?;
+        spawn_dashboard_window(&url)?;
     }
     #[cfg(not(windows))]
     {
@@ -318,36 +333,129 @@ fn open_dashboard(config: &TrayConfig) -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
-fn open_url_with_shell(url: &str) -> anyhow::Result<()> {
-    use windows::core::PCWSTR;
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+fn detach_child_process(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
 
-    let operation = wide_z("open");
-    let target = wide_z(url);
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            PCWSTR(operation.as_ptr()),
-            PCWSTR(target.as_ptr()),
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-    let code = result.0 as isize;
-    if code <= 32 {
-        anyhow::bail!("ShellExecuteW failed to open dashboard URL with code {code}");
-    }
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    command.creation_flags(DETACHED_PROCESS);
+}
+
+#[cfg(all(windows, target_env = "msvc"))]
+fn spawn_dashboard_window(url: &str) -> anyhow::Result<()> {
+    let tray_exe = std::env::current_exe().context("failed to resolve tray executable path")?;
+    let mut command = Command::new(tray_exe);
+    detach_child_process(&mut command);
+    command
+        .arg("dashboard-window")
+        .arg("--dashboard-url")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to launch dashboard webview window")?;
     Ok(())
 }
 
-#[cfg(windows)]
-fn wide_z(text: &str) -> Vec<u16> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
+#[cfg(all(windows, not(target_env = "msvc")))]
+fn spawn_dashboard_window(_url: &str) -> anyhow::Result<()> {
+    anyhow::bail!("dashboard WebView window requires the x86_64-pc-windows-msvc build")
+}
 
-    OsStr::new(text).encode_wide().chain(Some(0)).collect()
+fn run_dashboard_window(config: &TrayConfig) -> anyhow::Result<()> {
+    let url = config.dashboard_url();
+    #[cfg(all(windows, target_env = "msvc"))]
+    {
+        run_dashboard_webview(&url)
+    }
+
+    #[cfg(all(windows, not(target_env = "msvc")))]
+    {
+        let _ = url;
+        anyhow::bail!("dashboard WebView window requires the x86_64-pc-windows-msvc build")
+    }
+
+    #[cfg(not(windows))]
+    {
+        println!("{url}");
+        Ok(())
+    }
+}
+
+#[cfg(all(windows, target_env = "msvc"))]
+fn run_dashboard_webview(url: &str) -> anyhow::Result<()> {
+    use winit::application::ApplicationHandler;
+    use winit::dpi::LogicalSize;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::window::{Window, WindowId};
+    use wry::{WebView, WebViewBuilder};
+
+    struct DashboardWebviewApp {
+        url: String,
+        window: Option<Window>,
+        webview: Option<WebView>,
+        startup_error: Option<anyhow::Error>,
+    }
+
+    impl ApplicationHandler for DashboardWebviewApp {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            if self.window.is_some() || self.startup_error.is_some() {
+                return;
+            }
+
+            let attributes = Window::default_attributes()
+                .with_title("winctl-mcp dashboard")
+                .with_inner_size(LogicalSize::new(1180.0, 820.0))
+                .with_min_inner_size(LogicalSize::new(860.0, 620.0));
+            let window = match event_loop.create_window(attributes) {
+                Ok(window) => window,
+                Err(error) => {
+                    self.startup_error = Some(anyhow::Error::new(error));
+                    event_loop.exit();
+                    return;
+                }
+            };
+            let webview = match WebViewBuilder::new().with_url(&self.url).build(&window) {
+                Ok(webview) => webview,
+                Err(error) => {
+                    self.startup_error = Some(anyhow::Error::new(error));
+                    event_loop.exit();
+                    return;
+                }
+            };
+            self.window = Some(window);
+            self.webview = Some(webview);
+        }
+
+        fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            window_id: WindowId,
+            event: WindowEvent,
+        ) {
+            if self.window.as_ref().map(Window::id) == Some(window_id) {
+                if matches!(event, WindowEvent::CloseRequested) {
+                    event_loop.exit();
+                }
+            }
+        }
+    }
+
+    let event_loop = EventLoop::new().context("failed to create dashboard event loop")?;
+    let mut app = DashboardWebviewApp {
+        url: url.to_string(),
+        window: None,
+        webview: None,
+        startup_error: None,
+    };
+    event_loop
+        .run_app(&mut app)
+        .context("dashboard webview event loop failed")?;
+    if let Some(error) = app.startup_error {
+        return Err(error).context("dashboard webview failed to start");
+    }
+    Ok(())
 }
 
 fn run_tray(config: &TrayConfig) -> anyhow::Result<()> {
@@ -392,7 +500,7 @@ fn copy_mcp_url_to_clipboard(config: &TrayConfig) -> anyhow::Result<()> {
 fn server_pid(config: &TrayConfig) -> Option<u32> {
     read_pid(&config.pid_file)
         .ok()
-        .filter(|pid| is_process_alive(*pid))
+        .filter(|pid| is_server_process_alive(*pid, &config.server_exe))
 }
 
 fn server_listener_accepts(listen: SocketAddr) -> bool {
@@ -445,7 +553,7 @@ mod windows_tray {
     }
 
     pub(super) fn run(config: TrayConfig) -> anyhow::Result<()> {
-        if server_pid(&config).is_none() {
+        if !super::server_listener_accepts(config.listen) {
             if let Err(error) = start_server(&config) {
                 eprintln!("failed to start winctl-mcp-server: {error:#}");
             }
@@ -833,15 +941,29 @@ fn read_pid(path: &PathBuf) -> anyhow::Result<u32> {
         .with_context(|| format!("invalid pid file {}", path.display()))
 }
 
-fn is_process_alive(pid: u32) -> bool {
+fn is_server_process_alive(pid: u32, server_exe: &PathBuf) -> bool {
     #[cfg(windows)]
     {
-        winctl::describe_process(pid).ok().flatten().is_some()
+        let Some(process) = winctl::describe_process(pid).ok().flatten() else {
+            return false;
+        };
+        let Some(actual_path) = process.exe_path else {
+            return false;
+        };
+        let expected = normalize_windows_path(&server_exe.to_string_lossy());
+        let actual = normalize_windows_path(&actual_path);
+        actual.eq_ignore_ascii_case(&expected)
     }
     #[cfg(not(windows))]
     {
+        let _ = server_exe;
         PathBuf::from(format!("/proc/{pid}")).exists()
     }
+}
+
+#[cfg(windows)]
+fn normalize_windows_path(path: &str) -> String {
+    path.replace('/', "\\")
 }
 
 fn required_path(args: &[OsString], index: usize, flag: &str) -> anyhow::Result<PathBuf> {
@@ -911,6 +1033,22 @@ listen = "127.0.0.1:8765"
         assert_eq!(cli.config.config_file, Some(path.clone()));
         assert!(!cli.config.listen_overridden);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parses_dashboard_window_url_override() {
+        let cli = Cli::parse([
+            OsString::from("dashboard-window"),
+            OsString::from("--dashboard-url"),
+            OsString::from("http://127.0.0.1:8765/dashboard?token=test"),
+        ])
+        .unwrap();
+
+        assert_eq!(cli.command, CommandMode::DashboardWindow);
+        assert_eq!(
+            cli.config.dashboard_url(),
+            "http://127.0.0.1:8765/dashboard?token=test"
+        );
     }
 
     #[test]

@@ -33,6 +33,19 @@ jobs:
           rustup component add rustfmt
           rustup target add "${WINDOWS_TARGET}"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: crates/winctl-mcp-server/dashboard/package-lock.json
+
+      - name: Build dashboard assets
+        run: |
+          cd crates/winctl-mcp-server/dashboard
+          npm ci
+          npm run build
+
       - name: Format check
         run: cargo fmt --all --check
 
@@ -41,3 +54,6 @@ jobs:
 
       - name: Build Windows MCP server
         run: make build-win-server
+
+      - name: Build Windows tray
+        run: make build-win-tray

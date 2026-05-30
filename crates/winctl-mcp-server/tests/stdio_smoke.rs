@@ -161,6 +161,34 @@ async fn streamable_http_health_and_tool_listing_work() {
         .await
         .expect("dashboard body should be readable");
     assert!(dashboard_body.contains("winctl-mcp dashboard"));
+    assert!(dashboard_body.contains("/dashboard/assets/dashboard.js"));
+    assert!(dashboard_body.contains("/dashboard/assets/dashboard.css"));
+    let dashboard_js = client
+        .get(format!("{base}/dashboard/assets/dashboard.js"))
+        .send()
+        .await
+        .expect("dashboard JS should respond");
+    assert_eq!(dashboard_js.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        dashboard_js
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/javascript; charset=utf-8")
+    );
+    let dashboard_css = client
+        .get(format!("{base}/dashboard/assets/dashboard.css"))
+        .send()
+        .await
+        .expect("dashboard CSS should respond");
+    assert_eq!(dashboard_css.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        dashboard_css
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/css; charset=utf-8")
+    );
 
     let dashboard_state: Value = client
         .get(format!("{base}/dashboard/state"))

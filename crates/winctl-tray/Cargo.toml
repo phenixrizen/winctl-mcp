@@ -14,3 +14,7 @@ winctl = { path = "../winctl" }
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+
+[target.'cfg(all(windows, target_env = "msvc"))'.dependencies]
+winit.workspace = true
+wry.workspace = true

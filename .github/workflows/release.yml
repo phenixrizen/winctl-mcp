@@ -68,6 +68,20 @@ jobs:
           rustup update stable
           rustup target add $env:WINDOWS_TARGET
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: crates/winctl-mcp-server/dashboard/package-lock.json
+
+      - name: Build dashboard assets
+        shell: pwsh
+        run: |
+          cd crates/winctl-mcp-server/dashboard
+          npm ci
+          npm run build
+
       - name: Test workspace
         run: cargo test --workspace
 

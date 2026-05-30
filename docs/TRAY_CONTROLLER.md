@@ -35,4 +35,4 @@ Start-Process "$base\bin\winctl-tray.exe" -ArgumentList @(
 
 The tray icon starts the server if needed. Right-click the icon for Open Dashboard, Copy MCP URL, Start, Stop, Restart, and Quit. Double-click opens the dashboard.
 
-When the server config contains `[auth].token`, the tray reads that token and opens the dashboard with an authenticated local URL. MCP traffic still uses bearer-token auth on the `/mcp` endpoint.
+Open Dashboard launches a native WebView2 window through `wry`; it does not open the system browser. The WebView dashboard is enabled in the Windows MSVC build used for release packages. When the server config contains `[auth].token`, the tray reads that token and opens the dashboard with an authenticated local URL. MCP traffic still uses bearer-token auth on the `/mcp` endpoint.

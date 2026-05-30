@@ -1,0 +1,154 @@
+@import "tailwindcss";
+@plugin "daisyui";
+
+:root {
+  color-scheme: light;
+  --winctl-ink: #0b1020;
+  --winctl-panel: #ffffff;
+  --winctl-muted: #5f6b7a;
+  --winctl-border: #d9dde3;
+  --winctl-cyan: #4cc9f0;
+  --winctl-green: #06d6a0;
+  --winctl-amber: #ffb454;
+  --winctl-yellow: #ffd166;
+  --winctl-red: #ff6b6b;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    linear-gradient(180deg, rgba(11, 16, 32, 0.035), rgba(11, 16, 32, 0) 340px),
+    #f7f8fa;
+  color: var(--winctl-ink);
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  letter-spacing: 0;
+}
+
+.winctl-shell {
+  min-height: 100vh;
+}
+
+.winctl-topbar {
+  border-bottom: 1px solid rgba(217, 221, 227, 0.92);
+  background:
+    linear-gradient(135deg, rgba(11, 16, 32, 0.98), rgba(17, 27, 51, 0.98)),
+    #0b1020;
+  color: #f8fafc;
+}
+
+.winctl-logo {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+}
+
+.winctl-tab {
+  border-bottom: 2px solid transparent;
+  color: #5f6b7a;
+}
+
+.winctl-tab[aria-selected="true"] {
+  border-color: var(--winctl-cyan);
+  color: var(--winctl-ink);
+}
+
+.winctl-card {
+  border: 1px solid var(--winctl-border);
+  border-radius: 8px;
+  background: var(--winctl-panel);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.winctl-card-header {
+  border-bottom: 1px solid #e4e7ec;
+  background: #fafbfc;
+}
+
+.winctl-kpi-accent {
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--winctl-cyan), var(--winctl-green));
+}
+
+.winctl-code {
+  font-family: Consolas, "SFMono-Regular", ui-monospace, monospace;
+}
+
+.winctl-table th {
+  background: #fafbfc;
+  color: #4e5967;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.winctl-table td,
+.winctl-table th {
+  border-color: #e4e7ec;
+}
+
+.winctl-json {
+  max-height: 560px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #0b1020;
+  color: #e9edf2;
+}
+
+.winctl-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --winctl-ink: #e9edf2;
+    --winctl-panel: #181c22;
+    --winctl-muted: #aeb7c2;
+    --winctl-border: #303741;
+  }
+
+  body {
+    background:
+      linear-gradient(180deg, rgba(76, 201, 240, 0.06), rgba(11, 16, 32, 0) 360px),
+      #111418;
+  }
+
+  .winctl-card {
+    background: #181c22;
+  }
+
+  .winctl-card-header,
+  .winctl-table th {
+    background: #15191f;
+  }
+
+  .winctl-table td,
+  .winctl-table th,
+  .winctl-card-header {
+    border-color: #303741;
+  }
+
+  .winctl-tab {
+    color: #aeb7c2;
+  }
+
+  .winctl-tab[aria-selected="true"] {
+    color: #f8fafc;
+  }
+}
