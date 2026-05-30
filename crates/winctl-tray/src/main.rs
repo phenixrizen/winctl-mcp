@@ -308,16 +308,46 @@ fn open_dashboard(config: &TrayConfig) -> anyhow::Result<()> {
     let url = config.dashboard_url();
     #[cfg(windows)]
     {
-        Command::new("explorer.exe")
-            .arg(&url)
-            .spawn()
-            .context("failed to open dashboard with explorer.exe")?;
+        open_url_with_shell(&url)?;
     }
     #[cfg(not(windows))]
     {
         println!("{url}");
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn open_url_with_shell(url: &str) -> anyhow::Result<()> {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let operation = wide_z("open");
+    let target = wide_z(url);
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(target.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as isize;
+    if code <= 32 {
+        anyhow::bail!("ShellExecuteW failed to open dashboard URL with code {code}");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn wide_z(text: &str) -> Vec<u16> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    OsStr::new(text).encode_wide().chain(Some(0)).collect()
 }
 
 fn run_tray(config: &TrayConfig) -> anyhow::Result<()> {
