@@ -32,9 +32,9 @@ mod windows_app {
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetDlgItem, GetMessageW,
         PostQuitMessage, RegisterClassW, SendMessageW, SetTimer, SetWindowTextW, ShowWindow,
         TranslateMessage, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_CHECKBOX, BS_PUSHBUTTON,
-        CBS_DROPDOWNLIST, CB_ADDSTRING, ES_LEFT, HMENU, LBS_NOTIFY, LB_ADDSTRING, MSG, SW_SHOW,
-        WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_DESTROY, WM_TIMER, WNDCLASSW, WS_BORDER,
-        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+        CBS_DROPDOWNLIST, CB_ADDSTRING, ES_LEFT, HMENU, LBS_EXTENDEDSEL, LBS_NOTIFY, LB_ADDSTRING,
+        MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_DESTROY, WM_TIMER, WNDCLASSW,
+        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
     };
 
     const TIMER_ID: usize = 1;
@@ -189,7 +189,7 @@ mod windows_app {
         let list = create_control(
             "LISTBOX",
             "",
-            window_style(LBS_NOTIFY) | WS_BORDER,
+            window_style(LBS_NOTIFY | LBS_EXTENDEDSEL) | WS_BORDER,
             24,
             172,
             250,

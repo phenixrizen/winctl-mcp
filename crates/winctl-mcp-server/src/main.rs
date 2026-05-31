@@ -738,6 +738,8 @@ pub struct UiElementActionRequest {
     #[serde(default)]
     pub allow_offscreen: bool,
     pub expand_collapse_action: Option<winctl::UiExpandCollapseAction>,
+    pub desired_state: Option<winctl::UiToggleDesiredState>,
+    pub mode: Option<winctl::UiSelectionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]

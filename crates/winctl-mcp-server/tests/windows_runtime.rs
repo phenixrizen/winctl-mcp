@@ -190,6 +190,30 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
         .await;
     assert_direct_pattern("uia.toggle second", &toggle_back, "TogglePattern.Toggle");
     assert_eq!(toggle_back["outcome"]["value"]["before_state"], "on");
+    let toggle_off_noop = harness
+        .call_tool(
+            "uia.toggle",
+            desired_toggle_args(&bound_id, "Toggle Choice", "CheckBox", "off"),
+        )
+        .await;
+    assert_direct_pattern(
+        "uia.toggle desired off",
+        &toggle_off_noop,
+        "TogglePattern.Toggle",
+    );
+    assert_eq!(toggle_off_noop["outcome"]["value"]["before_state"], "off");
+    assert_eq!(toggle_off_noop["outcome"]["value"]["after_state"], "off");
+    assert_eq!(toggle_off_noop["outcome"]["value"]["toggle_count"], 0);
+    let toggle_on = harness
+        .call_tool(
+            "uia.toggle",
+            desired_toggle_args(&bound_id, "Toggle Choice", "CheckBox", "on"),
+        )
+        .await;
+    assert_direct_pattern("uia.toggle desired on", &toggle_on, "TogglePattern.Toggle");
+    assert_eq!(toggle_on["outcome"]["value"]["desired_state"], "on");
+    assert_eq!(toggle_on["outcome"]["value"]["after_state"], "on");
+    assert_eq!(toggle_on["outcome"]["value"]["toggle_count"], 1);
 
     let select = harness
         .call_tool(
@@ -199,6 +223,32 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
         .await;
     assert_direct_pattern("uia.select", &select, "SelectionItemPattern.Select");
     assert_eq!(select["outcome"]["value"]["selected"], true);
+    let select_add = harness
+        .call_tool(
+            "uia.select",
+            select_mode_args(&bound_id, "Scroll Item 03", "ListItem", "add"),
+        )
+        .await;
+    assert_direct_pattern(
+        "uia.select add",
+        &select_add,
+        "SelectionItemPattern.AddToSelection",
+    );
+    assert_eq!(select_add["outcome"]["value"]["mode"], "add");
+    assert_eq!(select_add["outcome"]["value"]["selected"], true);
+    let select_remove = harness
+        .call_tool(
+            "uia.select",
+            select_mode_args(&bound_id, "Scroll Item 03", "ListItem", "remove"),
+        )
+        .await;
+    assert_direct_pattern(
+        "uia.select remove",
+        &select_remove,
+        "SelectionItemPattern.RemoveFromSelection",
+    );
+    assert_eq!(select_remove["outcome"]["value"]["mode"], "remove");
+    assert_eq!(select_remove["outcome"]["value"]["selected"], false);
 
     let expand = harness
         .call_tool("uia.expand_collapse", expand_args(&bound_id, "expand"))
@@ -628,6 +678,18 @@ fn tool_payload(tool: &str, response: Value) -> Value {
         }
     }
     panic!("{tool} response did not contain JSON tool payload: {response:#}");
+}
+
+fn desired_toggle_args(bound_id: &str, name: &str, role: &str, desired_state: &str) -> Value {
+    let mut args = action_args(bound_id, selector(name, role));
+    args["desired_state"] = serde_json::json!(desired_state);
+    args
+}
+
+fn select_mode_args(bound_id: &str, name: &str, role: &str, mode: &str) -> Value {
+    let mut args = action_args(bound_id, selector(name, role));
+    args["mode"] = serde_json::json!(mode);
+    args
 }
 
 async fn launch_crashing_target(target_exe: &PathBuf) -> u32 {

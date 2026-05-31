@@ -100,6 +100,28 @@ impl Default for UiExpandCollapseAction {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiToggleDesiredState {
+    Off,
+    On,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiSelectionMode {
+    Replace,
+    Add,
+    Remove,
+}
+
+impl Default for UiSelectionMode {
+    fn default() -> Self {
+        Self::Replace
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct UiActionOutcome {
     pub pattern_used: String,
@@ -219,15 +241,16 @@ pub fn ui_get_value_pattern(
 pub fn ui_toggle_pattern(
     window: &WindowInfo,
     target: &UiActionTarget,
+    desired_state: Option<UiToggleDesiredState>,
 ) -> Result<UiActionOutcome, UiAutomationError> {
     #[cfg(windows)]
     {
-        windows_impl::toggle_pattern(window, target)
+        windows_impl::toggle_pattern(window, target, desired_state)
     }
 
     #[cfg(not(windows))]
     {
-        let _ = (window, target);
+        let _ = (window, target, desired_state);
         Err(unsupported_platform_error("uia.toggle"))
     }
 }
@@ -235,15 +258,16 @@ pub fn ui_toggle_pattern(
 pub fn ui_select_pattern(
     window: &WindowInfo,
     target: &UiActionTarget,
+    mode: UiSelectionMode,
 ) -> Result<UiActionOutcome, UiAutomationError> {
     #[cfg(windows)]
     {
-        windows_impl::select_pattern(window, target)
+        windows_impl::select_pattern(window, target, mode)
     }
 
     #[cfg(not(windows))]
     {
-        let _ = (window, target);
+        let _ = (window, target, mode);
         Err(unsupported_platform_error("uia.select"))
     }
 }
@@ -474,7 +498,7 @@ mod windows_impl {
     use crate::uia::{
         control_type_name, find_ui_elements, ui_element_ref, UiActionOutcome, UiActionTarget,
         UiAutomationError, UiAutomationErrorCode, UiAutomationSnapshot, UiElementInfo,
-        UiExpandCollapseAction, UiOwnerWindow, UiRect,
+        UiExpandCollapseAction, UiOwnerWindow, UiRect, UiSelectionMode, UiToggleDesiredState,
     };
     use crate::WindowInfo;
 
@@ -591,6 +615,7 @@ mod windows_impl {
     pub(super) fn toggle_pattern(
         window: &WindowInfo,
         target: &UiActionTarget,
+        desired_state: Option<UiToggleDesiredState>,
     ) -> Result<UiActionOutcome, UiAutomationError> {
         with_action(window, target, "TogglePattern.Toggle", false, |element| {
             let pattern = current_pattern::<IUIAutomationTogglePattern>(
@@ -598,16 +623,46 @@ mod windows_impl {
                 UIA_TogglePatternId,
                 "TogglePattern",
             )?;
-            let before = unsafe { pattern.CurrentToggleState() }
-                .ok()
-                .map(|state| toggle_state_name(state.0));
-            unsafe { pattern.Toggle() }.map_err(action_failed("TogglePattern.Toggle"))?;
-            let after = unsafe { pattern.CurrentToggleState() }
-                .ok()
-                .map(|state| toggle_state_name(state.0));
+            let before_state = unsafe { pattern.CurrentToggleState() }
+                .map_err(action_failed("TogglePattern.CurrentToggleState"))?;
+            let before = toggle_state_name(before_state.0);
+            let mut toggle_count = 0u8;
+            let desired = desired_state.map(toggle_desired_state_name);
+            if let Some(desired_state) = desired_state {
+                while !toggle_state_matches(before_state.0, desired_state) && toggle_count < 3 {
+                    unsafe { pattern.Toggle() }.map_err(action_failed("TogglePattern.Toggle"))?;
+                    toggle_count += 1;
+                    let current = unsafe { pattern.CurrentToggleState() }
+                        .map_err(action_failed("TogglePattern.CurrentToggleState"))?;
+                    if toggle_state_matches(current.0, desired_state) {
+                        break;
+                    }
+                }
+                let reached = unsafe { pattern.CurrentToggleState() }
+                    .map_err(action_failed("TogglePattern.CurrentToggleState"))?;
+                if !toggle_state_matches(reached.0, desired_state) {
+                    return Err(UiAutomationError {
+                        code: UiAutomationErrorCode::ActionFailed,
+                        message: format!(
+                            "TogglePattern.Toggle did not reach desired state {}; current state is {}",
+                            toggle_desired_state_name(desired_state),
+                            toggle_state_name(reached.0)
+                        ),
+                    });
+                }
+            } else {
+                unsafe { pattern.Toggle() }.map_err(action_failed("TogglePattern.Toggle"))?;
+                toggle_count = 1;
+            }
+            let after_state = unsafe { pattern.CurrentToggleState() }
+                .map_err(action_failed("TogglePattern.CurrentToggleState"))?;
+            let after = toggle_state_name(after_state.0);
             Ok(Some(serde_json::json!({
                 "before_state": before,
                 "after_state": after,
+                "desired_state": desired,
+                "toggle_count": toggle_count,
+                "actual_action": if toggle_count == 0 { "none" } else { "toggle" },
             })))
         })
     }
@@ -615,26 +670,62 @@ mod windows_impl {
     pub(super) fn select_pattern(
         window: &WindowInfo,
         target: &UiActionTarget,
+        mode: UiSelectionMode,
     ) -> Result<UiActionOutcome, UiAutomationError> {
-        with_action(
-            window,
-            target,
-            "SelectionItemPattern.Select",
-            false,
-            |element| {
-                let pattern = current_pattern::<IUIAutomationSelectionItemPattern>(
-                    element,
-                    UIA_SelectionItemPatternId,
-                    "SelectionItemPattern",
-                )?;
+        let session = AutomationSession::open(window)?;
+        let resolved = resolve_target(&session, window, target)?;
+        ensure_actionable(&resolved.info, target.allow_offscreen)?;
+        let pattern = current_pattern::<IUIAutomationSelectionItemPattern>(
+            &resolved.element,
+            UIA_SelectionItemPatternId,
+            "SelectionItemPattern",
+        )?;
+        let before_selected = unsafe { pattern.CurrentIsSelected() }
+            .map_err(action_failed("SelectionItemPattern.CurrentIsSelected"))?
+            .as_bool();
+        let (pattern_used, actual_action) = match mode {
+            UiSelectionMode::Replace => {
                 unsafe { pattern.Select() }
                     .map_err(action_failed("SelectionItemPattern.Select"))?;
-                let selected = unsafe { pattern.CurrentIsSelected() }
-                    .ok()
-                    .map(|value| value.as_bool());
-                Ok(Some(serde_json::json!({"selected": selected})))
-            },
-        )
+                ("SelectionItemPattern.Select", "replace")
+            }
+            UiSelectionMode::Add if before_selected => {
+                ("SelectionItemPattern.CurrentIsSelected", "none")
+            }
+            UiSelectionMode::Add => {
+                unsafe { pattern.AddToSelection() }
+                    .map_err(action_failed("SelectionItemPattern.AddToSelection"))?;
+                ("SelectionItemPattern.AddToSelection", "add")
+            }
+            UiSelectionMode::Remove if !before_selected => {
+                ("SelectionItemPattern.CurrentIsSelected", "none")
+            }
+            UiSelectionMode::Remove => {
+                unsafe { pattern.RemoveFromSelection() }
+                    .map_err(action_failed("SelectionItemPattern.RemoveFromSelection"))?;
+                ("SelectionItemPattern.RemoveFromSelection", "remove")
+            }
+        };
+        let selected = unsafe { pattern.CurrentIsSelected() }
+            .map_err(action_failed("SelectionItemPattern.CurrentIsSelected"))?
+            .as_bool();
+        Ok(UiActionOutcome {
+            pattern_used: pattern_used.into(),
+            direct_uia_pattern_used: true,
+            before: resolved.info.clone(),
+            after: Some(read_current_element(
+                window,
+                &resolved.element,
+                &resolved.path,
+            )),
+            value: Some(serde_json::json!({
+                "mode": selection_mode_name(mode),
+                "actual_action": actual_action,
+                "before_selected": before_selected,
+                "selected": selected,
+            })),
+            warnings: Vec::new(),
+        })
     }
 
     pub(super) fn expand_collapse_pattern(
@@ -1074,6 +1165,30 @@ mod windows_impl {
             "indeterminate"
         } else {
             "unknown"
+        }
+    }
+
+    fn toggle_state_matches(value: i32, desired: UiToggleDesiredState) -> bool {
+        match desired {
+            UiToggleDesiredState::Off => value == ToggleState_Off.0,
+            UiToggleDesiredState::On => value == ToggleState_On.0,
+            UiToggleDesiredState::Indeterminate => value == ToggleState_Indeterminate.0,
+        }
+    }
+
+    fn toggle_desired_state_name(value: UiToggleDesiredState) -> &'static str {
+        match value {
+            UiToggleDesiredState::Off => "off",
+            UiToggleDesiredState::On => "on",
+            UiToggleDesiredState::Indeterminate => "indeterminate",
+        }
+    }
+
+    fn selection_mode_name(value: UiSelectionMode) -> &'static str {
+        match value {
+            UiSelectionMode::Replace => "replace",
+            UiSelectionMode::Add => "add",
+            UiSelectionMode::Remove => "remove",
         }
     }
 

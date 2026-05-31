@@ -58,9 +58,9 @@
 | `winctl-mcp` | [`uia.invoke`](UIA_INVOKE.md) | Invoke a revalidated UI Automation element with `InvokePattern`. |
 | `winctl-mcp` | [`uia.set_value`](UIA_SET_VALUE.md) | Set text for a revalidated UI Automation element with `ValuePattern.SetValue`. |
 | `winctl-mcp` | [`uia.get_value`](UIA_GET_VALUE.md) | Read value-like UI Automation properties from a revalidated element snapshot. |
-| `winctl-mcp` | [`uia.toggle`](UIA_TOGGLE.md) | Toggle a revalidated UI Automation element when safe fallback semantics are available. |
+| `winctl-mcp` | [`uia.toggle`](UIA_TOGGLE.md) | Toggle a revalidated UI Automation element, optionally to a desired state. |
 | `winctl-mcp` | [`uia.expand_collapse`](UIA_EXPAND_COLLAPSE.md) | Expand or collapse a revalidated UI Automation element when supported. |
-| `winctl-mcp` | [`uia.select`](UIA_SELECT.md) | Select a revalidated UI Automation element with strict target resolution. |
+| `winctl-mcp` | [`uia.select`](UIA_SELECT.md) | Select, add, or remove a revalidated UI Automation selection item. |
 | `winctl-mcp` | [`uia.set_focus`](UIA_SET_FOCUS.md) | Focus a revalidated UI Automation element with strict target resolution. |
 | `winctl-mcp` | [`uia.range_value`](UIA_RANGE_VALUE.md) | Set a numeric value on a revalidated UI Automation range element when supported. |
 | `winctl-mcp` | [`uia.scroll_into_view`](UIA_SCROLL_INTO_VIEW.md) | Scroll a revalidated UI Automation element into view when supported. |

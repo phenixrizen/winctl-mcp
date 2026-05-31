@@ -10,7 +10,7 @@ use winctl::{
     ui_get_value_pattern, ui_invoke_pattern, ui_range_value_pattern, ui_scroll_into_view_pattern,
     ui_select_pattern, ui_set_focus_pattern, ui_set_value_pattern, ui_toggle_pattern,
     UiActionTarget, UiAutomationError, UiAutomationErrorCode, UiAutomationSnapshot, UiElementInfo,
-    UiExpandCollapseAction, UiRect,
+    UiExpandCollapseAction, UiRect, UiSelectionMode,
 };
 
 pub fn uia_snapshot(state: &AppState, request: UiSnapshotRequest) -> serde_json::Value {
@@ -185,14 +185,16 @@ pub fn uia_set_focus(state: &AppState, request: UiElementActionRequest) -> serde
 }
 
 pub fn uia_select(state: &AppState, request: UiElementActionRequest) -> serde_json::Value {
+    let mode = request.mode.unwrap_or(UiSelectionMode::Replace);
     direct_pattern_action(state, request, "uia.select", |window, target| {
-        ui_select_pattern(window, target)
+        ui_select_pattern(window, target, mode)
     })
 }
 
 pub fn uia_toggle(state: &AppState, request: UiElementActionRequest) -> serde_json::Value {
+    let desired_state = request.desired_state;
     direct_pattern_action(state, request, "uia.toggle", |window, target| {
-        ui_toggle_pattern(window, target)
+        ui_toggle_pattern(window, target, desired_state)
     })
 }
 
@@ -290,6 +292,8 @@ pub fn uia_wait_for_element(
         max_elements: request.max_elements,
         allow_offscreen: request.require_visible == Some(false),
         expand_collapse_action: None,
+        desired_state: None,
+        mode: None,
     };
     let mut last_error = None;
     loop {
@@ -363,6 +367,8 @@ where
         bound_id = %request.bound_id,
         element_ref = ?request.element_ref,
         selector = ?request.selector,
+        desired_state = ?request.desired_state,
+        mode = ?request.mode,
         tool_name = tool_name,
         "uia direct pattern action requested"
     );
@@ -396,6 +402,8 @@ fn set_value_action_request(request: &UiSetValueRequest) -> UiElementActionReque
         max_elements: request.max_elements,
         allow_offscreen: request.allow_offscreen,
         expand_collapse_action: None,
+        desired_state: None,
+        mode: None,
     }
 }
 
@@ -408,6 +416,8 @@ fn range_value_action_request(request: UiRangeValueRequest) -> UiElementActionRe
         max_elements: request.max_elements,
         allow_offscreen: request.allow_offscreen,
         expand_collapse_action: None,
+        desired_state: None,
+        mode: None,
     }
 }
 

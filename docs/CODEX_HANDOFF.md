@@ -32,8 +32,8 @@ checkpoint assertions, and completed the native control notification surfaces.
 | R2-6 `process.kill` tree termination | **DONE** | `process.kill kill_tree=true` now snapshots the current process tree, validates the tracked root identity, terminates descendants deepest-first, terminates the root last, and still refuses untracked PIDs/launch IDs. Unit coverage verifies descendant collection and existing ownership rejection paths. |
 | R2-7 Macro/test checkpoint assertions | **DONE** | `macro.assert_image_checkpoint` now calls the existing baseline comparison provider and fails the macro on visual mismatch. `macro.assert_text_checkpoint` now compares literal text, OCR output, or `capture.read_text` output and fails the macro on missing expected text. Unit coverage verifies both the successful image checkpoint path and failing text checkpoint path. |
 
-**The remaining work is now focused on the last UIA selection/toggle refinements.**
-Re-prioritized list:
+**Round-2 items R2-1 through R2-7 are complete.** Remaining work is the longer-tail
+Phase 14/16 backlog called out below.
 
 1. **R2-1 — Windows runtime CI + integration tests: DONE.** The repository now has
    a live Windows MCP integration test that starts the HTTP server, launches
@@ -56,8 +56,12 @@ Re-prioritized list:
    structured fields, and keeps the existing WER discovery. The Windows runtime
    integration test deliberately crashes `winctl-test-target` and asserts a
    structured `wevtapi` Application error entry is returned.
-5. **R2-5 — UIA refinements.** Desired-state idempotent `uia.toggle` and
-   add/remove modes for `uia.select` (roadmap-noted).
+5. **R2-5 — UIA refinements: DONE.** `uia.toggle` now supports idempotent
+   `desired_state` values (`off`, `on`, `indeterminate`) and reports
+   `toggle_count`; `uia.select` now supports `replace`, `add`, and `remove` modes
+   mapped to `Select`, `AddToSelection`, and `RemoveFromSelection`. The Windows
+   runtime integration test asserts no-op desired-state toggle, desired-state
+   toggle, and selection add/remove behavior.
 6. **R2-6 — `process.kill` `kill_tree` support: DONE.** The server now terminates
    the tracked process tree deepest-first while preserving the launch-session
    ownership gate and root identity validation.
@@ -284,7 +288,5 @@ returns a JS expression result from a loopback Chrome target.
 
 ## 5. Suggested order
 
-1. R2-5 / A1 refinement: add desired-state `uia.toggle` and add/remove modes for
-   `uia.select`.
-2. Keep broadening the Windows runtime integration test as each native provider is
+1. Keep broadening the Windows runtime integration test as each native provider is
    completed.

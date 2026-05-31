@@ -151,11 +151,11 @@
 
 ## Phase 12: UI Automation Action Layer
 
-**Status:** Complete for core direct UI Automation patterns.
+**Status:** Complete.
 
-**Audit comments:** Added revalidated action tools with before/after diagnostics, control-gate integration, wait support, and Windows COM providers for `InvokePattern`, `ValuePattern`, `TogglePattern`, `SelectionItemPattern`, `ExpandCollapsePattern`, `RangeValuePattern`, `ScrollItemPattern`, and `SetFocus`. Coordinate fallback is now returned as a hint rather than silently dispatched. Desired-state toggle and add/remove selection modes remain future refinements.
+**Audit comments:** Added revalidated action tools with before/after diagnostics, control-gate integration, wait support, and Windows COM providers for `InvokePattern`, `ValuePattern`, `TogglePattern`, `SelectionItemPattern`, `ExpandCollapsePattern`, `RangeValuePattern`, `ScrollItemPattern`, and `SetFocus`. Coordinate fallback is now returned as a hint rather than silently dispatched. `uia.toggle` supports idempotent `desired_state`, and `uia.select` supports `replace`, `add`, and `remove` modes.
 
-**Verification:** A Windows runtime integration test now launches `winctl-test-target`, binds by returned PID/HWND, and exercises `uia.invoke`, `uia.set_value`, `uia.get_value`, `uia.toggle`, `uia.select`, `uia.expand_collapse`, `uia.range_value`, `uia.scroll_into_view`, and `uia.set_focus` through the MCP HTTP transport with behavior assertions.
+**Verification:** A Windows runtime integration test now launches `winctl-test-target`, binds by returned PID/HWND, and exercises `uia.invoke`, `uia.set_value`, `uia.get_value`, idempotent `uia.toggle`, `uia.select` replace/add/remove, `uia.expand_collapse`, `uia.range_value`, `uia.scroll_into_view`, and `uia.set_focus` through the MCP HTTP transport with behavior assertions.
 
 - Promote the read-only UIA snapshot layer into a strict element-action layer that operates on revalidated element references instead of pixel coordinates.
 - Add `uia.invoke`, `uia.set_value`, `uia.get_value`, `uia.toggle`, `uia.expand_collapse`, `uia.select`, `uia.set_focus`, `uia.range_value`, and `uia.scroll_into_view`, each mapped to a specific UI Automation control pattern.
