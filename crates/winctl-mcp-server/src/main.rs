@@ -778,6 +778,78 @@ pub struct UiWaitForElementRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct AssertElementRequest {
+    pub bound_id: String,
+    pub element_ref: Option<String>,
+    pub selector: Option<winctl::UiElementSelector>,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+    pub exists: Option<bool>,
+    pub enabled: Option<bool>,
+    pub name: Option<String>,
+    pub name_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct AssertTextVisibleRequest {
+    pub bound_id: String,
+    pub text: String,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct AssertPixelColorRequest {
+    pub image_path: Option<String>,
+    pub bound_id: Option<String>,
+    pub x: u32,
+    pub y: u32,
+    pub expected_rgb: Option<[u8; 3]>,
+    pub tolerance: Option<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct AssertWindowCountRequest {
+    pub selector: WindowSelector,
+    pub expected: Option<usize>,
+    pub min: Option<usize>,
+    pub max: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct AssertClipboardRequest {
+    pub expected: Option<String>,
+    pub contains: Option<String>,
+    pub max_chars: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct CaptureOcrRegionRequest {
+    pub image_path: Option<String>,
+    pub bound_id: Option<String>,
+    pub x: Option<u32>,
+    pub y: Option<u32>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct CaptureReadTextRequest {
+    pub bound_id: String,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct CaptureCompareBaselineRequest {
+    pub actual_path: String,
+    pub baseline_path: String,
+    pub tolerance: Option<u8>,
+    pub max_different_pixels: Option<u64>,
+    pub diff_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ControlArmRequest {
     pub session_id: Option<String>,
     pub bound_id: Option<String>,
@@ -1529,6 +1601,132 @@ impl WinctlMcpServer {
         let request = request.0;
         run_blocking_tool("uia.wait_for_element", move || {
             tools::uia::uia_wait_for_element(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.element",
+        description = "Assert UI Automation element existence, enabled state, and name conditions with structured pass/fail output."
+    )]
+    pub async fn assert_element(
+        &self,
+        request: Parameters<AssertElementRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.element", move || {
+            tools::assertions::assert_element(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.text_visible",
+        description = "Assert that text is visible through the bound window title/class or UI Automation tree."
+    )]
+    pub async fn assert_text_visible(
+        &self,
+        request: Parameters<AssertTextVisibleRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.text_visible", move || {
+            tools::assertions::assert_text_visible(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.pixel_color",
+        description = "Sample an image or bound-window screenshot pixel and optionally assert expected RGB within tolerance."
+    )]
+    pub async fn assert_pixel_color(
+        &self,
+        request: Parameters<AssertPixelColorRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.pixel_color", move || {
+            tools::assertions::assert_pixel_color(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.window_count",
+        description = "Assert the number of current windows matching a selector."
+    )]
+    pub async fn assert_window_count(
+        &self,
+        request: Parameters<AssertWindowCountRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        run_blocking_tool("assert.window_count", move || {
+            tools::assertions::assert_window_count(request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.clipboard",
+        description = "Assert current clipboard text equals or contains expected text."
+    )]
+    pub async fn assert_clipboard(
+        &self,
+        request: Parameters<AssertClipboardRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        run_blocking_tool("assert.clipboard", move || {
+            tools::assertions::assert_clipboard(request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "capture.ocr_region",
+        description = "Return OCR-region diagnostics for an image or bound window; reports provider availability when OCR is not configured."
+    )]
+    pub async fn capture_ocr_region(
+        &self,
+        request: Parameters<CaptureOcrRegionRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("capture.ocr_region", move || {
+            tools::assertions::capture_ocr_region(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "capture.read_text",
+        description = "Extract readable text from a bound window using the UI Automation snapshot text surface."
+    )]
+    pub async fn capture_read_text(
+        &self,
+        request: Parameters<CaptureReadTextRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("capture.read_text", move || {
+            tools::assertions::capture_read_text(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "capture.compare_baseline",
+        description = "Compare an actual image against a baseline with RGB tolerance and write an optional diff artifact."
+    )]
+    pub async fn capture_compare_baseline(
+        &self,
+        request: Parameters<CaptureCompareBaselineRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("capture.compare_baseline", move || {
+            tools::assertions::capture_compare_baseline(&state, request)
         })
         .await
     }
@@ -3881,12 +4079,20 @@ mod tests {
             vec![
                 "app.launch",
                 "artifact.export",
+                "assert.clipboard",
+                "assert.element",
+                "assert.pixel_color",
+                "assert.text_visible",
+                "assert.window_count",
                 "browser.assert",
                 "browser.describe",
                 "browser.extract_content",
                 "browser.list",
                 "browser.screenshot_checkpoint",
                 "browser.wait_for_navigation",
+                "capture.compare_baseline",
+                "capture.ocr_region",
+                "capture.read_text",
                 "capture.screenshot_display",
                 "capture.screenshot_window",
                 "capture.wait_for_window_image_change",

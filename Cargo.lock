@@ -4836,6 +4836,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "image",
  "reqwest",
  "rmcp",
  "serde",

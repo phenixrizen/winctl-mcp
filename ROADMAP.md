@@ -162,6 +162,10 @@
 
 ## Phase 13: Assertion and Visual Verification Tools
 
+**Status:** Complete for first-pass structured assertions and visual comparison.
+
+**Audit comments:** Added `assert.element`, `assert.text_visible`, `assert.pixel_color`, `assert.window_count`, `assert.clipboard`, `capture.read_text`, `capture.ocr_region`, and `capture.compare_baseline`. OCR currently reports provider-unavailable diagnostics; a real OCR backend remains follow-up work.
+
 - Add first-class assertion tools that return structured pass/fail: `assert.element` (exists/enabled/value/name), `assert.text_visible`, `assert.pixel_color`, and `assert.window_count`.
 - Add `capture.ocr_region` and `capture.read_text` for text extraction from custom-rendered, canvas, or GDI-drawn UIs that the UIA tree cannot expose.
 - Add `capture.compare_baseline` for golden-image visual regression with configurable tolerance and a saved diff-image artifact.

@@ -4,6 +4,11 @@
 | --- | --- | --- |
 | `winctl-mcp` | [`app.launch`](APP_LAUNCH.md) | Launch an executable, protocol handler, packaged app, or Start Menu app target without shell command concatenation. |
 | `winctl-mcp` | [`artifact.export`](ARTIFACT_EXPORT.md) | Export a captured artifact to the capture export directory or an allowlisted destination. |
+| `winctl-mcp` | [`assert.element`](ASSERT_ELEMENT.md) | Assert UI Automation element existence, enabled state, and name conditions. |
+| `winctl-mcp` | [`assert.text_visible`](ASSERT_TEXT_VISIBLE.md) | Assert text is visible through window metadata or the UI Automation tree. |
+| `winctl-mcp` | [`assert.pixel_color`](ASSERT_PIXEL_COLOR.md) | Sample an image or bound-window screenshot pixel and optionally assert expected RGB. |
+| `winctl-mcp` | [`assert.window_count`](ASSERT_WINDOW_COUNT.md) | Assert the number of current windows matching a selector. |
+| `winctl-mcp` | [`assert.clipboard`](ASSERT_CLIPBOARD.md) | Assert current clipboard text equals or contains expected text. |
 | `winctl-mcp` | [`browser.list`](BROWSER_LIST.md) | List Chrome, Edge, and Firefox process/window state with explicit PID/HWND identity metadata. |
 | `winctl-mcp` | [`browser.describe`](BROWSER_DESCRIBE.md) | Describe one browser target by bound window, PID, or HWND without tab-title selection. |
 | `winctl-mcp` | [`browser.wait_for_navigation`](BROWSER_WAIT_FOR_NAVIGATION.md) | Wait for a bound browser window title transition while revalidating browser PID/HWND/executable identity. |
@@ -104,6 +109,9 @@
 | `winctl-mcp` | [`macro.get`](MACRO_GET.md) | Get a promoted macro manifest by session macro ID or memory item ID. |
 | `winctl-mcp` | [`macro.promote`](MACRO_PROMOTE.md) | Promote an approved macro manifest into the session registry and optionally explicit memory storage. |
 | `winctl-mcp` | [`macro.export_result`](MACRO_EXPORT_RESULT.md) | Export a structured macro run result and artifact metadata by run ID. |
+| `winctl-mcp` | [`capture.ocr_region`](CAPTURE_OCR_REGION.md) | Return OCR-region diagnostics for an image or bound window. |
+| `winctl-mcp` | [`capture.read_text`](CAPTURE_READ_TEXT.md) | Extract readable text from a bound window using UI Automation. |
+| `winctl-mcp` | [`capture.compare_baseline`](CAPTURE_COMPARE_BASELINE.md) | Compare an actual image against a baseline and write an optional diff artifact. |
 | `winctl-mcp` | [`capture.screenshot_window`](CAPTURE_SCREENSHOT_WINDOW.md) | Capture a screenshot of a bound window and return exact virtual desktop region metadata. |
 | `winctl-mcp` | [`capture.screenshot_display`](CAPTURE_SCREENSHOT_DISPLAY.md) | Capture a screenshot of a display by zero-based monitor index and return exact virtual desktop region metadata. |
 | `winctl-mcp` | [`capture.wait_for_window_image_change`](CAPTURE_WAIT_FOR_WINDOW_IMAGE_CHANGE.md) | Poll bound-window screenshots until the image bytes change, returning replay-safe capture diagnostics. |
