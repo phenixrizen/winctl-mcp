@@ -24,7 +24,7 @@ checkpoint assertions, and completed the native control notification surfaces.
 | A2 Global emergency-stop hotkey | **DONE** | `RegisterHotKey(None, …, MOD_CONTROL\|MOD_ALT\|MOD_NOREPEAT, VK_ESCAPE)` + `WM_HOTKEY` loop in `control.rs`. |
 | A2 Native toast | **DONE** | `control.rs` uses WinRT `ToastNotificationManager` before the first sensitive control action in a session, includes target PID/HWND context, and gives the human a Ctrl+Alt+Esc countdown window to cancel before control proceeds. |
 | A2 Active-control overlay/border | **DONE** | `control.rs` shows a click-through, topmost layered overlay around the validated target HWND during active control and clears it on cooldown/revoke. The overlay thread acknowledges show/hide so responses do not report queued work as visible state. |
-| B1 OCR backend | **DONE (external)** | `assertions.rs` crops region → shells `tesseract` → parses TSV word boxes. Requires Tesseract on PATH; no in-box provider yet. |
+| B1 OCR backend | **DONE** | `assertions.rs` crops region → tries in-box `Windows.Media.Ocr` first on Windows → falls back to `tesseract` TSV parsing when available. |
 | B2 `process.metrics` | **DONE** | `GetProcessMemoryInfo`, `GetProcessHandleCount`, `GetGuiResources`, `GetProcessTimes` in `winctl/src/process.rs`. |
 | B3 `crash_report` Event Log + WER | **DONE** | Shells `wevtutil.exe` for Application errors; scans `%LOCALAPPDATA%\CrashDumps` + WER `ReportQueue` in `diagnostics.rs`. |
 | C1 CDP WebSocket | **DONE** | `tokio-tungstenite` `connect_async` → `Runtime.evaluate`, `DOMSnapshot.captureSnapshot`, `Accessibility.getFullAXTree`, `CSS.getComputedStyleForNode` in `web.rs`. |
@@ -32,8 +32,8 @@ checkpoint assertions, and completed the native control notification surfaces.
 | R2-6 `process.kill` tree termination | **DONE** | `process.kill kill_tree=true` now snapshots the current process tree, validates the tracked root identity, terminates descendants deepest-first, terminates the root last, and still refuses untracked PIDs/launch IDs. Unit coverage verifies descendant collection and existing ownership rejection paths. |
 | R2-7 Macro/test checkpoint assertions | **DONE** | `macro.assert_image_checkpoint` now calls the existing baseline comparison provider and fails the macro on visual mismatch. `macro.assert_text_checkpoint` now compares literal text, OCR output, or `capture.read_text` output and fails the macro on missing expected text. Unit coverage verifies both the successful image checkpoint path and failing text checkpoint path. |
 
-**The remaining work is now focused on the in-box OCR provider, structured Event
-Log querying, and the last UIA selection/toggle refinements.** Re-prioritized list:
+**The remaining work is now focused on structured Event Log querying and the last
+UIA selection/toggle refinements.** Re-prioritized list:
 
 1. **R2-1 — Windows runtime CI + integration tests: DONE.** The repository now has
    a live Windows MCP integration test that starts the HTTP server, launches
@@ -46,9 +46,11 @@ Log querying, and the last UIA selection/toggle refinements.** Re-prioritized li
    around the validated target HWND while the action is active. The Windows
    runtime integration test asserts the toast attempt, overlay show
    acknowledgment, overlay clear event, and global emergency-stop path.
-3. **R2-3 — In-box OCR provider.** Add `Windows.Media.Ocr.OcrEngine` so
-   `capture.ocr_region` works on a stock Windows box without Tesseract installed;
-   keep Tesseract as a fallback.
+3. **R2-3 — In-box OCR provider: DONE.** `capture.ocr_region` now uses
+   `Windows.Media.Ocr.OcrEngine` on Windows, keeps Tesseract as a fallback, and
+   reports per-provider diagnostics when no provider succeeds. The Windows runtime
+   integration test OCRs known `winctl-test-target` text and asserts the
+   `windows_media_ocr` provider was used.
 4. **R2-4 — Harden `crash_report`.** It parses `wevtutil.exe` text output; migrate
    to the `EvtQuery`/`EvtNext` API for structured, robust results.
 5. **R2-5 — UIA refinements.** Desired-state idempotent `uia.toggle` and
@@ -224,10 +226,11 @@ control events.
 
 #### B1. OCR backend for `capture.ocr_region`
 **File:** `crates/winctl-mcp-server/src/tools/assertions.rs` (+ provider in `winctl`).
-Use in-box `Windows.Media.Ocr.OcrEngine` (`TryCreateFromUserProfileLanguages`) over
-the captured region bitmap. No external dependency. Replace the
-`ocr_provider_unavailable` stub. **Acceptance:** returns recognized text + word
-bounding boxes for a region of `winctl-test-target` rendering known text.
+**Round-2 status:** Complete. The tool uses in-box `Windows.Media.Ocr.OcrEngine`
+(`TryCreateFromUserProfileLanguages`) over the captured region bitmap on Windows,
+falls back to Tesseract TSV parsing when available, and reports provider-level
+diagnostics if no provider succeeds. The Windows runtime integration test verifies
+recognized text from a `winctl-test-target` region.
 
 #### B2. Real `process.metrics`
 **File:** `crates/winctl-mcp-server/src/tools/diagnostics.rs`.
@@ -276,9 +279,8 @@ returns a JS expression result from a loopback Chrome target.
 
 ## 5. Suggested order
 
-1. R2-3 / B1: add the in-box Windows OCR provider and keep Tesseract as fallback.
-2. R2-4 / B3: replace `wevtutil.exe` parsing with Event Log APIs.
-3. R2-5 / A1 refinement: add desired-state `uia.toggle` and add/remove modes for
+1. R2-4 / B3: replace `wevtutil.exe` parsing with Event Log APIs.
+2. R2-5 / A1 refinement: add desired-state `uia.toggle` and add/remove modes for
    `uia.select`.
-4. Keep broadening the Windows runtime integration test as each native provider is
+3. Keep broadening the Windows runtime integration test as each native provider is
    completed.

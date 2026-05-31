@@ -29,6 +29,12 @@ tokio-tungstenite = { version = "0.26", default-features = false, features = ["c
 futures-util = "0.3"
 windows = { version = "0.62", features = [
   "Data_Xml_Dom",
+  "Foundation",
+  "Globalization",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Storage",
+  "Storage_Streams",
   "UI_Notifications",
   "Win32_Foundation",
   "Win32_Security",

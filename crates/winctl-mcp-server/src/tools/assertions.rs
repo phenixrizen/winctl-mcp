@@ -13,6 +13,12 @@ use crate::{
     CaptureOcrRegionRequest, CaptureReadTextRequest,
 };
 
+struct OcrOutput {
+    provider: &'static str,
+    text: String,
+    words: Vec<serde_json::Value>,
+}
+
 pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_json::Value {
     tracing::info!(
         bound_id = %request.bound_id,
@@ -286,6 +292,29 @@ pub fn capture_ocr_region(state: &AppState, request: CaptureOcrRegionRequest) ->
             Some(crop_path),
         );
     }
+    let region = serde_json::json!({
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+    });
+
+    #[cfg(windows)]
+    let mut provider_warnings = match run_windows_media_ocr(&crop_path) {
+        Ok(output) => {
+            return ocr_success(image_path, crop_path, region, output, Vec::new());
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "Windows.Media.Ocr provider failed; falling back to tesseract");
+            vec![serde_json::json!({
+                "provider": "windows_media_ocr",
+                "error": error,
+            })]
+        }
+    };
+    #[cfg(not(windows))]
+    let mut provider_warnings = Vec::new();
+
     match run_tesseract_tsv(&crop_path) {
         Ok(tsv) => {
             let words = parse_tesseract_tsv(&tsv);
@@ -294,36 +323,37 @@ pub fn capture_ocr_region(state: &AppState, request: CaptureOcrRegionRequest) ->
                 .filter_map(|word| word.get("text").and_then(|value| value.as_str()))
                 .collect::<Vec<_>>()
                 .join(" ");
-            serde_json::json!({
-                "ok": true,
-                "provider_enabled": true,
+            ocr_success(
+                image_path,
+                crop_path,
+                region,
+                OcrOutput {
+                    provider: "tesseract",
+                    text,
+                    words,
+                },
+                provider_warnings,
+            )
+        }
+        Err(error) => {
+            provider_warnings.push(serde_json::json!({
                 "provider": "tesseract",
+                "error": error,
+            }));
+            serde_json::json!({
+                "ok": false,
+                "provider_enabled": false,
+                "provider": "none",
                 "image_path": image_path,
                 "crop_path": crop_path,
-                "region": {
-                    "x": x,
-                    "y": y,
-                    "width": width,
-                    "height": height,
+                "region": region,
+                "error": {
+                    "code": "ocr_provider_unavailable",
+                    "message": "no OCR provider succeeded",
+                    "providers": provider_warnings,
                 },
-                "text": text,
-                "words": words,
             })
         }
-        Err(error) => serde_json::json!({
-            "ok": false,
-            "provider_enabled": false,
-            "provider": "tesseract",
-            "image_path": image_path,
-            "crop_path": crop_path,
-            "region": {
-                "x": x,
-                "y": y,
-                "width": width,
-                "height": height,
-            },
-            "error": error,
-        }),
     }
 }
 
@@ -528,6 +558,127 @@ fn contains_ci(actual: Option<&str>, expected: &str) -> bool {
                 .contains(&expected.to_ascii_lowercase())
         })
         .unwrap_or(false)
+}
+
+fn ocr_success(
+    image_path: PathBuf,
+    crop_path: PathBuf,
+    region: serde_json::Value,
+    output: OcrOutput,
+    provider_warnings: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let mut response = serde_json::json!({
+        "ok": true,
+        "provider_enabled": true,
+        "provider": output.provider,
+        "image_path": image_path,
+        "crop_path": crop_path,
+        "region": region,
+        "text": output.text,
+        "words": output.words,
+    });
+    if !provider_warnings.is_empty() {
+        response["provider_warnings"] = serde_json::Value::Array(provider_warnings);
+    }
+    response
+}
+
+#[cfg(windows)]
+fn run_windows_media_ocr(image_path: &PathBuf) -> Result<OcrOutput, serde_json::Value> {
+    run_windows_media_ocr_inner(image_path).map_err(|error| {
+        serde_json::json!({
+            "code": "windows_media_ocr_failed",
+            "message": error,
+        })
+    })
+}
+
+#[cfg(windows)]
+fn run_windows_media_ocr_inner(image_path: &PathBuf) -> Result<OcrOutput, String> {
+    use windows::core::HSTRING;
+    use windows::Graphics::Imaging::BitmapDecoder;
+    use windows::Media::Ocr::OcrEngine;
+    use windows::Storage::{FileAccessMode, Streams::FileRandomAccessStream};
+    use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
+
+    let ro_initialized = match unsafe { RoInitialize(RO_INIT_MULTITHREADED) } {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(error = %error, "RoInitialize failed before Windows OCR; trying WinRT activation anyway");
+            false
+        }
+    };
+    let result = (|| {
+        let max_dimension = OcrEngine::MaxImageDimension().map_err(|error| error.to_string())?;
+        let image = image::open(image_path)
+            .map_err(|error| format!("failed to inspect OCR image dimensions: {error}"))?;
+        if image.width() > max_dimension || image.height() > max_dimension {
+            return Err(format!(
+                "OCR image {}x{} exceeds Windows.Media.Ocr max dimension {max_dimension}",
+                image.width(),
+                image.height()
+            ));
+        }
+
+        let path = HSTRING::from(image_path.as_os_str().to_string_lossy().as_ref());
+        let stream = FileRandomAccessStream::OpenAsync(&path, FileAccessMode::Read)
+            .map_err(|error| error.to_string())?
+            .join()
+            .map_err(|error| error.to_string())?;
+        let decoder = BitmapDecoder::CreateAsync(&stream)
+            .map_err(|error| error.to_string())?
+            .join()
+            .map_err(|error| error.to_string())?;
+        let bitmap = decoder
+            .GetSoftwareBitmapAsync()
+            .map_err(|error| error.to_string())?
+            .join()
+            .map_err(|error| error.to_string())?;
+        let engine =
+            OcrEngine::TryCreateFromUserProfileLanguages().map_err(|error| error.to_string())?;
+        let result = engine
+            .RecognizeAsync(&bitmap)
+            .map_err(|error| error.to_string())?
+            .join()
+            .map_err(|error| error.to_string())?;
+        let text = result
+            .Text()
+            .map_err(|error| error.to_string())?
+            .to_string();
+        let lines = result.Lines().map_err(|error| error.to_string())?;
+        let mut words = Vec::new();
+        for line_index in 0..lines.Size().map_err(|error| error.to_string())? {
+            let line = lines.GetAt(line_index).map_err(|error| error.to_string())?;
+            let line_words = line.Words().map_err(|error| error.to_string())?;
+            for word_index in 0..line_words.Size().map_err(|error| error.to_string())? {
+                let word = line_words
+                    .GetAt(word_index)
+                    .map_err(|error| error.to_string())?;
+                let bounds = word.BoundingRect().map_err(|error| error.to_string())?;
+                words.push(serde_json::json!({
+                    "text": word.Text().map_err(|error| error.to_string())?.to_string(),
+                    "confidence": serde_json::Value::Null,
+                    "bounds": {
+                        "x": bounds.X.max(0.0).round() as u32,
+                        "y": bounds.Y.max(0.0).round() as u32,
+                        "width": bounds.Width.max(0.0).round() as u32,
+                        "height": bounds.Height.max(0.0).round() as u32,
+                    },
+                    "line": line_index + 1,
+                    "word": word_index + 1,
+                }));
+            }
+        }
+        Ok(OcrOutput {
+            provider: "windows_media_ocr",
+            text,
+            words,
+        })
+    })();
+    if ro_initialized {
+        unsafe { RoUninitialize() };
+    }
+    result
 }
 
 fn run_tesseract_tsv(image_path: &PathBuf) -> Result<String, serde_json::Value> {

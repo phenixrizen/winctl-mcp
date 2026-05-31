@@ -119,7 +119,7 @@
 | `winctl-mcp` | [`macro.get`](MACRO_GET.md) | Get a promoted macro manifest by session macro ID or memory item ID. |
 | `winctl-mcp` | [`macro.promote`](MACRO_PROMOTE.md) | Promote an approved macro manifest into the session registry and optionally explicit memory storage. |
 | `winctl-mcp` | [`macro.export_result`](MACRO_EXPORT_RESULT.md) | Export a structured macro run result and artifact metadata by run ID. |
-| `winctl-mcp` | [`capture.ocr_region`](CAPTURE_OCR_REGION.md) | OCR an image region or freshly captured bound window. |
+| `winctl-mcp` | [`capture.ocr_region`](CAPTURE_OCR_REGION.md) | OCR an image region using Windows OCR or Tesseract fallback. |
 | `winctl-mcp` | [`capture.read_text`](CAPTURE_READ_TEXT.md) | Extract readable text from a bound window using UI Automation. |
 | `winctl-mcp` | [`capture.compare_baseline`](CAPTURE_COMPARE_BASELINE.md) | Compare an actual image against a baseline and write an optional diff artifact. |
 | `winctl-mcp` | [`capture.screenshot_window`](CAPTURE_SCREENSHOT_WINDOW.md) | Capture a screenshot of a bound window and return exact virtual desktop region metadata. |

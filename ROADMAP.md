@@ -166,9 +166,11 @@
 
 ## Phase 13: Assertion and Visual Verification Tools
 
-**Status:** Mostly complete.
+**Status:** Complete.
 
-**Audit comments:** Added `assert.element`, `assert.text_visible`, `assert.pixel_color`, `assert.window_count`, `assert.clipboard`, `capture.read_text`, `capture.ocr_region`, and `capture.compare_baseline`. `capture.ocr_region` now crops the requested region and runs a direct Tesseract OCR provider with word bounding boxes; an in-box Windows.Media.Ocr provider remains future work for systems without Tesseract. The visual/text providers are wired into macro/test checkpoint assertions.
+**Audit comments:** Added `assert.element`, `assert.text_visible`, `assert.pixel_color`, `assert.window_count`, `assert.clipboard`, `capture.read_text`, `capture.ocr_region`, and `capture.compare_baseline`. `capture.ocr_region` now crops the requested region, runs the in-box `Windows.Media.Ocr` provider first on Windows, and falls back to direct Tesseract TSV parsing with word bounding boxes when available. The visual/text providers are wired into macro/test checkpoint assertions.
+
+**Verification:** A Windows runtime integration test now OCRs known fixture text from `winctl-test-target` and asserts `capture.ocr_region` uses the `windows_media_ocr` provider.
 
 - Add first-class assertion tools that return structured pass/fail: `assert.element` (exists/enabled/value/name), `assert.text_visible`, `assert.pixel_color`, and `assert.window_count`.
 - Add `capture.ocr_region` and `capture.read_text` for text extraction from custom-rendered, canvas, or GDI-drawn UIs that the UIA tree cannot expose.

@@ -255,6 +255,29 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     );
     assert_eq!(scroll["outcome"]["after"]["offscreen"], false);
 
+    let ocr = harness
+        .call_tool(
+            "capture.ocr_region",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "x": 300,
+                "y": 170,
+                "width": 520,
+                "height": 160
+            }),
+        )
+        .await;
+    assert_ok("capture.ocr_region", &ocr);
+    assert_eq!(ocr["provider"], "windows_media_ocr");
+    let ocr_text = ocr["text"]
+        .as_str()
+        .expect("capture.ocr_region should return text")
+        .to_ascii_uppercase();
+    assert!(
+        ocr_text.contains("WINCTL") && ocr_text.contains("4829"),
+        "Windows.Media.Ocr should read known fixture text: {ocr:#}"
+    );
+
     let metrics = harness
         .call_tool("process.metrics", serde_json::json!({"pid": pid}))
         .await;
