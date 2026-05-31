@@ -22,6 +22,7 @@ mod windows_app {
 
     use windows::core::{Error, Result, PCWSTR};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::Diagnostics::Debug::RaiseFailFastException;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Controls::{
         InitCommonControlsEx, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX,
@@ -37,6 +38,7 @@ mod windows_app {
     };
 
     const TIMER_ID: usize = 1;
+    const CRASH_TIMER_ID: usize = 2;
     const ID_INVOKE_BUTTON: i32 = 101;
     const ID_EDIT_VALUE: i32 = 102;
     const ID_TOGGLE_CHECKBOX: i32 = 103;
@@ -53,6 +55,7 @@ mod windows_app {
         width: i32,
         height: i32,
         duration_ms: Option<u32>,
+        crash_after_ms: Option<u32>,
         ready_file: Option<PathBuf>,
         create_child: bool,
         child_title: String,
@@ -111,6 +114,11 @@ mod windows_app {
         if let Some(duration_ms) = config.duration_ms {
             unsafe {
                 SetTimer(Some(hwnd), TIMER_ID, duration_ms, None);
+            }
+        }
+        if let Some(crash_after_ms) = config.crash_after_ms {
+            unsafe {
+                SetTimer(Some(hwnd), CRASH_TIMER_ID, crash_after_ms, None);
             }
         }
 
@@ -358,8 +366,15 @@ mod windows_app {
                 LRESULT(0)
             }
             WM_TIMER => {
-                unsafe {
-                    let _ = DestroyWindow(hwnd);
+                if wparam.0 == CRASH_TIMER_ID {
+                    unsafe {
+                        RaiseFailFastException(None, None, 0);
+                    }
+                    std::process::abort();
+                } else {
+                    unsafe {
+                        let _ = DestroyWindow(hwnd);
+                    }
                 }
                 LRESULT(0)
             }
@@ -421,6 +436,7 @@ mod windows_app {
                 width: 640,
                 height: 420,
                 duration_ms: None,
+                crash_after_ms: None,
                 ready_file: None,
                 create_child: false,
                 child_title: "winctl integration child".into(),
@@ -438,6 +454,9 @@ mod windows_app {
                     "--height" => config.height = parse_i32(&mut args, "--height"),
                     "--duration-ms" => {
                         config.duration_ms = Some(parse_u32(&mut args, "--duration-ms"))
+                    }
+                    "--crash-after-ms" => {
+                        config.crash_after_ms = Some(parse_u32(&mut args, "--crash-after-ms"))
                     }
                     "--ready-file" => {
                         config.ready_file =
@@ -489,7 +508,7 @@ mod windows_app {
 
     fn print_help() {
         eprintln!(
-            "Usage: winctl-test-target [--title TITLE] [--class CLASS] [--x PX] [--y PX] [--width PX] [--height PX] [--duration-ms MS] [--ready-file PATH] [--create-child] [--automation-controls]"
+            "Usage: winctl-test-target [--title TITLE] [--class CLASS] [--x PX] [--y PX] [--width PX] [--height PX] [--duration-ms MS] [--crash-after-ms MS] [--ready-file PATH] [--create-child] [--automation-controls]"
         );
     }
 }

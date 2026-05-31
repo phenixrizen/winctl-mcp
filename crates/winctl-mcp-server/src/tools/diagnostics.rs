@@ -343,35 +343,21 @@ fn read_pipe(pipe: Option<impl Read>) -> Vec<u8> {
 
 #[cfg(windows)]
 fn windows_event_log_entries(process_name: Option<&str>, pid: Option<u32>) -> serde_json::Value {
-    let mut command = Command::new("wevtutil.exe");
-    command.args([
-        "qe",
-        "Application",
-        "/q:*[System[(Level=2)]]",
-        "/c:40",
-        "/rd:true",
-        "/f:Text",
-    ]);
-    match run_command_with_timeout(command, Some(5_000)) {
-        Ok(output) => {
-            let text = bounded_utf8(output.stdout);
-            let stderr = bounded_utf8(output.stderr);
-            let entries = event_log_blocks(&text.text, process_name, pid);
-            serde_json::json!({
-                "provider_enabled": true,
-                "source": "wevtutil",
-                "entries": entries,
-                "stderr": stderr,
-                "timed_out": output.timed_out,
-            })
-        }
+    match query_windows_event_log(process_name, pid) {
+        Ok(entries) => serde_json::json!({
+            "provider_enabled": true,
+            "source": "wevtapi",
+            "channel": "Application",
+            "entries": entries,
+        }),
         Err(error) => serde_json::json!({
             "provider_enabled": false,
-            "source": "wevtutil",
+            "source": "wevtapi",
+            "channel": "Application",
             "entries": [],
             "error": {
                 "code": "event_log_query_failed",
-                "message": format!("failed to run wevtutil.exe: {error}"),
+                "message": error,
             }
         }),
     }
@@ -391,31 +377,241 @@ fn windows_event_log_entries(process_name: Option<&str>, pid: Option<u32>) -> se
 }
 
 #[cfg(windows)]
-fn event_log_blocks(
-    raw: &str,
+fn query_windows_event_log(
     process_name: Option<&str>,
     pid: Option<u32>,
-) -> Vec<serde_json::Value> {
-    let process_name = process_name.map(|value| value.to_ascii_lowercase());
-    let pid_text = pid.map(|pid| pid.to_string());
-    raw.split("\r\n\r\n")
-        .chain(raw.split("\n\n"))
-        .map(str::trim)
-        .filter(|block| !block.is_empty())
-        .filter(|block| {
-            let lower = block.to_ascii_lowercase();
-            process_name
-                .as_ref()
-                .map(|name| lower.contains(name))
-                .unwrap_or(true)
-                || pid_text
-                    .as_ref()
-                    .map(|pid| lower.contains(pid))
-                    .unwrap_or(false)
+) -> Result<Vec<serde_json::Value>, String> {
+    use windows::core::{w, HRESULT};
+    use windows::Win32::Foundation::ERROR_NO_MORE_ITEMS;
+    use windows::Win32::System::EventLog::{
+        EvtClose, EvtNext, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection, EVT_HANDLE,
+    };
+
+    const MAX_EVENTS_TO_SCAN: usize = 80;
+    const MAX_MATCHES: usize = 10;
+
+    let query = unsafe {
+        EvtQuery(
+            None,
+            w!("Application"),
+            w!("*[System[(Level=1 or Level=2)]]"),
+            EvtQueryChannelPath.0 | EvtQueryReverseDirection.0,
+        )
+    }
+    .map_err(|error| error.to_string())?;
+
+    let mut entries = Vec::new();
+    let mut scanned = 0usize;
+    let mut handles = [0isize; 8];
+    loop {
+        let mut returned = 0u32;
+        match unsafe { EvtNext(query, &mut handles, 1_000, 0, &mut returned) } {
+            Ok(()) => {}
+            Err(error) if error.code() == HRESULT::from_win32(ERROR_NO_MORE_ITEMS.0) => break,
+            Err(error) => {
+                unsafe {
+                    let _ = EvtClose(query);
+                }
+                return Err(error.to_string());
+            }
+        }
+        if returned == 0 {
+            break;
+        }
+        for raw_handle in handles.iter().copied().take(returned as usize) {
+            scanned += 1;
+            let handle = EVT_HANDLE(raw_handle);
+            let entry = render_event_xml(handle)
+                .ok()
+                .and_then(|xml| structured_event_from_xml(&xml, process_name, pid));
+            unsafe {
+                let _ = EvtClose(handle);
+            }
+            if let Some(entry) = entry {
+                entries.push(entry);
+                if entries.len() >= MAX_MATCHES {
+                    break;
+                }
+            }
+            if scanned >= MAX_EVENTS_TO_SCAN {
+                break;
+            }
+        }
+        if entries.len() >= MAX_MATCHES || scanned >= MAX_EVENTS_TO_SCAN {
+            break;
+        }
+    }
+    unsafe {
+        let _ = EvtClose(query);
+    }
+    Ok(entries)
+}
+
+#[cfg(windows)]
+fn render_event_xml(
+    handle: windows::Win32::System::EventLog::EVT_HANDLE,
+) -> Result<String, String> {
+    use windows::Win32::System::EventLog::{EvtRender, EvtRenderEventXml};
+
+    let mut buffer_used = 0u32;
+    let mut property_count = 0u32;
+    let _ = unsafe {
+        EvtRender(
+            None,
+            handle,
+            EvtRenderEventXml.0,
+            0,
+            None,
+            &mut buffer_used,
+            &mut property_count,
+        )
+    };
+    if buffer_used == 0 {
+        return Err("EvtRender did not report an XML buffer size".into());
+    }
+    let mut buffer = vec![0u16; (buffer_used as usize).div_ceil(2)];
+    unsafe {
+        EvtRender(
+            None,
+            handle,
+            EvtRenderEventXml.0,
+            buffer_used,
+            Some(buffer.as_mut_ptr().cast()),
+            &mut buffer_used,
+            &mut property_count,
+        )
+    }
+    .map_err(|error| error.to_string())?;
+    let len = buffer
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(buffer.len());
+    Ok(String::from_utf16_lossy(&buffer[..len]))
+}
+
+#[cfg(windows)]
+fn structured_event_from_xml(
+    xml: &str,
+    process_name: Option<&str>,
+    pid: Option<u32>,
+) -> Option<serde_json::Value> {
+    if !event_matches_filter(xml, process_name, pid) {
+        return None;
+    }
+    structured_event_from_xml_unfiltered(xml).ok()
+}
+
+#[cfg(any(windows, test))]
+fn structured_event_from_xml_unfiltered(xml: &str) -> Result<serde_json::Value, String> {
+    let document = roxmltree::Document::parse(xml).map_err(|error| error.to_string())?;
+    let root = document.root_element();
+    let system = root
+        .children()
+        .find(|node| node.tag_name().name() == "System")
+        .ok_or_else(|| "event XML did not include a System node".to_owned())?;
+    let provider = system
+        .children()
+        .find(|node| node.tag_name().name() == "Provider")
+        .map(|node| {
+            serde_json::json!({
+                "name": node.attribute("Name"),
+                "guid": node.attribute("Guid"),
+            })
         })
-        .take(10)
-        .map(|block| serde_json::json!({"text": block}))
-        .collect()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let execution = system
+        .children()
+        .find(|node| node.tag_name().name() == "Execution")
+        .map(|node| {
+            serde_json::json!({
+                "process_id": node.attribute("ProcessID").and_then(parse_u32),
+                "thread_id": node.attribute("ThreadID").and_then(parse_u32),
+            })
+        })
+        .unwrap_or_else(|| serde_json::json!({}));
+    let event_data = root
+        .descendants()
+        .filter(|node| node.tag_name().name() == "Data")
+        .enumerate()
+        .map(|(index, node)| {
+            serde_json::json!({
+                "index": index,
+                "name": node.attribute("Name"),
+                "value": node.text().unwrap_or_default(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "system": {
+            "provider": provider,
+            "event_id": child_text(&system, "EventID").and_then(|value| parse_u32(&value)),
+            "qualifiers": system.children()
+                .find(|node| node.tag_name().name() == "EventID")
+                .and_then(|node| node.attribute("Qualifiers"))
+                .and_then(parse_u32),
+            "level": child_text(&system, "Level").and_then(|value| parse_u32(&value)),
+            "task": child_text(&system, "Task").and_then(|value| parse_u32(&value)),
+            "opcode": child_text(&system, "Opcode").and_then(|value| parse_u32(&value)),
+            "keywords": child_text(&system, "Keywords"),
+            "time_created": system.children()
+                .find(|node| node.tag_name().name() == "TimeCreated")
+                .and_then(|node| node.attribute("SystemTime"))
+                .map(ToOwned::to_owned),
+            "event_record_id": child_text(&system, "EventRecordID").and_then(|value| parse_u64(&value)),
+            "channel": child_text(&system, "Channel"),
+            "computer": child_text(&system, "Computer"),
+            "execution": execution,
+        },
+        "event_data": event_data,
+        "raw_xml": xml,
+    }))
+}
+
+#[cfg(any(windows, test))]
+fn child_text(parent: &roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
+    parent
+        .children()
+        .find(|node| node.tag_name().name() == name)
+        .and_then(|node| node.text())
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(any(windows, test))]
+fn event_matches_filter(xml: &str, process_name: Option<&str>, pid: Option<u32>) -> bool {
+    let process_name = process_name.map(|value| value.to_ascii_lowercase());
+    let pid_values = pid
+        .map(|pid| {
+            vec![
+                pid.to_string(),
+                format!("0x{pid:x}"),
+                format!("0x{pid:X}"),
+                format!("{pid:x}"),
+                format!("{pid:X}"),
+            ]
+        })
+        .unwrap_or_default();
+    if process_name.is_none() && pid_values.is_empty() {
+        return true;
+    }
+    let lower = xml.to_ascii_lowercase();
+    process_name
+        .as_ref()
+        .map(|name| lower.contains(name))
+        .unwrap_or(false)
+        || pid_values
+            .iter()
+            .any(|pid| lower.contains(&pid.to_ascii_lowercase()))
+}
+
+#[cfg(any(windows, test))]
+fn parse_u32(value: &str) -> Option<u32> {
+    value.parse().ok()
+}
+
+#[cfg(any(windows, test))]
+fn parse_u64(value: &str) -> Option<u64> {
+    value.parse().ok()
 }
 
 #[cfg(windows)]
@@ -590,4 +786,44 @@ fn now_unix_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_structured_event_xml() {
+        let xml = r#"
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System>
+    <Provider Name="Application Error" />
+    <EventID Qualifiers="0">1000</EventID>
+    <Level>2</Level>
+    <Task>100</Task>
+    <TimeCreated SystemTime="2026-05-31T12:34:56.0000000Z" />
+    <EventRecordID>42</EventRecordID>
+    <Channel>Application</Channel>
+    <Computer>desktop</Computer>
+    <Execution ProcessID="1234" ThreadID="5678" />
+  </System>
+  <EventData>
+    <Data Name="AppName">winctl-test-target.exe</Data>
+    <Data Name="ProcessId">0x4d2</Data>
+  </EventData>
+</Event>
+"#;
+
+        let event = structured_event_from_xml_unfiltered(xml).expect("event XML should parse");
+
+        assert_eq!(event["system"]["provider"]["name"], "Application Error");
+        assert_eq!(event["system"]["event_id"], 1000);
+        assert_eq!(event["system"]["execution"]["process_id"], 1234);
+        assert_eq!(event["event_data"][0]["name"], "AppName");
+        assert!(event_matches_filter(
+            xml,
+            Some("winctl-test-target.exe"),
+            Some(1234)
+        ));
+    }
 }

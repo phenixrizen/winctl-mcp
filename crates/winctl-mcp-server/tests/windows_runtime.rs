@@ -298,6 +298,26 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
         "process.metrics should report a nonzero handle count: {metrics:#}"
     );
 
+    let crash_pid = launch_crashing_target(&target_exe).await;
+    let crash_report = harness.wait_for_crash_report_event(crash_pid).await;
+    assert_eq!(crash_report["event_log"]["source"], "wevtapi");
+    let crash_entries = crash_report["event_log"]["entries"]
+        .as_array()
+        .expect("crash_report should return structured event log entries");
+    assert!(
+        !crash_entries.is_empty(),
+        "crash_report should find an Application error for deliberately crashed test process: {crash_report:#}"
+    );
+    assert!(
+        crash_entries.iter().any(|entry| entry["raw_xml"]
+            .as_str()
+            .map(|xml| xml
+                .to_ascii_lowercase()
+                .contains("winctl-test-target"))
+            .unwrap_or(false)),
+        "structured crash_report entry should include the crashed process identity: {crash_report:#}"
+    );
+
     send_ctrl_alt_esc();
     let emergency = harness.wait_for_emergency_stop().await;
     assert_eq!(emergency["control"]["emergency_stop_active"], true);
@@ -431,6 +451,28 @@ impl McpHarness {
                 "timed out waiting for Ctrl+Alt+Esc emergency stop; last state: {state:#}"
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn wait_for_crash_report_event(&mut self, pid: u32) -> Value {
+        let started = std::time::Instant::now();
+        loop {
+            let report = self
+                .call_tool("diagnostics.crash_report", serde_json::json!({"pid": pid}))
+                .await;
+            assert_ok("diagnostics.crash_report", &report);
+            if report["event_log"]["entries"]
+                .as_array()
+                .map(|entries| !entries.is_empty())
+                .unwrap_or(false)
+            {
+                return report;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "timed out waiting for crash_report Event Log entry; last report: {report:#}"
+            );
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
@@ -586,6 +628,44 @@ fn tool_payload(tool: &str, response: Value) -> Value {
         }
     }
     panic!("{tool} response did not contain JSON tool payload: {response:#}");
+}
+
+async fn launch_crashing_target(target_exe: &PathBuf) -> u32 {
+    let mut child = Command::new(target_exe)
+        .arg("--title")
+        .arg("winctl crash target")
+        .arg("--class")
+        .arg("WinctlCrashTarget")
+        .arg("--width")
+        .arg("360")
+        .arg("--height")
+        .arg("220")
+        .arg("--crash-after-ms")
+        .arg("500")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("crashing test target should start");
+    let pid = child.id();
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .expect("crashing test target wait should not fail")
+        {
+            assert!(
+                !status.success(),
+                "crashing test target should exit with a failure status"
+            );
+            return pid;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "crashing test target did not exit"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 fn parse_first_sse_json(text: &str) -> Value {

@@ -182,7 +182,9 @@
 
 **Status:** Mostly complete.
 
-**Audit comments:** Added direct allowlisted `build.run`, `process.metrics`, `diagnostics.crash_report`, and `test.report_export`. `build.run` now terminates timed-out child processes, `process.metrics` uses native Windows CPU/memory/handle/GDI/USER counters, and `diagnostics.crash_report` queries recent Application errors plus WER paths. Native dialog/UAC handling and run-video capture remain open work.
+**Audit comments:** Added direct allowlisted `build.run`, `process.metrics`, `diagnostics.crash_report`, and `test.report_export`. `build.run` now terminates timed-out child processes, `process.metrics` uses native Windows CPU/memory/handle/GDI/USER counters, and `diagnostics.crash_report` queries recent Application errors through the native Event Log API (`EvtQuery`/`EvtNext`/`EvtRender`) plus WER paths. Native dialog/UAC handling and run-video capture remain open work.
+
+**Verification:** A Windows runtime integration test now deliberately crashes `winctl-test-target` and asserts `diagnostics.crash_report` returns a structured `wevtapi` Application error entry for the crashed process.
 
 **Verification:** A Windows runtime integration test now asserts `process.metrics` returns nonzero working-set and handle counters for a launched test process.
 

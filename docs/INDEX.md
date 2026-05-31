@@ -24,7 +24,7 @@
 | `winctl-mcp` | [`control.notify`](CONTROL_NOTIFY.md) | Record a pending desktop-control notification event for tray or dashboard display. |
 | `winctl-mcp` | [`control.revoke`](CONTROL_REVOKE.md) | Emergency-stop desktop control and reject future sensitive actions until rearmed. |
 | `winctl-mcp` | [`control.emergency_stop`](CONTROL_EMERGENCY_STOP.md) | Alias for control.revoke. |
-| `winctl-mcp` | [`diagnostics.crash_report`](DIAGNOSTICS_CRASH_REPORT.md) | Collect process, window, screenshot, and platform diagnostic context. |
+| `winctl-mcp` | [`diagnostics.crash_report`](DIAGNOSTICS_CRASH_REPORT.md) | Collect process, window, screenshot, Event Log, and WER diagnostic context. |
 | `winctl-mcp` | [`filesystem.read`](FILESYSTEM_READ.md) | Read a UTF-8 file from an allowlisted filesystem root with bounded size. |
 | `winctl-mcp` | [`filesystem.list`](FILESYSTEM_LIST.md) | List files and directories beneath an allowlisted filesystem root. |
 | `winctl-mcp` | [`filesystem.search`](FILESYSTEM_SEARCH.md) | Search file names and bounded UTF-8 file content beneath an allowlisted filesystem root. |

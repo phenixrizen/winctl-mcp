@@ -26,14 +26,14 @@ checkpoint assertions, and completed the native control notification surfaces.
 | A2 Active-control overlay/border | **DONE** | `control.rs` shows a click-through, topmost layered overlay around the validated target HWND during active control and clears it on cooldown/revoke. The overlay thread acknowledges show/hide so responses do not report queued work as visible state. |
 | B1 OCR backend | **DONE** | `assertions.rs` crops region → tries in-box `Windows.Media.Ocr` first on Windows → falls back to `tesseract` TSV parsing when available. |
 | B2 `process.metrics` | **DONE** | `GetProcessMemoryInfo`, `GetProcessHandleCount`, `GetGuiResources`, `GetProcessTimes` in `winctl/src/process.rs`. |
-| B3 `crash_report` Event Log + WER | **DONE** | Shells `wevtutil.exe` for Application errors; scans `%LOCALAPPDATA%\CrashDumps` + WER `ReportQueue` in `diagnostics.rs`. |
+| B3 `crash_report` Event Log + WER | **DONE** | Uses native Event Log APIs (`EvtQuery`/`EvtNext`/`EvtRender`) for structured Application error entries; scans `%LOCALAPPDATA%\CrashDumps` + WER `ReportQueue`/`ReportArchive` in `diagnostics.rs`. |
 | C1 CDP WebSocket | **DONE** | `tokio-tungstenite` `connect_async` → `Runtime.evaluate`, `DOMSnapshot.captureSnapshot`, `Accessibility.getFullAXTree`, `CSS.getComputedStyleForNode` in `web.rs`. |
 | R2-1 Windows runtime integration | **DONE** | Added Windows-native MCP integration coverage that launches `winctl-test-target`, binds by PID/HWND, exercises `uia.invoke/set_value/get_value/toggle/select/expand_collapse/range_value/scroll_into_view/set_focus`, reads `process.metrics`, and verifies the Ctrl+Alt+Esc emergency-stop hotkey. Verified locally with `cargo test --workspace --target x86_64-pc-windows-msvc --test windows_runtime -- --nocapture`; GNU compatibility was also checked from Windows cargo. Added a `windows-latest` CI job as the backstop. |
 | R2-6 `process.kill` tree termination | **DONE** | `process.kill kill_tree=true` now snapshots the current process tree, validates the tracked root identity, terminates descendants deepest-first, terminates the root last, and still refuses untracked PIDs/launch IDs. Unit coverage verifies descendant collection and existing ownership rejection paths. |
 | R2-7 Macro/test checkpoint assertions | **DONE** | `macro.assert_image_checkpoint` now calls the existing baseline comparison provider and fails the macro on visual mismatch. `macro.assert_text_checkpoint` now compares literal text, OCR output, or `capture.read_text` output and fails the macro on missing expected text. Unit coverage verifies both the successful image checkpoint path and failing text checkpoint path. |
 
-**The remaining work is now focused on structured Event Log querying and the last
-UIA selection/toggle refinements.** Re-prioritized list:
+**The remaining work is now focused on the last UIA selection/toggle refinements.**
+Re-prioritized list:
 
 1. **R2-1 — Windows runtime CI + integration tests: DONE.** The repository now has
    a live Windows MCP integration test that starts the HTTP server, launches
@@ -51,8 +51,11 @@ UIA selection/toggle refinements.** Re-prioritized list:
    reports per-provider diagnostics when no provider succeeds. The Windows runtime
    integration test OCRs known `winctl-test-target` text and asserts the
    `windows_media_ocr` provider was used.
-4. **R2-4 — Harden `crash_report`.** It parses `wevtutil.exe` text output; migrate
-   to the `EvtQuery`/`EvtNext` API for structured, robust results.
+4. **R2-4 — Harden `crash_report`: DONE.** `diagnostics.crash_report` now uses
+   native Event Log APIs instead of shelling `wevtutil.exe`, renders event XML into
+   structured fields, and keeps the existing WER discovery. The Windows runtime
+   integration test deliberately crashes `winctl-test-target` and asserts a
+   structured `wevtapi` Application error entry is returned.
 5. **R2-5 — UIA refinements.** Desired-state idempotent `uia.toggle` and
    add/remove modes for `uia.select` (roadmap-noted).
 6. **R2-6 — `process.kill` `kill_tree` support: DONE.** The server now terminates
@@ -241,11 +244,13 @@ for a live PID; values track a deliberately leaking test process upward.
 
 #### B3. `diagnostics.crash_report` — Event Log + WER
 **File:** `crates/winctl-mcp-server/src/tools/diagnostics.rs`.
-Implement the two empty providers: query Application/System logs via `EvtQuery`
-(filter by the target process/time window) and discover WER dumps under
-`%LOCALAPPDATA%\CrashDumps` and the WER `ReportQueue`. **Acceptance:** a crashed
-test process yields at least one event entry and/or dump path alongside the
-existing screenshot.
+**Round-2 status:** Complete. `diagnostics.crash_report` uses `EvtQuery`,
+`EvtNext`, and `EvtRender` against the Application log for recent Error/Critical
+events, renders structured event fields from XML, filters by target process
+identity where available, and discovers WER dumps under `%LOCALAPPDATA%\CrashDumps`
+plus WER `ReportQueue`/`ReportArchive`. The Windows runtime integration test
+deliberately crashes `winctl-test-target` and verifies a structured Event Log
+entry is returned.
 
 ### TIER C — bigger lift
 
@@ -279,8 +284,7 @@ returns a JS expression result from a loopback Chrome target.
 
 ## 5. Suggested order
 
-1. R2-4 / B3: replace `wevtutil.exe` parsing with Event Log APIs.
-2. R2-5 / A1 refinement: add desired-state `uia.toggle` and add/remove modes for
+1. R2-5 / A1 refinement: add desired-state `uia.toggle` and add/remove modes for
    `uia.select`.
-3. Keep broadening the Windows runtime integration test as each native provider is
+2. Keep broadening the Windows runtime integration test as each native provider is
    completed.
