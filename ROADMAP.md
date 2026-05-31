@@ -136,9 +136,9 @@
 
 **Status:** Complete.
 
-**Audit comments:** Implemented `control.state`, `control.arm`, `control.consent`, `control.notify`, `control.revoke`, and `control.emergency_stop`, plus dashboard control indicators, sensitive-tool gate checks, a Windows `Ctrl+Alt+Esc` global emergency-stop hotkey, a WinRT native toast before the first sensitive control action in a session, and a click-through topmost overlay around the validated target HWND while control is active. Notification, toast, overlay, countdown, revoke, and emergency-stop events are all recorded in the control event stream.
+**Audit comments:** Implemented `control.state`, `control.arm`, `control.consent`, `control.notify`, `control.revoke`, and `control.emergency_stop`, plus dashboard control indicators, sensitive-tool gate checks, a Windows `Ctrl+Alt+Esc` global emergency-stop hotkey, a WinRT native toast before the first sensitive control action in a session, and a click-through topmost overlay around the validated target HWND while control is active. Notification, toast, overlay, countdown, revoke, and emergency-stop events are recorded in both the fast in-memory event stream and an append-only JSONL audit log under the capture/state directory. `control.state` exposes recent persisted audit entries and any audit-log write/read diagnostics.
 
-**Verification:** A Windows runtime integration test now verifies the first-action notification path, native toast attempt, overlay show acknowledgment, overlay clear event, and global Ctrl+Alt+Esc emergency-stop hotkey against a live MCP server session.
+**Verification:** A Windows runtime integration test now verifies the first-action notification path, native toast attempt, overlay show acknowledgment, overlay clear event, global Ctrl+Alt+Esc emergency-stop hotkey, and durable audit-log persistence across MCP server restart against live MCP server sessions.
 
 - Add tray and dashboard control-state indicators for idle, armed, warning, controlling, blocked, and revoked states.
 - Show a native Windows toast before the first focus/click/type/control action in a session, including target app, PID/HWND, requesting client/session when available, and a short cancelable countdown.

@@ -1,4 +1,7 @@
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use std::sync::{mpsc, OnceLock};
@@ -13,6 +16,9 @@ use crate::{
 };
 
 const MAX_EVENTS: usize = 200;
+const CONTROL_AUDIT_SCHEMA_VERSION: u32 = 1;
+const CONTROL_AUDIT_FILE_NAME: &str = "control-audit.jsonl";
+const RECENT_AUDIT_ENTRIES: usize = 200;
 const DEFAULT_ARM_MS: u64 = 5 * 60 * 1000;
 const FIRST_CONTROL_COUNTDOWN_MS: u64 = 1_500;
 static HOTKEY_STARTED: AtomicBool = AtomicBool::new(false);
@@ -44,6 +50,12 @@ pub struct ControlEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlAuditRecord {
+    pub schema_version: u32,
+    pub event: ControlEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ControlRuntimeState {
     pub status: ControlStatus,
     pub session_id: Option<String>,
@@ -58,6 +70,10 @@ pub struct ControlRuntimeState {
     pub active_action_kind: Option<String>,
     pub next_event_id: u64,
     pub events: VecDeque<ControlEvent>,
+    #[serde(skip)]
+    pub audit_log_path: Option<PathBuf>,
+    pub audit_last_write_error: Option<String>,
+    pub audit_last_write_error_unix_ms: Option<u64>,
 }
 
 impl Default for ControlRuntimeState {
@@ -76,6 +92,37 @@ impl Default for ControlRuntimeState {
             active_action_kind: None,
             next_event_id: 1,
             events: VecDeque::new(),
+            audit_log_path: None,
+            audit_last_write_error: None,
+            audit_last_write_error_unix_ms: None,
+        }
+    }
+}
+
+pub fn configure_audit_log(runtime: &Arc<Mutex<ControlRuntimeState>>, capture_dir: &Path) {
+    let path = capture_dir.join(CONTROL_AUDIT_FILE_NAME);
+    let high_watermark = audit_high_watermark(&path);
+    let mut runtime = runtime.lock().expect("control mutex poisoned");
+    runtime.audit_log_path = Some(path.clone());
+    match high_watermark {
+        Ok(max_id) => {
+            runtime.next_event_id = runtime.next_event_id.max(max_id.saturating_add(1));
+            runtime.audit_last_write_error = None;
+            runtime.audit_last_write_error_unix_ms = None;
+            tracing::info!(
+                path = %path.display(),
+                next_event_id = runtime.next_event_id,
+                "control audit log configured"
+            );
+        }
+        Err(error) => {
+            runtime.audit_last_write_error = Some(error.clone());
+            runtime.audit_last_write_error_unix_ms = Some(now_unix_ms());
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "failed to read existing control audit log high watermark"
+            );
         }
     }
 }
@@ -956,6 +1003,7 @@ fn snapshot_locked(runtime: &ControlRuntimeState) -> serde_json::Value {
         "active_tool": runtime.active_tool,
         "active_action_kind": runtime.active_action_kind,
         "events": runtime.events,
+        "audit_log": audit_snapshot(runtime),
     })
 }
 
@@ -985,7 +1033,141 @@ fn push_event(
     while runtime.events.len() > MAX_EVENTS {
         runtime.events.pop_front();
     }
+    append_audit_event(runtime, &event);
     event
+}
+
+fn audit_snapshot(runtime: &ControlRuntimeState) -> serde_json::Value {
+    let (recent_entries, recent_read_error) = match runtime.audit_log_path.as_deref() {
+        Some(path) => match read_recent_audit_records(path, RECENT_AUDIT_ENTRIES) {
+            Ok(entries) => (entries, None),
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "failed to read recent control audit entries"
+                );
+                (Vec::new(), Some(error))
+            }
+        },
+        None => (Vec::new(), None),
+    };
+    serde_json::json!({
+        "enabled": runtime.audit_log_path.is_some(),
+        "format": "jsonl",
+        "path": runtime.audit_log_path.as_ref().map(|path| path.display().to_string()),
+        "last_write_error": runtime.audit_last_write_error,
+        "last_write_error_unix_ms": runtime.audit_last_write_error_unix_ms,
+        "recent_persisted_entries": recent_entries,
+        "recent_persisted_error": recent_read_error,
+    })
+}
+
+fn append_audit_event(runtime: &mut ControlRuntimeState, event: &ControlEvent) {
+    let Some(path) = runtime.audit_log_path.clone() else {
+        return;
+    };
+    let record = ControlAuditRecord {
+        schema_version: CONTROL_AUDIT_SCHEMA_VERSION,
+        event: event.clone(),
+    };
+    match append_audit_record(&path, &record) {
+        Ok(()) => {
+            runtime.audit_last_write_error = None;
+            runtime.audit_last_write_error_unix_ms = None;
+        }
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                event_id = event.id,
+                error = %error,
+                "failed to append control audit event"
+            );
+            runtime.audit_last_write_error = Some(error);
+            runtime.audit_last_write_error_unix_ms = Some(now_unix_ms());
+        }
+    }
+}
+
+fn append_audit_record(path: &Path, record: &ControlAuditRecord) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create control audit directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let line = serde_json::to_string(record)
+        .map_err(|error| format!("failed to serialize control audit record: {error}"))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| {
+            format!(
+                "failed to open control audit log {}: {error}",
+                path.display()
+            )
+        })?;
+    file.write_all(line.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+        .map_err(|error| {
+            format!(
+                "failed to write control audit log {}: {error}",
+                path.display()
+            )
+        })
+}
+
+fn audit_high_watermark(path: &Path) -> Result<u64, String> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let records = read_recent_audit_records(path, usize::MAX)?;
+    Ok(records
+        .iter()
+        .map(|record| record.event.id)
+        .max()
+        .unwrap_or(0))
+}
+
+fn read_recent_audit_records(path: &Path, limit: usize) -> Result<Vec<ControlAuditRecord>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = std::fs::File::open(path).map_err(|error| {
+        format!(
+            "failed to open control audit log {}: {error}",
+            path.display()
+        )
+    })?;
+    let reader = BufReader::new(file);
+    let mut records = VecDeque::new();
+    for (index, line) in reader.lines().enumerate() {
+        let line = line.map_err(|error| {
+            format!(
+                "failed to read control audit log {} at line {}: {error}",
+                path.display(),
+                index + 1
+            )
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record = serde_json::from_str::<ControlAuditRecord>(&line).map_err(|error| {
+            format!(
+                "failed to parse control audit log {} at line {}: {error}",
+                path.display(),
+                index + 1
+            )
+        })?;
+        records.push_back(record);
+        while records.len() > limit {
+            records.pop_front();
+        }
+    }
+    Ok(records.into_iter().collect())
 }
 
 #[cfg(windows)]

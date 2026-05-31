@@ -148,6 +148,7 @@ impl AppState {
     ) -> Self {
         let policy = policy.with_runtime_roots(&capture_dir);
         let control_runtime = Arc::new(Mutex::new(tools::control::ControlRuntimeState::default()));
+        tools::control::configure_audit_log(&control_runtime, &capture_dir);
         tools::control::start_emergency_hotkey(control_runtime.clone());
         Self {
             bound: Arc::new(Mutex::new(HashMap::new())),

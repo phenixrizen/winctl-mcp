@@ -1,7 +1,8 @@
 #![cfg(windows)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -10,8 +11,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL, VK_ESCAPE, VK_MENU,
 };
 
+static WINDOWS_RUNTIME_TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
+    let _guard = runtime_test_lock().await;
     if std::env::var_os("WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION").is_some() {
         eprintln!("skipping Windows runtime integration because WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION is set");
         return;
@@ -398,6 +402,71 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     assert_eq!(kill["exited"], true);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_control_audit_log_persists_across_restart() {
+    let _guard = runtime_test_lock().await;
+    if std::env::var_os("WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION").is_some() {
+        eprintln!("skipping Windows runtime integration because WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION is set");
+        return;
+    }
+
+    let server_exe = server_exe_path();
+    assert!(
+        server_exe.exists(),
+        "winctl-mcp-server exe does not exist at {}",
+        server_exe.display()
+    );
+    let capture_dir = temp_path("winctl-audit-captures");
+    std::fs::create_dir_all(&capture_dir).expect("audit capture dir should be created");
+    let marker = format!(
+        "audit persistence marker {}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos()
+    );
+
+    {
+        let mut harness = McpHarness::start_with_capture_dir(&server_exe, Some(&capture_dir)).await;
+        harness.initialize().await;
+        let arm = harness
+            .call_tool(
+                "control.arm",
+                serde_json::json!({
+                    "session_id": "windows-audit-persistence-test",
+                    "allow_for_ms": 10000,
+                    "reason": marker
+                }),
+            )
+            .await;
+        assert_ok("control.arm audit", &arm);
+
+        let state = harness
+            .call_tool("control.state", serde_json::json!({}))
+            .await;
+        assert_ok("control.state audit", &state);
+        assert_audit_entry(&state, "armed", &marker);
+        let audit_path = state["control"]["audit_log"]["path"]
+            .as_str()
+            .expect("control.state should return audit log path");
+        assert!(
+            PathBuf::from(audit_path).exists(),
+            "control audit log should exist at {audit_path}"
+        );
+    }
+
+    {
+        let mut restarted =
+            McpHarness::start_with_capture_dir(&server_exe, Some(&capture_dir)).await;
+        restarted.initialize().await;
+        let state = restarted
+            .call_tool("control.state", serde_json::json!({}))
+            .await;
+        assert_ok("control.state restarted audit", &state);
+        assert_audit_entry(&state, "armed", &marker);
+    }
+}
+
 struct McpHarness {
     child: Child,
     client: reqwest::Client,
@@ -407,12 +476,17 @@ struct McpHarness {
 }
 
 impl McpHarness {
-    async fn start(server_exe: &PathBuf) -> Self {
+    async fn start(server_exe: &Path) -> Self {
+        Self::start_with_capture_dir(server_exe, None).await
+    }
+
+    async fn start_with_capture_dir(server_exe: &Path, capture_dir: Option<&Path>) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port should bind");
         let addr = listener.local_addr().expect("local addr should resolve");
         drop(listener);
         let log_path = temp_path("winctl-windows-runtime.log");
-        let child = Command::new(server_exe)
+        let mut command = Command::new(server_exe);
+        command
             .arg("serve")
             .arg("--transport")
             .arg("http")
@@ -423,9 +497,11 @@ impl McpHarness {
             .env("RUST_LOG", "info")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("server should start");
+            .stderr(Stdio::piped());
+        if let Some(capture_dir) = capture_dir {
+            command.arg("--capture-dir").arg(capture_dir);
+        }
+        let child = command.spawn().expect("server should start");
         let harness = Self {
             child,
             client: reqwest::Client::builder()
@@ -590,6 +666,13 @@ impl McpHarness {
     }
 }
 
+async fn runtime_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    WINDOWS_RUNTIME_TEST_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
+
 impl Drop for McpHarness {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -649,6 +732,22 @@ fn assert_control_event(value: &Value, kind: &str) {
     assert!(
         events.iter().any(|event| event["kind"] == kind),
         "control events should contain {kind}: {value:#}"
+    );
+}
+
+fn assert_audit_entry(value: &Value, kind: &str, message_contains: &str) {
+    let entries = value["control"]["audit_log"]["recent_persisted_entries"]
+        .as_array()
+        .expect("control.state should return persisted audit entries");
+    assert!(
+        entries.iter().any(|record| {
+            record["event"]["kind"] == kind
+                && record["event"]["message"]
+                    .as_str()
+                    .map(|message| message.contains(message_contains))
+                    .unwrap_or(false)
+        }),
+        "control audit entries should contain {kind:?} with {message_contains:?}: {value:#}"
     );
 }
 
