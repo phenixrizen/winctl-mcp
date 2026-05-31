@@ -12,4 +12,5 @@ pub mod recorder;
 pub mod system;
 pub mod tests;
 pub mod uia;
+pub mod web;
 pub mod windows;

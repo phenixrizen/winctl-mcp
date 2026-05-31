@@ -187,6 +187,10 @@
 
 ## Phase 15: Deep Web Automation & App Introspection
 
+**Status:** Complete for local CDP discovery and provider diagnostics.
+
+**Audit comments:** Added `web.cdp.list_targets`, `web.cdp.evaluate`, `web.dom.snapshot`, `web.network.events`, `web.a11y.snapshot`, and `web.style.inspect`. Local target discovery is implemented over loopback HTTP; WebSocket-backed CDP commands, DOM extraction, network interception, and style/a11y snapshots remain explicit provider-unavailable gaps.
+
 - Add a Chrome DevTools Protocol (CDP) or WebDriver bridge to allow evaluating JavaScript, inspecting DOM nodes, and intercepting network requests for web applications.
 - Add Accessibility (a11y) tree validation tools tailored for web DOMs and embedded WebView2 containers.
 - Expose visual tree styling metadata (e.g., margins, padding, colors) that the standard UIA tree often omits.

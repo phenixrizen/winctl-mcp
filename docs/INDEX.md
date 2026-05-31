@@ -65,6 +65,12 @@
 | `winctl-mcp` | [`uia.range_value`](UIA_RANGE_VALUE.md) | Set a numeric value on a revalidated UI Automation range element when supported. |
 | `winctl-mcp` | [`uia.scroll_into_view`](UIA_SCROLL_INTO_VIEW.md) | Scroll a revalidated UI Automation element into view when supported. |
 | `winctl-mcp` | [`uia.wait_for_element`](UIA_WAIT_FOR_ELEMENT.md) | Wait for a UI Automation selector or element reference to resolve in fresh snapshots. |
+| `winctl-mcp` | [`web.cdp.list_targets`](WEB_CDP_LIST_TARGETS.md) | List local Chrome DevTools Protocol targets from a debugger HTTP endpoint. |
+| `winctl-mcp` | [`web.cdp.evaluate`](WEB_CDP_EVALUATE.md) | Prepare a CDP JavaScript evaluation request and return target diagnostics. |
+| `winctl-mcp` | [`web.dom.snapshot`](WEB_DOM_SNAPSHOT.md) | Return CDP DOM snapshot provider diagnostics for a debugger target. |
+| `winctl-mcp` | [`web.network.events`](WEB_NETWORK_EVENTS.md) | Return CDP network-event provider diagnostics for a debugger target. |
+| `winctl-mcp` | [`web.a11y.snapshot`](WEB_A11Y_SNAPSHOT.md) | Return accessibility-tree provider diagnostics for a browser or WebView target. |
+| `winctl-mcp` | [`web.style.inspect`](WEB_STYLE_INSPECT.md) | Return style-inspection provider diagnostics for a browser or WebView target. |
 | `winctl-mcp` | [`windows.list`](WINDOWS_LIST.md) | List visible and discoverable top-level Windows windows with HWND, PID, executable, class, title, and virtual desktop geometry. |
 | `winctl-mcp` | [`windows.find`](WINDOWS_FIND.md) | Find windows matching a selector and return scored diagnostics without binding or controlling them. |
 | `winctl-mcp` | [`windows.bind`](WINDOWS_BIND.md) | Bind one strict window target by stable identity before any control action. |

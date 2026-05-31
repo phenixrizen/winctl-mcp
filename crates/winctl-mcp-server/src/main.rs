@@ -876,6 +876,28 @@ pub struct TestReportExportRequest {
     pub output_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct CdpEndpointRequest {
+    pub debugger_url: String,
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct CdpEvaluateRequest {
+    pub debugger_url: String,
+    pub target_id: Option<String>,
+    pub expression: String,
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct WebIntrospectionRequest {
+    pub debugger_url: String,
+    pub target_id: Option<String>,
+    pub selector: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ControlArmRequest {
     pub session_id: Option<String>,
@@ -2508,6 +2530,78 @@ impl WinctlMcpServer {
     ) -> Json<serde_json::Value> {
         let request = request.0;
         Json(tools::network::network_scrape(request, self.state.policy.allow_private_network).await)
+    }
+
+    #[tool(
+        name = "web.cdp.list_targets",
+        description = "List local Chrome DevTools Protocol targets from a debugger HTTP endpoint."
+    )]
+    pub async fn web_cdp_list_targets(
+        &self,
+        request: Parameters<CdpEndpointRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        Json(tools::web::cdp_list_targets(request).await)
+    }
+
+    #[tool(
+        name = "web.cdp.evaluate",
+        description = "Prepare a CDP JavaScript evaluation request and return target/WebSocket diagnostics when the WebSocket bridge is unavailable."
+    )]
+    pub async fn web_cdp_evaluate(
+        &self,
+        request: Parameters<CdpEvaluateRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        Json(tools::web::cdp_evaluate(request).await)
+    }
+
+    #[tool(
+        name = "web.dom.snapshot",
+        description = "Return CDP DOM snapshot provider diagnostics for a local debugger target."
+    )]
+    pub async fn web_dom_snapshot(
+        &self,
+        request: Parameters<WebIntrospectionRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        Json(tools::web::dom_snapshot(request).await)
+    }
+
+    #[tool(
+        name = "web.network.events",
+        description = "Return CDP network-event provider diagnostics for a local debugger target."
+    )]
+    pub async fn web_network_events(
+        &self,
+        request: Parameters<WebIntrospectionRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        Json(tools::web::network_events(request).await)
+    }
+
+    #[tool(
+        name = "web.a11y.snapshot",
+        description = "Return accessibility-tree provider diagnostics for a local browser or WebView target."
+    )]
+    pub async fn web_a11y_snapshot(
+        &self,
+        request: Parameters<WebIntrospectionRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        Json(tools::web::a11y_snapshot(request).await)
+    }
+
+    #[tool(
+        name = "web.style.inspect",
+        description = "Return style-inspection provider diagnostics for a local browser or WebView target."
+    )]
+    pub async fn web_style_inspect(
+        &self,
+        request: Parameters<WebIntrospectionRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        Json(tools::web::style_inspect(request).await)
     }
 
     #[tool(
@@ -4264,6 +4358,12 @@ mod tests {
                 "uia.snapshot",
                 "uia.toggle",
                 "uia.wait_for_element",
+                "web.a11y.snapshot",
+                "web.cdp.evaluate",
+                "web.cdp.list_targets",
+                "web.dom.snapshot",
+                "web.network.events",
+                "web.style.inspect",
                 "windows.bind",
                 "windows.close",
                 "windows.describe",
