@@ -15,6 +15,7 @@
 | `winctl-mcp` | [`browser.assert`](BROWSER_ASSERT.md) | Assert browser kind and window title/class conditions against a revalidated bound browser window. |
 | `winctl-mcp` | [`browser.extract_content`](BROWSER_EXTRACT_CONTENT.md) | Return safe browser window content hints and identity metadata for a revalidated bound browser window. |
 | `winctl-mcp` | [`browser.screenshot_checkpoint`](BROWSER_SCREENSHOT_CHECKPOINT.md) | Capture a screenshot checkpoint for a revalidated bound browser window. |
+| `winctl-mcp` | [`build.run`](BUILD_RUN.md) | Run an allowlisted build tool directly and return structured output diagnostics. |
 | `winctl-mcp` | [`clipboard.read`](CLIPBOARD_READ.md) | Read Unicode clipboard text with optional truncation. |
 | `winctl-mcp` | [`clipboard.write`](CLIPBOARD_WRITE.md) | Write Unicode clipboard text only when clipboard mutation is explicitly enabled. |
 | `winctl-mcp` | [`control.state`](CONTROL_STATE.md) | Return desktop-control gate state, active target identity, consent decision, and recent control events. |
@@ -23,6 +24,7 @@
 | `winctl-mcp` | [`control.notify`](CONTROL_NOTIFY.md) | Record a pending desktop-control notification event for tray or dashboard display. |
 | `winctl-mcp` | [`control.revoke`](CONTROL_REVOKE.md) | Emergency-stop desktop control and reject future sensitive actions until rearmed. |
 | `winctl-mcp` | [`control.emergency_stop`](CONTROL_EMERGENCY_STOP.md) | Alias for control.revoke. |
+| `winctl-mcp` | [`diagnostics.crash_report`](DIAGNOSTICS_CRASH_REPORT.md) | Collect process, window, screenshot, and platform diagnostic context. |
 | `winctl-mcp` | [`filesystem.read`](FILESYSTEM_READ.md) | Read a UTF-8 file from an allowlisted filesystem root with bounded size. |
 | `winctl-mcp` | [`filesystem.list`](FILESYSTEM_LIST.md) | List files and directories beneath an allowlisted filesystem root. |
 | `winctl-mcp` | [`filesystem.search`](FILESYSTEM_SEARCH.md) | Search file names and bounded UTF-8 file content beneath an allowlisted filesystem root. |
@@ -42,6 +44,7 @@
 | `winctl-mcp` | [`test.dry_run`](TEST_DRY_RUN.md) | Build a dry-run plan for a winctl test manifest without mutating UI state. |
 | `winctl-mcp` | [`test.run`](TEST_RUN.md) | Run a winctl test manifest through the macro execution engine. |
 | `winctl-mcp` | [`test.export_result`](TEST_EXPORT_RESULT.md) | Export a test run result by run ID. |
+| `winctl-mcp` | [`test.report_export`](TEST_REPORT_EXPORT.md) | Export a test or macro run result as JSON, JUnit XML, or HTML. |
 | `winctl-mcp` | [`memory.remember`](MEMORY_REMEMBER.md) | Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata. |
 | `winctl-mcp` | [`memory.search`](MEMORY_SEARCH.md) | Search remembered procedures, observations, macros, and recipes using hybrid sqlite-vec, FTS5, tag, identity, recency, and usefulness ranking. |
 | `winctl-mcp` | [`memory.get`](MEMORY_GET.md) | Fetch one memory item by ID and update its explicit use metadata. |
@@ -84,6 +87,7 @@
 | `winctl-mcp` | [`process.describe`](PROCESS_DESCRIBE.md) | Describe one process with executable metadata, tracked launch status, children, and top-level windows. |
 | `winctl-mcp` | [`process.diagnostics`](PROCESS_DIAGNOSTICS.md) | Return additional process diagnostics with optional windows and child-process metadata. |
 | `winctl-mcp` | [`process.kill`](PROCESS_KILL.md) | Terminate only a process launched and tracked by this MCP server session. |
+| `winctl-mcp` | [`process.metrics`](PROCESS_METRICS.md) | Return process metric diagnostics and platform availability for resource counters. |
 | `winctl-mcp` | [`process.wait_for_exit`](PROCESS_WAIT_FOR_EXIT.md) | Wait for a process identified by PID or MCP launch ID to exit and return lifecycle timing metadata. |
 | `winctl-mcp` | [`recorder.start`](RECORDER_START.md) | Start a local recording session that can be exported as a macro manifest. |
 | `winctl-mcp` | [`recorder.record_step`](RECORDER_RECORD_STEP.md) | Append one recorded MCP tool step with optional target, note, and replay metadata. |

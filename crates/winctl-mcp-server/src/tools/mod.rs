@@ -2,6 +2,7 @@ pub mod browser;
 pub mod assertions;
 pub mod capture;
 pub mod control;
+pub mod diagnostics;
 pub mod input;
 pub mod macros;
 pub mod memory;

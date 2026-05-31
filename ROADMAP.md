@@ -174,6 +174,10 @@
 
 ## Phase 14: Build, Diagnostics, and Test Reporting
 
+**Status:** Complete for first-pass guarded build/report diagnostics.
+
+**Audit comments:** Added direct allowlisted `build.run`, `process.metrics`, `diagnostics.crash_report`, and `test.report_export`. Native Event Log/WER, resource counters, UAC/dialog handling, and video capture are exposed as provider gaps for future Windows-specific integrations.
+
 - Add a policy-allowlisted `build.run` task runner (msbuild, dotnet, cargo, cmake) with structured error/warning parsing, distinct from unguarded shell execution.
 - Capture launched-process stdout/stderr/log streams for the app under test and expose them as replay artifacts.
 - Add crash and hang detection that auto-captures the last screenshot, Windows Event Log entries, WER dump paths, and hung-window status on failure.

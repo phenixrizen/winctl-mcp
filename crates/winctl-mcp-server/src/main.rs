@@ -850,6 +850,33 @@ pub struct CaptureCompareBaselineRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct BuildRunRequest {
+    pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ProcessMetricsRequest {
+    pub pid: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct CrashReportRequest {
+    pub pid: Option<u32>,
+    pub bound_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct TestReportExportRequest {
+    pub run_id: String,
+    pub format: Option<String>,
+    pub output_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ControlArmRequest {
     pub session_id: Option<String>,
     pub bound_id: Option<String>,
@@ -1727,6 +1754,66 @@ impl WinctlMcpServer {
         let request = request.0;
         run_blocking_tool("capture.compare_baseline", move || {
             tools::assertions::capture_compare_baseline(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "build.run",
+        description = "Run an allowlisted build tool directly without cmd.exe or PowerShell and return structured output diagnostics."
+    )]
+    pub async fn build_run(&self, request: Parameters<BuildRunRequest>) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("build.run", move || {
+            tools::diagnostics::build_run(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "process.metrics",
+        description = "Return process metric diagnostics and platform availability for CPU, memory, handles, GDI, and USER counters."
+    )]
+    pub async fn process_metrics(
+        &self,
+        request: Parameters<ProcessMetricsRequest>,
+    ) -> Json<serde_json::Value> {
+        let request = request.0;
+        run_blocking_tool("process.metrics", move || {
+            tools::diagnostics::process_metrics(request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "diagnostics.crash_report",
+        description = "Collect process, window, screenshot, and platform diagnostic context for a crash or hang investigation."
+    )]
+    pub async fn diagnostics_crash_report(
+        &self,
+        request: Parameters<CrashReportRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("diagnostics.crash_report", move || {
+            tools::diagnostics::crash_report(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "test.report_export",
+        description = "Export a test or macro run result as JSON, JUnit XML, or HTML into an artifact path."
+    )]
+    pub async fn test_report_export(
+        &self,
+        request: Parameters<TestReportExportRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("test.report_export", move || {
+            tools::diagnostics::test_report_export(&state, request)
         })
         .await
     }
@@ -4090,6 +4177,7 @@ mod tests {
                 "browser.list",
                 "browser.screenshot_checkpoint",
                 "browser.wait_for_navigation",
+                "build.run",
                 "capture.compare_baseline",
                 "capture.ocr_region",
                 "capture.read_text",
@@ -4104,6 +4192,7 @@ mod tests {
                 "control.notify",
                 "control.revoke",
                 "control.state",
+                "diagnostics.crash_report",
                 "filesystem.copy",
                 "filesystem.delete",
                 "filesystem.list",
@@ -4144,6 +4233,7 @@ mod tests {
                 "process.kill",
                 "process.launch",
                 "process.list",
+                "process.metrics",
                 "process.wait_for_exit",
                 "recorder.export_manifest",
                 "recorder.record_step",
@@ -4158,6 +4248,7 @@ mod tests {
                 "server.ping",
                 "test.dry_run",
                 "test.export_result",
+                "test.report_export",
                 "test.run",
                 "test.validate",
                 "uia.expand_collapse",
