@@ -15,7 +15,7 @@
 
 **Status:** Complete.
 
-**Audit comments:** Implemented as the baseline server/tool surface. The foundation now includes Streamable HTTP, stdio compatibility, config/logging, process ownership, capture paths, and native tray/dashboard runtime pieces. `process.kill` supports tracked-process termination, but the advertised `kill_tree` option remains follow-up work.
+**Audit comments:** Implemented as the baseline server/tool surface. The foundation now includes Streamable HTTP, stdio compatibility, config/logging, process ownership, capture paths, and native tray/dashboard runtime pieces. `process.kill` now supports guarded tree termination for tracked launches.
 
 - Window enumeration, find, bind, describe, focus, monitor listing, and point diagnostics.
 - Bound-window click, text input, window screenshots, and display screenshots.
@@ -49,7 +49,7 @@
 
 **Status:** Complete.
 
-**Audit comments:** Implemented through `app.launch`, process/window ownership metadata, `windows.for_process`, and window move/resize/minimize/maximize/restore/close/foreground diagnostics. Child-process tree termination for tracked launches remains open behind the guarded `process.kill kill_tree` option.
+**Audit comments:** Implemented through `app.launch`, process/window ownership metadata, `windows.for_process`, and window move/resize/minimize/maximize/restore/close/foreground diagnostics. `process.kill kill_tree` now terminates descendants deepest-first for launches tracked by the current server session.
 
 - Add richer app launch modes for packaged apps, Start Menu entries, protocol handlers, and working-directory presets.
 - Add window move, resize, minimize, maximize, restore, close, and foreground diagnostics.

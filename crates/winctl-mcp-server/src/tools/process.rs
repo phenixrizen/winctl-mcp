@@ -286,15 +286,6 @@ pub fn process_kill(state: &AppState, request: ProcessKillRequest) -> serde_json
         }
     };
 
-    if request.kill_tree {
-        return serde_json::json!({
-            "ok": false,
-            "error": {
-                "code": "kill_tree_not_implemented",
-                "message": "kill_tree is not implemented; child processes are not terminated by default"
-            }
-        });
-    }
     if !request.force {
         return serde_json::json!({
             "ok": false,
@@ -305,8 +296,20 @@ pub fn process_kill(state: &AppState, request: ProcessKillRequest) -> serde_json
         });
     }
 
-    if let Some(current) = describe_process(tracked.pid).ok().flatten() {
-        if let Err(error) = validate_tracked_process_identity(&tracked, &current) {
+    let current = match describe_process(tracked.pid) {
+        Ok(current) => current,
+        Err(error) => {
+            tracing::warn!(
+                launch_id = %tracked.launch_id,
+                pid = tracked.pid,
+                error_code = %error.code,
+                "process.kill root identity lookup failed"
+            );
+            return serde_json::json!({"ok": false, "error": error});
+        }
+    };
+    if let Some(current) = current.as_ref() {
+        if let Err(error) = validate_tracked_process_identity(&tracked, current) {
             tracing::warn!(
                 launch_id = %tracked.launch_id,
                 pid = tracked.pid,
@@ -318,6 +321,10 @@ pub fn process_kill(state: &AppState, request: ProcessKillRequest) -> serde_json
             );
             return serde_json::json!({"ok": false, "error": error});
         }
+    }
+
+    if request.kill_tree {
+        return kill_tracked_process_tree(state, tracked, current);
     }
 
     match kill_process(tracked.pid) {
@@ -355,6 +362,133 @@ pub fn process_kill(state: &AppState, request: ProcessKillRequest) -> serde_json
             serde_json::json!({"ok": false, "error": error})
         }
     }
+}
+
+fn kill_tracked_process_tree(
+    state: &AppState,
+    tracked: crate::TrackedProcess,
+    current_root: Option<ProcessInfo>,
+) -> serde_json::Value {
+    let processes = match list_processes() {
+        Ok(processes) => processes,
+        Err(error) => {
+            tracing::warn!(
+                launch_id = %tracked.launch_id,
+                pid = tracked.pid,
+                error_code = %error.code,
+                "process.kill kill_tree process snapshot failed"
+            );
+            return serde_json::json!({"ok": false, "error": error});
+        }
+    };
+    let mut targets = collect_process_tree_targets(tracked.pid, &processes);
+    if targets
+        .iter()
+        .all(|target| target.process.pid != tracked.pid)
+    {
+        let root = current_root.unwrap_or_else(|| ProcessInfo {
+            pid: tracked.pid,
+            process_name: tracked.process_name.clone(),
+            exe_path: tracked.executable_path.clone(),
+            parent_pid: None,
+            command_line: Some(tracked.command_line.clone()),
+            terminal_like: tracked
+                .process_name
+                .as_deref()
+                .map(winctl::is_terminal_process_name)
+                .unwrap_or(false),
+            warnings: vec!["tracked root process was not present in process snapshot".into()],
+        });
+        targets.push(ProcessTreeTarget {
+            process: root,
+            depth: 0,
+        });
+    }
+    targets.sort_by(|left, right| {
+        right
+            .depth
+            .cmp(&left.depth)
+            .then_with(|| right.process.pid.cmp(&left.process.pid))
+    });
+
+    let mut outcomes = Vec::new();
+    let mut all_exited = true;
+    for target in targets {
+        let pid = target.process.pid;
+        let process_name = target.process.process_name.clone();
+        let belongs_to_root = pid == tracked.pid;
+        let before = describe_process(pid).ok().flatten();
+        let value = if before.is_none() {
+            serde_json::json!({
+                "pid": pid,
+                "process_name": process_name,
+                "depth": target.depth,
+                "belongs_to_root": belongs_to_root,
+                "kill_attempted": false,
+                "exited": true,
+                "exit_code": null,
+                "warnings": ["process was already exited before kill_tree termination"],
+            })
+        } else {
+            match kill_process(pid) {
+                Ok(outcome) => {
+                    if !outcome.exited {
+                        all_exited = false;
+                    }
+                    serde_json::json!({
+                        "pid": outcome.pid,
+                        "process_name": outcome.process_name,
+                        "depth": target.depth,
+                        "belongs_to_root": belongs_to_root,
+                        "kill_attempted": outcome.kill_attempted,
+                        "exited": outcome.exited,
+                        "exit_code": outcome.exit_code,
+                        "warnings": outcome.warnings,
+                    })
+                }
+                Err(error) => {
+                    all_exited = false;
+                    serde_json::json!({
+                        "pid": pid,
+                        "process_name": process_name,
+                        "depth": target.depth,
+                        "belongs_to_root": belongs_to_root,
+                        "kill_attempted": true,
+                        "exited": false,
+                        "error": error,
+                    })
+                }
+            }
+        };
+        tracing::info!(
+            launch_id = %tracked.launch_id,
+            pid = pid,
+            depth = target.depth,
+            belongs_to_root = belongs_to_root,
+            exited = value.get("exited").and_then(|value| value.as_bool()).unwrap_or(false),
+            "process.kill kill_tree target processed"
+        );
+        outcomes.push(value);
+    }
+
+    if all_exited {
+        state.forget_launch(&tracked.launch_id);
+    }
+    serde_json::json!({
+        "ok": all_exited,
+        "pid": tracked.pid,
+        "launch_id": tracked.launch_id,
+        "process_name": tracked.process_name,
+        "ownership_status": "owned_by_server",
+        "kill_attempted": true,
+        "kill_tree": true,
+        "exited": all_exited,
+        "targets": outcomes,
+        "error": (!all_exited).then(|| serde_json::json!({
+            "code": "process_tree_not_fully_terminated",
+            "message": "one or more tracked process tree targets did not exit"
+        })),
+    })
 }
 
 pub fn process_wait_for_exit(
@@ -516,6 +650,61 @@ pub fn windows_wait_for_window(
         }
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+#[derive(Debug, Clone)]
+struct ProcessTreeTarget {
+    process: ProcessInfo,
+    depth: usize,
+}
+
+fn collect_process_tree_targets(
+    root_pid: u32,
+    processes: &[ProcessInfo],
+) -> Vec<ProcessTreeTarget> {
+    let mut children_by_parent: HashMap<u32, Vec<ProcessInfo>> = HashMap::new();
+    let mut root = None;
+    for process in processes {
+        if process.pid == root_pid {
+            root = Some(process.clone());
+        }
+        if let Some(parent_pid) = process.parent_pid {
+            children_by_parent
+                .entry(parent_pid)
+                .or_default()
+                .push(process.clone());
+        }
+    }
+
+    let mut visited = HashSet::new();
+    let mut targets = Vec::new();
+    if let Some(root) = root {
+        visited.insert(root.pid);
+        targets.push(ProcessTreeTarget {
+            process: root,
+            depth: 0,
+        });
+    }
+
+    let mut stack = children_by_parent
+        .get(&root_pid)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|process| (process, 1usize))
+        .collect::<Vec<_>>();
+    while let Some((process, depth)) = stack.pop() {
+        if !visited.insert(process.pid) {
+            continue;
+        }
+        if let Some(children) = children_by_parent.get(&process.pid) {
+            for child in children {
+                stack.push((child.clone(), depth + 1));
+            }
+        }
+        targets.push(ProcessTreeTarget { process, depth });
+    }
+    targets
 }
 
 fn validate_tracked_process_identity(
@@ -731,4 +920,41 @@ fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     haystack
         .to_ascii_lowercase()
         .contains(&needle.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn process(pid: u32, parent_pid: Option<u32>) -> ProcessInfo {
+        ProcessInfo {
+            pid,
+            process_name: Some(format!("p{pid}.exe")),
+            exe_path: Some(format!("C:/test/p{pid}.exe")),
+            parent_pid,
+            command_line: None,
+            terminal_like: false,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn process_tree_collection_follows_descendants_only() {
+        let processes = vec![
+            process(10, None),
+            process(11, Some(10)),
+            process(12, Some(10)),
+            process(13, Some(11)),
+            process(20, None),
+            process(21, Some(20)),
+        ];
+
+        let mut targets = collect_process_tree_targets(10, &processes)
+            .into_iter()
+            .map(|target| (target.process.pid, target.depth))
+            .collect::<Vec<_>>();
+        targets.sort();
+
+        assert_eq!(targets, vec![(10, 0), (11, 1), (12, 1), (13, 2)]);
+    }
 }

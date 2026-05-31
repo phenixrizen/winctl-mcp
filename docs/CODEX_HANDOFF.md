@@ -28,7 +28,7 @@ test gate and made public Windows release direction MSVC-first.
 | B3 `crash_report` Event Log + WER | **DONE** | Shells `wevtutil.exe` for Application errors; scans `%LOCALAPPDATA%\CrashDumps` + WER `ReportQueue` in `diagnostics.rs`. |
 | C1 CDP WebSocket | **DONE** | `tokio-tungstenite` `connect_async` → `Runtime.evaluate`, `DOMSnapshot.captureSnapshot`, `Accessibility.getFullAXTree`, `CSS.getComputedStyleForNode` in `web.rs`. |
 | R2-1 Windows runtime integration | **DONE** | Added Windows-native MCP integration coverage that launches `winctl-test-target`, binds by PID/HWND, exercises `uia.invoke/set_value/get_value/toggle/select/expand_collapse/range_value/scroll_into_view/set_focus`, reads `process.metrics`, and verifies the Ctrl+Alt+Esc emergency-stop hotkey. Verified locally with `cargo test --workspace --target x86_64-pc-windows-msvc --test windows_runtime -- --nocapture`; GNU compatibility was also checked from Windows cargo. Added a `windows-latest` CI job as the backstop. |
-| R2-6 `process.kill` tree termination | **STILL OPEN** | `process.kill` accepts `kill_tree`, but `process.rs` returns `kill_tree_not_implemented`. Implement guarded child-process tree termination using Windows process snapshots, terminate leaves-up, and preserve the current MCP-launched ownership model. |
+| R2-6 `process.kill` tree termination | **DONE** | `process.kill kill_tree=true` now snapshots the current process tree, validates the tracked root identity, terminates descendants deepest-first, terminates the root last, and still refuses untracked PIDs/launch IDs. Unit coverage verifies descendant collection and existing ownership rejection paths. |
 | R2-7 Macro/test checkpoint assertions | **DONE** | `macro.assert_image_checkpoint` now calls the existing baseline comparison provider and fails the macro on visual mismatch. `macro.assert_text_checkpoint` now compares literal text, OCR output, or `capture.read_text` output and fails the macro on missing expected text. Unit coverage verifies both the successful image checkpoint path and failing text checkpoint path. |
 
 **The remaining work has shifted from "build the providers" to "verify them at
@@ -49,9 +49,9 @@ runtime" plus the two human-notification surfaces.** Re-prioritized list:
    to the `EvtQuery`/`EvtNext` API for structured, robust results.
 5. **R2-5 — UIA refinements.** Desired-state idempotent `uia.toggle` and
    add/remove modes for `uia.select` (roadmap-noted).
-6. **R2-6 — `process.kill` `kill_tree` support.** Implement child-process tree
-   termination only for processes launched and tracked by the current MCP server
-   session; refuse unowned descendants or unverifiable ownership.
+6. **R2-6 — `process.kill` `kill_tree` support: DONE.** The server now terminates
+   the tracked process tree deepest-first while preserving the launch-session
+   ownership gate and root identity validation.
 7. **R2-7 — Macro/test checkpoint assertion wiring: DONE.** Manifests can now
    run visual and text checkpoints directly. Image checkpoints call
    `capture.compare_baseline`; text checkpoints compare literal text, OCR output,
@@ -63,7 +63,7 @@ runtime" plus the two human-notification surfaces.** Re-prioritized list:
    in-memory 200-event ring. `notifications.list` remains a low-priority provider
    stub.
 
-Tasks A2 (toast + overlay), R2-6, and the cross-cutting notes in §4 below
+Tasks A2 (toast + overlay), and the cross-cutting notes in §4 below
 remain current. Tasks A1, B1, B2, B3, C1 are now DONE except as qualified above.
 
 ---
