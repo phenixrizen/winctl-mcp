@@ -21,18 +21,20 @@ Use these canonical crate names in this repository:
 
 ## Build
 
-From WSL/Linux:
+End-user Windows releases are built with the MSVC target:
 
-```bash
-make setup-win-target
-make build-win-server
+```powershell
+rustup target add x86_64-pc-windows-msvc
+cargo build -p winctl-mcp-server --target x86_64-pc-windows-msvc --release
 ```
 
-The default Windows target is `x86_64-pc-windows-gnu`. Override it when needed:
+The default Makefile Windows target is also `x86_64-pc-windows-msvc`. Build release artifacts on Windows with the Rust MSVC toolchain, or through the GitHub release workflow. GNU/MinGW remains a local development compatibility override when a direct WSL cross-link path is useful:
 
 ```bash
-make build-win-server WINDOWS_TARGET=x86_64-pc-windows-msvc
+make build-win-server WINDOWS_TARGET=x86_64-pc-windows-gnu
 ```
+
+The Makefile fails fast if a Linux/WSL shell tries to link the MSVC target. Use `cargo check --target x86_64-pc-windows-msvc` from WSL for validation, or build/package the MSVC binaries from Windows/CI.
 
 ## Package and Install
 
@@ -41,6 +43,8 @@ Build a Windows package with binaries, docs, scripts, examples, version metadata
 ```bash
 make package-win
 ```
+
+Run packaging from Windows/MSVC or through CI. Published end-user packages should use the MSVC build, signed release binaries, and the MSI/ZIP assets produced by CI. End users should not need Rust, WSL, MSYS2, MinGW, or PowerShell execution-policy workarounds.
 
 Install or update from the package on Windows:
 

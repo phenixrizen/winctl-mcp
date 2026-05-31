@@ -6,12 +6,14 @@ Phase 16 packages the Windows runtime as a directory that can be copied, install
 
 ## Build and Package
 
-From WSL/Linux:
+Release-compatible Windows packages use the MSVC target:
 
-```bash
-make setup-win-target
-make package-win
+```powershell
+rustup target add x86_64-pc-windows-msvc
+cargo build --workspace --target x86_64-pc-windows-msvc --release
 ```
+
+Run package builds from a Windows Rust/MSVC environment or through the GitHub release workflow. GNU/MinGW packages are a local development compatibility option only, not the public end-user default. The Makefile still provides `make package-win` for environments with `make` and `bash` available, and it fails fast if a Linux/WSL shell tries to link the MSVC target.
 
 The package is written to `dist/winctl-mcp-<version>-windows-<target>/` and contains:
 
@@ -26,7 +28,7 @@ The package is written to `dist/winctl-mcp-<version>-windows-<target>/` and cont
 | `RELEASE.json` | Machine-readable release metadata. |
 | `CHECKSUMS.sha256` | SHA-256 checksums for every packaged file. |
 
-Release builds also produce `winctl-mcp-<version>-windows-x64.msi` with WiX. The MSI installs the packaged binaries/docs under `Program Files\winctl-mcp` and adds a Start Menu shortcut for the tray app.
+Release builds also produce `winctl-mcp-<version>-windows-x64.msi` with WiX. The MSI installs the MSVC-built binaries/docs under `Program Files\winctl-mcp` and adds a Start Menu shortcut for the tray app.
 
 ## Install or Update
 
@@ -74,7 +76,7 @@ GitHub Actions contains two workflows:
 
 | Workflow | Purpose |
 | --- | --- |
-| `CI` | Runs formatting, workspace tests, and a Windows cross-build on every branch and pull request. |
-| `Release` | Computes SemVer, builds Windows binaries, signs release assets when signing secrets are configured, packages ZIP and MSI assets, attests provenance, and publishes a GitHub release. |
+| `CI` | Runs formatting, workspace tests, an MSVC Windows core-crate check from Linux, and live MSVC full-workspace runtime integration tests on `windows-latest`. |
+| `Release` | Computes SemVer, builds MSVC Windows binaries, signs release assets when signing secrets are configured, packages ZIP and MSI assets, attests provenance, and publishes a GitHub release. |
 
 Signing configuration is managed through the protected GitHub release environment.

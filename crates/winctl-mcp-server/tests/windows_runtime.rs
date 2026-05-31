@@ -26,7 +26,7 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     );
     assert!(
         target_exe.exists(),
-        "winctl-test-target exe does not exist at {}; run cargo build --workspace --target x86_64-pc-windows-gnu first or set WINCTL_TEST_TARGET_EXE",
+        "winctl-test-target exe does not exist at {}; run cargo build --workspace --target x86_64-pc-windows-msvc first or set WINCTL_TEST_TARGET_EXE",
         target_exe.display()
     );
 

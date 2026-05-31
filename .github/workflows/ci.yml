@@ -15,7 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  WINDOWS_TARGET: x86_64-pc-windows-gnu
+  WINDOWS_TARGET: x86_64-pc-windows-msvc
 
 jobs:
   rust:
@@ -25,10 +25,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install Windows cross toolchain
+      - name: Install Rust targets
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mingw-w64
           rustup default stable
           rustup component add rustfmt
           rustup target add "${WINDOWS_TARGET}"
@@ -52,11 +50,8 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace
 
-      - name: Build Windows MCP server
-        run: make build-win-server
-
-      - name: Build Windows tray
-        run: make build-win-tray
+      - name: Check Windows core crate
+        run: cargo check -p winctl --target "${WINDOWS_TARGET}"
 
   windows-runtime:
     name: Windows runtime integration
@@ -67,19 +62,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up MSYS2 MinGW
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: false
-          install: mingw-w64-x86_64-gcc
-
-      - name: Install Rust GNU target
+      - name: Install Rust MSVC target
         shell: pwsh
         run: |
           rustup default stable
           rustup target add $env:WINDOWS_TARGET
-          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Build Windows workspace
         shell: pwsh

@@ -1,26 +1,36 @@
 # Windows Runbook
 
-## Build From WSL
+## Build For Windows
 
-The default Makefile target is `x86_64-pc-windows-gnu`, which is the most direct WSL cross-build path.
-
-```bash
-make setup-win-target
-make build-win-server
-make print-artifacts
-```
-
-Use `WINDOWS_TARGET=x86_64-pc-windows-msvc` when building from a Windows Rust/MSVC environment:
+The default Windows target is `x86_64-pc-windows-msvc`. Use this target for release-compatible binaries, MSI packaging, and runtime integration testing.
 
 ```powershell
+rustup target add x86_64-pc-windows-msvc
 cargo build -p winctl-mcp-server --target x86_64-pc-windows-msvc --release
+cargo build -p winctl-tray --target x86_64-pc-windows-msvc --release
 ```
+
+Build the full workspace from a Windows Rust/MSVC environment or through the GitHub release workflow:
+
+```powershell
+cargo build --workspace --target x86_64-pc-windows-msvc --release
+```
+
+From WSL/Linux, use `cargo check --workspace --target x86_64-pc-windows-msvc` to validate Windows code without linking. If you need a local WSL cross-linked binary for development, explicitly opt into GNU/MinGW:
+
+```bash
+make build-win-server WINDOWS_TARGET=x86_64-pc-windows-gnu
+```
+
+The Makefile intentionally fails fast when a Linux/WSL shell tries to link the default MSVC target, because server/tray dependencies require the Windows MSVC linker.
 
 Package the server binary plus this runbook:
 
 ```bash
 make package-win
 ```
+
+Run `make package-win` from Windows/MSVC or CI for release-compatible packages. For a WSL-only local compatibility package, pass `WINDOWS_TARGET=x86_64-pc-windows-gnu`.
 
 The packaged release is written under `dist/winctl-mcp-<version>-windows-<target>/` and includes binaries, docs, scripts, examples, `VERSION.txt`, `RELEASE.json`, and `CHECKSUMS.sha256`.
 
@@ -59,7 +69,7 @@ In stdio mode, MCP clients should launch the server with no shell wrapper that w
 Example MCP command path:
 
 ```text
-target\x86_64-pc-windows-gnu\release\winctl-mcp-server.exe
+target\x86_64-pc-windows-msvc\release\winctl-mcp-server.exe
 ```
 
 Set `RUST_LOG=info` for operational logs. The server writes tracing logs to stderr so stdout remains reserved for MCP protocol messages. Use `--log-file <path>` with either `serve` transport when the MCP client hides stderr.
@@ -101,7 +111,9 @@ The harness sets `WINCTL_RUN_WINDOWS_INTEGRATION=1`. Normal workspace tests do n
 - `identity_mismatch` or `stale_target`: re-bind the window. The HWND may have been reused or the process changed.
 - Focus or click fails: check elevation mismatch, minimized windows, remote desktop state, and whether another app is blocking foreground activation.
 - Screenshot fails: check Graphics Capture permission, display availability, and whether the target window is minimized or protected.
-- Cross-build fails for GNU: install the Rust target with `make setup-win-target` and ensure MinGW link tools are available in WSL.
+- MSVC build fails on Windows: install the Rust MSVC toolchain and Visual Studio Build Tools with the C++ workload.
+- MSVC check fails from WSL/Linux: install the target with `rustup target add x86_64-pc-windows-msvc`; use `cargo check` unless a full MSVC linker environment is available.
+- GNU compatibility build fails from WSL: install the Rust GNU target and ensure MinGW link tools are available.
 
 Packaged installs include a diagnostic helper:
 

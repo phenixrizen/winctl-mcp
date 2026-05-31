@@ -10,7 +10,7 @@
 
 Commit `ce36fb5 "replace phase provider stubs with native implementations"`
 addressed most of the Tier A/B stubs from this handoff. **Verified against source
-and confirmed to compile for `x86_64-pc-windows-gnu`** (full workspace, no errors).
+and confirmed to compile for Windows targets** (full workspace, no errors).
 Every native path is `cfg(windows)`-gated with `cfg(not(windows))` fallbacks, so the
 Linux build still passes.
 
@@ -24,7 +24,7 @@ Linux build still passes.
 | B2 `process.metrics` | **DONE** | `GetProcessMemoryInfo`, `GetProcessHandleCount`, `GetGuiResources`, `GetProcessTimes` in `winctl/src/process.rs`. |
 | B3 `crash_report` Event Log + WER | **DONE** | Shells `wevtutil.exe` for Application errors; scans `%LOCALAPPDATA%\CrashDumps` + WER `ReportQueue` in `diagnostics.rs`. |
 | C1 CDP WebSocket | **DONE** | `tokio-tungstenite` `connect_async` → `Runtime.evaluate`, `DOMSnapshot.captureSnapshot`, `Accessibility.getFullAXTree`, `CSS.getComputedStyleForNode` in `web.rs`. |
-| R2-1 Windows runtime integration | **DONE** | Added Windows-native MCP integration coverage that launches `winctl-test-target`, binds by PID/HWND, exercises `uia.invoke/set_value/get_value/toggle/select/expand_collapse/range_value/scroll_into_view/set_focus`, reads `process.metrics`, and verifies the Ctrl+Alt+Esc emergency-stop hotkey. Verified locally with `cargo test --workspace --target x86_64-pc-windows-gnu -- --nocapture` from Windows cargo with `C:\msys64\mingw64\bin` on PATH. Added a `windows-latest` CI job as the backstop. |
+| R2-1 Windows runtime integration | **DONE** | Added Windows-native MCP integration coverage that launches `winctl-test-target`, binds by PID/HWND, exercises `uia.invoke/set_value/get_value/toggle/select/expand_collapse/range_value/scroll_into_view/set_focus`, reads `process.metrics`, and verifies the Ctrl+Alt+Esc emergency-stop hotkey. Verified locally with `cargo test --workspace --target x86_64-pc-windows-msvc --test windows_runtime -- --nocapture`; GNU compatibility was also checked from Windows cargo. Added a `windows-latest` CI job as the backstop. |
 
 **The remaining work has shifted from "build the providers" to "verify them at
 runtime" plus the two human-notification surfaces.** Re-prioritized list:
