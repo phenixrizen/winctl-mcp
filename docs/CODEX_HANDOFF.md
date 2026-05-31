@@ -2,11 +2,11 @@
 
 **Audience:** a coding agent (Codex) continuing implementation.
 **Date:** 2026-05-31
-**Branch audited:** `feat/more_features` @ `d51a595` (Round 2; Round 1 was `f62d517`)
+**Branch audited:** `feat/more_features` (Round 2; Round 1 was `f62d517`)
 
 ---
 
-## 0. Status update — Round 2 (`d51a595`, updated 2026-05-31)
+## 0. Status update — Round 2 (updated 2026-05-31)
 
 Commit `ce36fb5 "replace phase provider stubs with native implementations"`
 addressed most of the Tier A/B stubs from this handoff. **Verified against source
@@ -14,15 +14,16 @@ and confirmed to compile for Windows targets** (full workspace, no errors).
 Every native path is `cfg(windows)`-gated with `cfg(not(windows))` fallbacks, so the
 Linux build still passes.
 
-Follow-up commits `3d3ee36` and `d51a595` added the Windows runtime UIA integration
-test gate and made public Windows release direction MSVC-first.
+Follow-up commits added the Windows runtime UIA integration test gate, made public
+Windows releases MSVC-first, wired process-tree termination, wired macro
+checkpoint assertions, and completed the native control notification surfaces.
 
 | Handoff item | Round-2 result | Evidence |
 | --- | --- | --- |
 | A1 Real UIA patterns | **DONE** | `current_pattern::<IUIAutomationInvokePattern>()` → `.Invoke()`, `ValuePattern.SetValue/CurrentValue`, `TogglePattern.Toggle`, `SelectionItemPattern.Select`, `ExpandCollapse`, `RangeValue`, `ScrollItem` in `winctl/src/uia.rs`. Coordinate fallback now a returned hint, not silent. |
 | A2 Global emergency-stop hotkey | **DONE** | `RegisterHotKey(None, …, MOD_CONTROL\|MOD_ALT\|MOD_NOREPEAT, VK_ESCAPE)` + `WM_HOTKEY` loop in `control.rs`. |
-| A2 Native toast | **STILL OPEN** | `control.rs` still reports no toast provider; no WinRT `ToastNotificationManager`. |
-| A2 Active-control overlay/border | **STILL OPEN** | No on-screen indicator window while injecting input. |
+| A2 Native toast | **DONE** | `control.rs` uses WinRT `ToastNotificationManager` before the first sensitive control action in a session, includes target PID/HWND context, and gives the human a Ctrl+Alt+Esc countdown window to cancel before control proceeds. |
+| A2 Active-control overlay/border | **DONE** | `control.rs` shows a click-through, topmost layered overlay around the validated target HWND during active control and clears it on cooldown/revoke. The overlay thread acknowledges show/hide so responses do not report queued work as visible state. |
 | B1 OCR backend | **DONE (external)** | `assertions.rs` crops region → shells `tesseract` → parses TSV word boxes. Requires Tesseract on PATH; no in-box provider yet. |
 | B2 `process.metrics` | **DONE** | `GetProcessMemoryInfo`, `GetProcessHandleCount`, `GetGuiResources`, `GetProcessTimes` in `winctl/src/process.rs`. |
 | B3 `crash_report` Event Log + WER | **DONE** | Shells `wevtutil.exe` for Application errors; scans `%LOCALAPPDATA%\CrashDumps` + WER `ReportQueue` in `diagnostics.rs`. |
@@ -31,17 +32,20 @@ test gate and made public Windows release direction MSVC-first.
 | R2-6 `process.kill` tree termination | **DONE** | `process.kill kill_tree=true` now snapshots the current process tree, validates the tracked root identity, terminates descendants deepest-first, terminates the root last, and still refuses untracked PIDs/launch IDs. Unit coverage verifies descendant collection and existing ownership rejection paths. |
 | R2-7 Macro/test checkpoint assertions | **DONE** | `macro.assert_image_checkpoint` now calls the existing baseline comparison provider and fails the macro on visual mismatch. `macro.assert_text_checkpoint` now compares literal text, OCR output, or `capture.read_text` output and fails the macro on missing expected text. Unit coverage verifies both the successful image checkpoint path and failing text checkpoint path. |
 
-**The remaining work has shifted from "build the providers" to "verify them at
-runtime" plus the two human-notification surfaces.** Re-prioritized list:
+**The remaining work is now focused on the in-box OCR provider, structured Event
+Log querying, and the last UIA selection/toggle refinements.** Re-prioritized list:
 
 1. **R2-1 — Windows runtime CI + integration tests: DONE.** The repository now has
    a live Windows MCP integration test that starts the HTTP server, launches
    `winctl-test-target`, binds by returned PID/HWND, exercises the native UIA COM
    action paths, samples `process.metrics`, and verifies Ctrl+Alt+Esc revokes the
    control gate. `.github/workflows/ci.yml` has a `windows-latest` backstop job.
-2. **R2-2 — Native toast + active-control overlay** (the still-open half of A2).
-   See Task A2 below — the toast and overlay items remain exactly as specified;
-   only the hotkey is done.
+2. **R2-2 — Native toast + active-control overlay: DONE.** First sensitive
+   control actions now emit a native WinRT toast, wait through a short
+   Ctrl+Alt+Esc-cancelable countdown, then show a click-through topmost overlay
+   around the validated target HWND while the action is active. The Windows
+   runtime integration test asserts the toast attempt, overlay show
+   acknowledgment, overlay clear event, and global emergency-stop path.
 3. **R2-3 — In-box OCR provider.** Add `Windows.Media.Ocr.OcrEngine` so
    `capture.ocr_region` works on a stock Windows box without Tesseract installed;
    keep Tesseract as a fallback.
@@ -63,8 +67,8 @@ runtime" plus the two human-notification surfaces.** Re-prioritized list:
    in-memory 200-event ring. `notifications.list` remains a low-priority provider
    stub.
 
-Tasks A2 (toast + overlay), and the cross-cutting notes in §4 below
-remain current. Tasks A1, B1, B2, B3, C1 are now DONE except as qualified above.
+Task A2 is now complete. The cross-cutting notes in §4 below remain current.
+Tasks A1, B1, B2, B3, C1 are now DONE except as qualified above.
 
 ---
 
@@ -186,9 +190,14 @@ closed with the documented codes. See `docs/UIA_ACTIONS_DESIGN.md`.
 `hotkey.rs`); wire into `crates/winctl-mcp-server/src/tools/control.rs` event model;
 optionally surface in `crates/winctl-tray`.
 
-The gate protects the *MCP client* but a *human at the keyboard* currently gets no
-signal. Implement the three missing pieces, all driven by the existing control
-event model:
+**Round-2 status:** Complete in `control.rs`. The implementation uses a WinRT
+toast for the first sensitive control action, a Ctrl+Alt+Esc-cancelable countdown,
+the global emergency-stop hotkey, and an acknowledged click-through topmost overlay
+around the validated target HWND while active control is in progress.
+
+The gate protects the *MCP client* and now gives a *human at the keyboard* an
+explicit signal before and during control. The three pieces are all driven by the
+existing control event model:
 
 1. **Native toast** before the first control action of a session. Use WinRT
    `Windows.UI.Notifications.ToastNotificationManager` (in-box, no external dep).
@@ -251,10 +260,10 @@ returns a JS expression result from a loopback Chrome target.
 
 ## 4. Cross-cutting
 
-- **On-Windows CI is required.** Add a Windows build/test job that compiles the
-  `windows`-crate paths and runs the integration harness (`winctl-test-target`).
-  None of the Tier A/B providers can be verified from WSL/Linux. This is a
-  prerequisite for trusting the above work.
+- **On-Windows CI is required and now present.** The `windows-latest` workflow job
+  compiles the `windows`-crate paths and runs the integration harness
+  (`winctl-test-target`). Keep expanding this job as new native providers are
+  added.
 - **Consent state is in-memory only** (`control.rs` state + a 200-entry
   `VecDeque<ControlEvent>`), lost on restart. Fail-closed is correct for security,
   but for an auditable consent feature consider a durable, append-only audit log.
@@ -267,8 +276,9 @@ returns a JS expression result from a loopback Chrome target.
 
 ## 5. Suggested order
 
-1. A2 (human notification surface) — small, self-contained, highest leverage.
-2. A1 (real UIA patterns) — core of the action layer; unblocks reliable testing.
-3. Cross-cutting on-Windows CI — needed to verify 1–2.
-4. B1 → B2 → B3 (diagnostics).
-5. C1 (CDP WebSocket) — largest, lowest urgency.
+1. R2-3 / B1: add the in-box Windows OCR provider and keep Tesseract as fallback.
+2. R2-4 / B3: replace `wevtutil.exe` parsing with Event Log APIs.
+3. R2-5 / A1 refinement: add desired-state `uia.toggle` and add/remove modes for
+   `uia.select`.
+4. Keep broadening the Windows runtime integration test as each native provider is
+   completed.

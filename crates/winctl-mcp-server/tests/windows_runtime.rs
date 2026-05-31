@@ -100,6 +100,26 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
         )
         .await;
     assert_direct_pattern("uia.invoke", &invoke, "InvokePattern.Invoke");
+    assert_eq!(invoke["control_preflight"]["notification_sent"], true);
+    assert_eq!(
+        invoke["control_preflight"]["native_toast"]["attempted"], true,
+        "first sensitive action should attempt a native toast: {invoke:#}"
+    );
+    assert_eq!(
+        invoke["control_preflight"]["active_overlay"]["attempted"], true,
+        "control action should attempt the active overlay: {invoke:#}"
+    );
+    assert_eq!(
+        invoke["control_preflight"]["active_overlay"]["visible"], true,
+        "active overlay provider should acknowledge a visible overlay window: {invoke:#}"
+    );
+    let control_after_invoke = harness
+        .call_tool("control.state", serde_json::json!({}))
+        .await;
+    assert_ok("control.state after invoke", &control_after_invoke);
+    assert_control_event(&control_after_invoke, "native_toast");
+    assert_control_event(&control_after_invoke, "overlay_started");
+    assert_control_event(&control_after_invoke, "overlay_cleared");
     let status = harness
         .call_tool(
             "uia.find",
@@ -504,6 +524,16 @@ fn assert_direct_pattern_prefix(tool: &str, value: &Value, pattern_prefix: &str)
     assert!(
         pattern.starts_with(pattern_prefix),
         "{tool} used unexpected pattern {pattern:?}: {value:#}"
+    );
+}
+
+fn assert_control_event(value: &Value, kind: &str) {
+    let events = value["control"]["events"]
+        .as_array()
+        .expect("control.state should return an event array");
+    assert!(
+        events.iter().any(|event| event["kind"] == kind),
+        "control events should contain {kind}: {value:#}"
     );
 }
 

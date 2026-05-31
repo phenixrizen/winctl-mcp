@@ -134,11 +134,11 @@
 
 ## Phase 11: Desktop Control Notification and Consent
 
-**Status:** Partially complete.
+**Status:** Complete.
 
-**Audit comments:** Implemented `control.state`, `control.arm`, `control.consent`, `control.notify`, `control.revoke`, and `control.emergency_stop`, plus dashboard control indicators, sensitive-tool gate checks, and a Windows `Ctrl+Alt+Esc` global emergency-stop hotkey. Native Windows toast and target-window overlay/border indicators remain open provider work.
+**Audit comments:** Implemented `control.state`, `control.arm`, `control.consent`, `control.notify`, `control.revoke`, and `control.emergency_stop`, plus dashboard control indicators, sensitive-tool gate checks, a Windows `Ctrl+Alt+Esc` global emergency-stop hotkey, a WinRT native toast before the first sensitive control action in a session, and a click-through topmost overlay around the validated target HWND while control is active. Notification, toast, overlay, countdown, revoke, and emergency-stop events are all recorded in the control event stream.
 
-**Verification:** A Windows runtime integration test now verifies the global Ctrl+Alt+Esc emergency-stop hotkey against a live MCP server session.
+**Verification:** A Windows runtime integration test now verifies the first-action notification path, native toast attempt, overlay show acknowledgment, overlay clear event, and global Ctrl+Alt+Esc emergency-stop hotkey against a live MCP server session.
 
 - Add tray and dashboard control-state indicators for idle, armed, warning, controlling, blocked, and revoked states.
 - Show a native Windows toast before the first focus/click/type/control action in a session, including target app, PID/HWND, requesting client/session when available, and a short cancelable countdown.
