@@ -485,6 +485,102 @@ async fn windows_control_audit_log_persists_across_restart() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_dialog_tools_invoke_message_box_button() {
+    let _guard = runtime_test_lock().await;
+    if std::env::var_os("WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION").is_some() {
+        eprintln!("skipping Windows runtime integration because WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION is set");
+        return;
+    }
+
+    let server_exe = server_exe_path();
+    let target_exe = target_exe_path();
+    assert!(
+        server_exe.exists(),
+        "server exe missing at {}",
+        server_exe.display()
+    );
+    assert!(
+        target_exe.exists(),
+        "target exe missing at {}",
+        target_exe.display()
+    );
+
+    let mut harness = McpHarness::start(&server_exe).await;
+    harness.initialize().await;
+    let launch = harness
+        .call_tool(
+            "process.launch",
+            serde_json::json!({
+                "exe": target_exe.to_string_lossy(),
+                "args": [
+                    "--title", "winctl dialog owner",
+                    "--class", "WinctlDialogOwner",
+                    "--width", "520",
+                    "--height", "320",
+                    "--duration-ms", "60000",
+                    "--message-box-after-ms", "500"
+                ],
+                "wait_for_window": true,
+                "timeout_ms": 10000
+            }),
+        )
+        .await;
+    assert_ok("process.launch dialog target", &launch);
+    let launch_id = launch["launch_id"]
+        .as_str()
+        .expect("launch should return launch_id")
+        .to_owned();
+
+    let dialog = harness.wait_for_dialog_button("OK").await;
+    let hwnd = dialog["window"]["hwnd_hex"]
+        .as_str()
+        .expect("dialog should include hwnd_hex")
+        .to_owned();
+    let pid = dialog["window"]["pid"]
+        .as_u64()
+        .expect("dialog should include pid") as u32;
+
+    let arm = harness
+        .call_tool(
+            "control.arm",
+            serde_json::json!({
+                "session_id": "windows-dialog-test",
+                "allow_for_ms": 30000,
+                "reason": "Windows dialog integration test"
+            }),
+        )
+        .await;
+    assert_ok("control.arm dialog", &arm);
+
+    let invoke = harness
+        .call_tool(
+            "dialogs.invoke_button",
+            serde_json::json!({
+                "hwnd": hwnd,
+                "pid": pid,
+                "button_name": "OK",
+                "max_depth": 8,
+                "max_elements": 1000
+            }),
+        )
+        .await;
+    assert_ok("dialogs.invoke_button", &invoke);
+    assert_eq!(invoke["outcome"]["direct_uia_pattern_used"], true);
+    assert_eq!(invoke["outcome"]["pattern_used"], "InvokePattern.Invoke");
+
+    let kill = harness
+        .call_tool(
+            "process.kill",
+            serde_json::json!({
+                "launch_id": launch_id,
+                "force": true
+            }),
+        )
+        .await;
+    assert_ok("process.kill dialog cleanup", &kill);
+}
+
 struct McpHarness {
     child: Child,
     client: reqwest::Client,
@@ -617,6 +713,43 @@ impl McpHarness {
                 "timed out waiting for crash_report Event Log entry; last report: {report:#}"
             );
             tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    async fn wait_for_dialog_button(&mut self, button_name: &str) -> Value {
+        let started = std::time::Instant::now();
+        loop {
+            let list = self
+                .call_tool(
+                    "dialogs.list",
+                    serde_json::json!({
+                        "max_depth": 8,
+                        "max_elements": 1000
+                    }),
+                )
+                .await;
+            assert_ok("dialogs.list", &list);
+            if let Some(dialog) = list["dialogs"]
+                .as_array()
+                .and_then(|dialogs| {
+                    dialogs.iter().find(|dialog| {
+                        dialog["buttons"]
+                            .as_array()
+                            .map(|buttons| {
+                                buttons.iter().any(|button| button["name"] == button_name)
+                            })
+                            .unwrap_or(false)
+                    })
+                })
+                .cloned()
+            {
+                return dialog;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "timed out waiting for dialog button {button_name:?}; last dialogs.list: {list:#}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 

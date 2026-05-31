@@ -784,6 +784,31 @@ pub struct UiWaitForElementRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct DialogListRequest {
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+    #[serde(default)]
+    pub include_non_foreground: bool,
+    #[serde(default)]
+    pub include_non_dialog_foreground: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct DialogInvokeButtonRequest {
+    pub hwnd: String,
+    pub pid: u32,
+    pub button_name: Option<String>,
+    pub element_ref: Option<String>,
+    pub selector: Option<winctl::UiElementSelector>,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+    #[serde(default)]
+    pub allow_offscreen: bool,
+    #[serde(default)]
+    pub allow_non_dialog: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct AssertElementRequest {
     pub bound_id: String,
     pub element_ref: Option<String>,
@@ -1659,6 +1684,45 @@ impl WinctlMcpServer {
         let request = request.0;
         run_blocking_tool("uia.wait_for_element", move || {
             tools::uia::uia_wait_for_element(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "dialogs.list",
+        description = "Enumerate the foreground native dialog, UI Automation button candidates, and secure-desktop/UAC status."
+    )]
+    pub async fn dialogs_list(
+        &self,
+        request: Parameters<DialogListRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("dialogs.list", move || {
+            tools::dialogs::dialogs_list(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "dialogs.invoke_button",
+        description = "Invoke an explicit foreground dialog Button/SplitButton via UI Automation patterns; UAC secure-desktop prompts are reported, not automated."
+    )]
+    pub async fn dialogs_invoke_button(
+        &self,
+        request: Parameters<DialogInvokeButtonRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("dialogs.invoke_button", move || {
+            tools::control::with_control_gate(
+                &state,
+                "dialogs.invoke_button",
+                None,
+                "dialog_action",
+                true,
+                || tools::dialogs::dialogs_invoke_button(&state, request),
+            )
         })
         .await
     }
@@ -4395,6 +4459,8 @@ mod tests {
                 "control.revoke",
                 "control.state",
                 "diagnostics.crash_report",
+                "dialogs.invoke_button",
+                "dialogs.list",
                 "filesystem.copy",
                 "filesystem.delete",
                 "filesystem.list",

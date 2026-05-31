@@ -25,6 +25,8 @@
 | `winctl-mcp` | [`control.revoke`](CONTROL_REVOKE.md) | Emergency-stop desktop control and reject future sensitive actions until rearmed. |
 | `winctl-mcp` | [`control.emergency_stop`](CONTROL_EMERGENCY_STOP.md) | Alias for control.revoke. |
 | `winctl-mcp` | [`diagnostics.crash_report`](DIAGNOSTICS_CRASH_REPORT.md) | Collect process, window, screenshot, Event Log, and WER diagnostic context. |
+| `winctl-mcp` | [`dialogs.list`](DIALOGS_LIST.md) | Enumerate the foreground native dialog, UI Automation button candidates, and secure-desktop/UAC status. |
+| `winctl-mcp` | [`dialogs.invoke_button`](DIALOGS_INVOKE_BUTTON.md) | Invoke an explicit foreground dialog button through UI Automation InvokePattern. |
 | `winctl-mcp` | [`filesystem.read`](FILESYSTEM_READ.md) | Read a UTF-8 file from an allowlisted filesystem root with bounded size. |
 | `winctl-mcp` | [`filesystem.list`](FILESYSTEM_LIST.md) | List files and directories beneath an allowlisted filesystem root. |
 | `winctl-mcp` | [`filesystem.search`](FILESYSTEM_SEARCH.md) | Search file names and bounded UTF-8 file content beneath an allowlisted filesystem root. |

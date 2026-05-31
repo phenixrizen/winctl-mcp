@@ -30,15 +30,17 @@ mod windows_app {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetDlgItem, GetMessageW,
-        PostQuitMessage, RegisterClassW, SendMessageW, SetTimer, SetWindowTextW, ShowWindow,
-        TranslateMessage, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_CHECKBOX, BS_PUSHBUTTON,
-        CBS_DROPDOWNLIST, CB_ADDSTRING, ES_LEFT, HMENU, LBS_EXTENDEDSEL, LBS_NOTIFY, LB_ADDSTRING,
-        MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_DESTROY, WM_TIMER, WNDCLASSW,
-        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+        KillTimer, MessageBoxW, PostQuitMessage, RegisterClassW, SendMessageW, SetTimer,
+        SetWindowTextW, ShowWindow, TranslateMessage, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
+        BS_CHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CB_ADDSTRING, ES_LEFT, HMENU,
+        LBS_EXTENDEDSEL, LBS_NOTIFY, LB_ADDSTRING, MB_OKCANCEL, MSG, SW_SHOW, WINDOW_EX_STYLE,
+        WINDOW_STYLE, WM_COMMAND, WM_DESTROY, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CHILD,
+        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
     };
 
     const TIMER_ID: usize = 1;
     const CRASH_TIMER_ID: usize = 2;
+    const MESSAGE_BOX_TIMER_ID: usize = 3;
     const ID_INVOKE_BUTTON: i32 = 101;
     const ID_EDIT_VALUE: i32 = 102;
     const ID_TOGGLE_CHECKBOX: i32 = 103;
@@ -56,6 +58,7 @@ mod windows_app {
         height: i32,
         duration_ms: Option<u32>,
         crash_after_ms: Option<u32>,
+        message_box_after_ms: Option<u32>,
         ready_file: Option<PathBuf>,
         create_child: bool,
         child_title: String,
@@ -119,6 +122,11 @@ mod windows_app {
         if let Some(crash_after_ms) = config.crash_after_ms {
             unsafe {
                 SetTimer(Some(hwnd), CRASH_TIMER_ID, crash_after_ms, None);
+            }
+        }
+        if let Some(message_box_after_ms) = config.message_box_after_ms {
+            unsafe {
+                SetTimer(Some(hwnd), MESSAGE_BOX_TIMER_ID, message_box_after_ms, None);
             }
         }
 
@@ -371,6 +379,20 @@ mod windows_app {
                         RaiseFailFastException(None, None, 0);
                     }
                     std::process::abort();
+                } else if wparam.0 == MESSAGE_BOX_TIMER_ID {
+                    unsafe {
+                        let _ = KillTimer(Some(hwnd), MESSAGE_BOX_TIMER_ID);
+                    }
+                    let text = wide("Dialog fixture body");
+                    let caption = wide("winctl dialog fixture");
+                    unsafe {
+                        let _ = MessageBoxW(
+                            Some(hwnd),
+                            PCWSTR(text.as_ptr()),
+                            PCWSTR(caption.as_ptr()),
+                            MB_OKCANCEL,
+                        );
+                    }
                 } else {
                     unsafe {
                         let _ = DestroyWindow(hwnd);
@@ -437,6 +459,7 @@ mod windows_app {
                 height: 420,
                 duration_ms: None,
                 crash_after_ms: None,
+                message_box_after_ms: None,
                 ready_file: None,
                 create_child: false,
                 child_title: "winctl integration child".into(),
@@ -457,6 +480,10 @@ mod windows_app {
                     }
                     "--crash-after-ms" => {
                         config.crash_after_ms = Some(parse_u32(&mut args, "--crash-after-ms"))
+                    }
+                    "--message-box-after-ms" => {
+                        config.message_box_after_ms =
+                            Some(parse_u32(&mut args, "--message-box-after-ms"))
                     }
                     "--ready-file" => {
                         config.ready_file =
@@ -508,7 +535,7 @@ mod windows_app {
 
     fn print_help() {
         eprintln!(
-            "Usage: winctl-test-target [--title TITLE] [--class CLASS] [--x PX] [--y PX] [--width PX] [--height PX] [--duration-ms MS] [--crash-after-ms MS] [--ready-file PATH] [--create-child] [--automation-controls]"
+            "Usage: winctl-test-target [--title TITLE] [--class CLASS] [--x PX] [--y PX] [--width PX] [--height PX] [--duration-ms MS] [--crash-after-ms MS] [--message-box-after-ms MS] [--ready-file PATH] [--create-child] [--automation-controls]"
         );
     }
 }
