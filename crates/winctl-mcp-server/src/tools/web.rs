@@ -120,7 +120,10 @@ async fn discover_targets(
     fetch_json(&client, join_debugger_url(&base, "/json/list")).await
 }
 
-async fn fetch_json(client: &reqwest::Client, url: Url) -> Result<serde_json::Value, serde_json::Value> {
+async fn fetch_json(
+    client: &reqwest::Client,
+    url: Url,
+) -> Result<serde_json::Value, serde_json::Value> {
     let response = client.get(url.clone()).send().await.map_err(|error| {
         serde_json::json!({
             "ok": false,
@@ -153,7 +156,9 @@ async fn fetch_json(client: &reqwest::Client, url: Url) -> Result<serde_json::Va
 
 fn client(timeout_ms: Option<u64>) -> Result<reqwest::Client, serde_json::Value> {
     reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms.unwrap_or(5_000).clamp(500, 60_000)))
+        .timeout(Duration::from_millis(
+            timeout_ms.unwrap_or(5_000).clamp(500, 60_000),
+        ))
         .build()
         .map_err(|error| {
             serde_json::json!({
@@ -206,7 +211,10 @@ fn join_debugger_url(base: &Url, path: &str) -> Url {
     url
 }
 
-fn select_target(targets: &serde_json::Value, target_id: Option<&str>) -> Option<serde_json::Value> {
+fn select_target(
+    targets: &serde_json::Value,
+    target_id: Option<&str>,
+) -> Option<serde_json::Value> {
     let array = targets.as_array()?;
     if let Some(target_id) = target_id {
         array

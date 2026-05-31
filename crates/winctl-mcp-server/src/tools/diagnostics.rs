@@ -173,7 +173,10 @@ pub fn test_report_export(state: &AppState, request: TestReportExportRequest) ->
         return exported;
     }
     let result = exported.get("result").cloned().unwrap_or_default();
-    let format = request.format.unwrap_or_else(|| "json".into()).to_ascii_lowercase();
+    let format = request
+        .format
+        .unwrap_or_else(|| "json".into())
+        .to_ascii_lowercase();
     let content = match format.as_str() {
         "json" => serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".into()),
         "junit" | "xml" => junit_report(&request.run_id, &result),
@@ -190,10 +193,11 @@ pub fn test_report_export(state: &AppState, request: TestReportExportRequest) ->
         "html" => "html",
         _ => "json",
     };
-    let output_path = request
-        .output_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| state.capture_dir.join(format!("{}-report.{extension}", request.run_id)));
+    let output_path = request.output_path.map(PathBuf::from).unwrap_or_else(|| {
+        state
+            .capture_dir
+            .join(format!("{}-report.{extension}", request.run_id))
+    });
     if let Some(parent) = output_path.parent() {
         if let Err(error) = fs::create_dir_all(parent) {
             return io_error("report_dir_create_failed", parent, error);
@@ -212,8 +216,8 @@ pub fn test_report_export(state: &AppState, request: TestReportExportRequest) ->
 
 fn validate_cwd(state: &AppState, cwd: &str) -> Result<PathBuf, serde_json::Value> {
     let path = PathBuf::from(cwd);
-    let canonical = fs::canonicalize(&path)
-        .map_err(|error| io_error("build_cwd_unavailable", &path, error))?;
+    let canonical =
+        fs::canonicalize(&path).map_err(|error| io_error("build_cwd_unavailable", &path, error))?;
     if state.policy.filesystem_roots.is_empty()
         || state
             .policy
@@ -265,7 +269,8 @@ fn parse_build_diagnostics(stdout: &str, stderr: &str) -> serde_json::Value {
             if lower.contains("error") {
                 errors.push(serde_json::json!({"stream": stream, "line": index + 1, "text": line}));
             } else if lower.contains("warning") {
-                warnings.push(serde_json::json!({"stream": stream, "line": index + 1, "text": line}));
+                warnings
+                    .push(serde_json::json!({"stream": stream, "line": index + 1, "text": line}));
             }
         }
     }

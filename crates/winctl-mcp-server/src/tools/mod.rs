@@ -1,5 +1,5 @@
-pub mod browser;
 pub mod assertions;
+pub mod browser;
 pub mod capture;
 pub mod control;
 pub mod diagnostics;

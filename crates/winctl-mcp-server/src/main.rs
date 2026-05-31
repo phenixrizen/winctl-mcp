@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header::CONTENT_TYPE, HeaderMap, StatusCode, Uri};
 use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
@@ -1046,7 +1046,10 @@ impl WinctlMcpServer {
     )]
     pub async fn control_state(&self) -> Json<serde_json::Value> {
         let state = self.state.clone();
-        run_blocking_tool("control.state", move || tools::control::control_state(&state)).await
+        run_blocking_tool("control.state", move || {
+            tools::control::control_state(&state)
+        })
+        .await
     }
 
     #[tool(
@@ -2715,14 +2718,9 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("test.run", move || {
-            tools::control::with_control_gate(
-                &state,
-                "test.run",
-                None,
-                "test_replay",
-                true,
-                || tools::tests::test_run(&state, request),
-            )
+            tools::control::with_control_gate(&state, "test.run", None, "test_replay", true, || {
+                tools::tests::test_run(&state, request)
+            })
         })
         .await
     }
@@ -3275,6 +3273,9 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     let dashboard_router = Router::new()
         .route("/dashboard", get(dashboard_html))
         .route("/dashboard/state", get(dashboard_state_json))
+        .route("/dashboard/uia", get(dashboard_uia_json))
+        .route("/dashboard/screenshot", get(dashboard_screenshot_json))
+        .route("/dashboard/capture-file", get(dashboard_capture_file))
         .route("/recorder", get(recorder_html))
         .route("/recorder/state", get(recorder_state_json))
         .with_state(dashboard_state);
@@ -3401,6 +3402,107 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
             "connected client and request-history tracking are not enabled yet"
         ]
     }))
+}
+
+async fn dashboard_uia_json(
+    State(state): State<DashboardState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let Some(bound_id) = params.get("bound_id").cloned() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            AxumJson(serde_json::json!({
+                "ok": false,
+                "error": {"code": "bound_id_required", "message": "bound_id query parameter is required"}
+            })),
+        )
+            .into_response();
+    };
+    let app_state = state.app_state.clone();
+    match tokio::task::spawn_blocking(move || {
+        tools::uia::uia_snapshot(
+            &app_state,
+            UiSnapshotRequest {
+                bound_id,
+                max_depth: Some(8),
+                max_elements: Some(1_000),
+            },
+        )
+    })
+    .await
+    {
+        Ok(value) => AxumJson(value).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(serde_json::json!({
+                "ok": false,
+                "error": {"code": "dashboard_uia_task_failed", "message": error.to_string()}
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn dashboard_screenshot_json(
+    State(state): State<DashboardState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let Some(bound_id) = params.get("bound_id").cloned() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            AxumJson(serde_json::json!({
+                "ok": false,
+                "error": {"code": "bound_id_required", "message": "bound_id query parameter is required"}
+            })),
+        )
+            .into_response();
+    };
+    let app_state = state.app_state.clone();
+    match tokio::task::spawn_blocking(move || {
+        tools::capture::screenshot_window(&app_state, bound_id)
+    })
+    .await
+    {
+        Ok(value) => AxumJson(value).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(serde_json::json!({
+                "ok": false,
+                "error": {"code": "dashboard_screenshot_task_failed", "message": error.to_string()}
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn dashboard_capture_file(
+    State(state): State<DashboardState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let Some(path) = params.get("path") else {
+        return (StatusCode::BAD_REQUEST, "path query parameter is required").into_response();
+    };
+    let requested = PathBuf::from(path);
+    let capture_dir = match std::fs::canonicalize(state.app_state.capture_dir.as_ref()) {
+        Ok(path) => path,
+        Err(_) => return (StatusCode::NOT_FOUND, "capture directory unavailable").into_response(),
+    };
+    let requested = match std::fs::canonicalize(&requested) {
+        Ok(path) => path,
+        Err(_) => return (StatusCode::NOT_FOUND, "capture not found").into_response(),
+    };
+    if !requested.starts_with(&capture_dir) {
+        tracing::warn!(
+            requested = %requested.display(),
+            capture_dir = %capture_dir.display(),
+            "dashboard capture-file rejected path outside capture dir"
+        );
+        return (StatusCode::FORBIDDEN, "capture path not allowed").into_response();
+    }
+    match tokio::fs::read(&requested).await {
+        Ok(bytes) => ([(CONTENT_TYPE, "image/png")], bytes).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "capture not found").into_response(),
+    }
 }
 
 async fn recorder_state_json(State(state): State<DashboardState>) -> impl IntoResponse {

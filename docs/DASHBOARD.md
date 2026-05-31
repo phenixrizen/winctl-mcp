@@ -4,8 +4,11 @@
 
 The Streamable HTTP server exposes a read-only Vue dashboard:
 
-- `/dashboard`: browser UI for server status, policy, bound windows, launched processes, memory, and macros.
+- `/dashboard`: browser UI for server status, policy, bound windows, launched processes, memory, macros, control state, UIA inspection, and screenshots.
 - `/dashboard/state`: JSON diagnostics used by the dashboard.
+- `/dashboard/uia`: authenticated JSON endpoint for live UIA snapshots by `bound_id`.
+- `/dashboard/screenshot`: authenticated JSON endpoint for live bound-window screenshots.
+- `/dashboard/capture-file`: authenticated image endpoint for capture files under the configured capture directory.
 - `/dashboard/assets/*`: embedded static Vue/Tailwind/daisyUI assets.
 
 ## Policy

@@ -7,8 +7,7 @@ use crate::{
 };
 use winctl::{
     find_ui_elements, resolve_ui_element_ref, ui_automation_snapshot, ClickRequest,
-    CoordinateSpace, ShortcutRequest, TypeTextRequest, UiAutomationSnapshot, UiElementInfo,
-    UiRect,
+    CoordinateSpace, ShortcutRequest, TypeTextRequest, UiAutomationSnapshot, UiElementInfo, UiRect,
 };
 
 pub fn uia_snapshot(state: &AppState, request: UiSnapshotRequest) -> serde_json::Value {
@@ -209,7 +208,12 @@ pub fn uia_set_value(state: &AppState, request: UiSetValueRequest) -> serde_json
     };
     let fallback = coordinate_fallback_hint(&resolved.element);
     if let Err(error) = ensure_actionable(&resolved.element, request.allow_offscreen, true) {
-        return unsupported_action("uia.set_value", "value_pattern_unavailable", resolved, error);
+        return unsupported_action(
+            "uia.set_value",
+            "value_pattern_unavailable",
+            resolved,
+            error,
+        );
     }
     let click = dispatch_center_click(state, &request.bound_id, &resolved.element);
     if !json_ok(&click) {
@@ -296,10 +300,7 @@ pub fn uia_get_value(state: &AppState, request: UiElementActionRequest) -> serde
     }
 }
 
-pub fn uia_expand_collapse(
-    state: &AppState,
-    request: UiElementActionRequest,
-) -> serde_json::Value {
+pub fn uia_expand_collapse(state: &AppState, request: UiElementActionRequest) -> serde_json::Value {
     unsupported_pattern_action(state, request, "uia.expand_collapse", "expand_collapse")
 }
 
@@ -427,7 +428,8 @@ fn click_fallback_action(
         Err(error) => return error,
     };
     let fallback = coordinate_fallback_hint(&resolved.element);
-    if let Err(error) = ensure_actionable(&resolved.element, request.allow_offscreen, require_bounds)
+    if let Err(error) =
+        ensure_actionable(&resolved.element, request.allow_offscreen, require_bounds)
     {
         return unsupported_action(tool_name, "element_not_actionable", resolved, error);
     }

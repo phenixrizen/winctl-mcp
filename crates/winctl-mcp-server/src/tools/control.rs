@@ -85,7 +85,10 @@ pub struct ControlPreflight {
 
 pub fn control_state(state: &AppState) -> serde_json::Value {
     tracing::info!("control.state requested");
-    let runtime = state.control_runtime.lock().expect("control mutex poisoned");
+    let runtime = state
+        .control_runtime
+        .lock()
+        .expect("control mutex poisoned");
     serde_json::json!({
         "ok": true,
         "control": snapshot_locked(&runtime),
@@ -105,8 +108,14 @@ pub fn control_arm(state: &AppState, request: ControlArmRequest) -> serde_json::
         .as_ref()
         .and_then(|bound_id| bound_identity(state, bound_id));
     let now = now_unix_ms();
-    let allow_for_ms = request.allow_for_ms.unwrap_or(DEFAULT_ARM_MS).clamp(1_000, 24 * 60 * 60 * 1000);
-    let mut runtime = state.control_runtime.lock().expect("control mutex poisoned");
+    let allow_for_ms = request
+        .allow_for_ms
+        .unwrap_or(DEFAULT_ARM_MS)
+        .clamp(1_000, 24 * 60 * 60 * 1000);
+    let mut runtime = state
+        .control_runtime
+        .lock()
+        .expect("control mutex poisoned");
     runtime.status = ControlStatus::Armed;
     runtime.session_id = request.session_id.clone();
     runtime.bound_id = request.bound_id.clone();
@@ -121,7 +130,9 @@ pub fn control_arm(state: &AppState, request: ControlArmRequest) -> serde_json::
         None,
         request.bound_id,
         request.session_id,
-        request.reason.unwrap_or_else(|| "control session armed".into()),
+        request
+            .reason
+            .unwrap_or_else(|| "control session armed".into()),
     );
     serde_json::json!({
         "ok": true,
@@ -144,7 +155,10 @@ pub fn control_consent(state: &AppState, request: ControlConsentRequest) -> serd
         .as_ref()
         .and_then(|bound_id| bound_identity(state, bound_id));
     let now = now_unix_ms();
-    let mut runtime = state.control_runtime.lock().expect("control mutex poisoned");
+    let mut runtime = state
+        .control_runtime
+        .lock()
+        .expect("control mutex poisoned");
     let (status, armed_until) = match decision.as_str() {
         "allow_once" => (ControlStatus::Armed, Some(now.saturating_add(30_000))),
         "allow_session" => {
@@ -195,7 +209,10 @@ pub fn control_revoke(state: &AppState, request: ControlRevokeRequest) -> serde_
         session_id = ?request.session_id,
         "control.revoke requested"
     );
-    let mut runtime = state.control_runtime.lock().expect("control mutex poisoned");
+    let mut runtime = state
+        .control_runtime
+        .lock()
+        .expect("control mutex poisoned");
     runtime.status = ControlStatus::Revoked;
     runtime.armed_until_unix_ms = None;
     runtime.last_decision = Some("revoke_session".into());
@@ -210,7 +227,9 @@ pub fn control_revoke(state: &AppState, request: ControlRevokeRequest) -> serde_
         None,
         event_bound_id,
         request.session_id,
-        request.reason.unwrap_or_else(|| "control session revoked".into()),
+        request
+            .reason
+            .unwrap_or_else(|| "control session revoked".into()),
     );
     serde_json::json!({
         "ok": true,
@@ -231,7 +250,10 @@ pub fn control_notify(state: &AppState, request: ControlNotifyRequest) -> serde_
         .bound_id
         .as_ref()
         .and_then(|bound_id| bound_identity(state, bound_id));
-    let mut runtime = state.control_runtime.lock().expect("control mutex poisoned");
+    let mut runtime = state
+        .control_runtime
+        .lock()
+        .expect("control mutex poisoned");
     runtime.status = ControlStatus::Warning;
     runtime.session_id = request.session_id.clone();
     runtime.bound_id = request.bound_id.clone();
@@ -275,7 +297,10 @@ pub fn preflight_control_action(
 ) -> Result<ControlPreflight, serde_json::Value> {
     let target_identity = bound_id.and_then(|id| bound_identity(state, id));
     let now = now_unix_ms();
-    let mut runtime = state.control_runtime.lock().expect("control mutex poisoned");
+    let mut runtime = state
+        .control_runtime
+        .lock()
+        .expect("control mutex poisoned");
     let status_before = runtime.status;
     if runtime.emergency_stop_active || matches!(runtime.status, ControlStatus::Revoked) {
         let event_session_id = runtime.session_id.clone();
@@ -358,7 +383,9 @@ pub fn preflight_control_action(
     } else {
         ControlStatus::Controlling
     };
-    runtime.bound_id = bound_id.map(str::to_owned).or_else(|| runtime.bound_id.clone());
+    runtime.bound_id = bound_id
+        .map(str::to_owned)
+        .or_else(|| runtime.bound_id.clone());
     runtime.target_identity = target_identity.or_else(|| runtime.target_identity.clone());
     runtime.active_tool = Some(tool_name.into());
     runtime.active_action_kind = Some(action_kind.into());
@@ -398,7 +425,10 @@ pub fn finish_control_action(
     action_kind: &'static str,
     ok: bool,
 ) {
-    let mut runtime = state.control_runtime.lock().expect("control mutex poisoned");
+    let mut runtime = state
+        .control_runtime
+        .lock()
+        .expect("control mutex poisoned");
     if matches!(runtime.status, ControlStatus::Revoked) {
         return;
     }
@@ -451,11 +481,11 @@ pub fn with_control_gate<F>(
 where
     F: FnOnce() -> serde_json::Value,
 {
-    let preflight = match preflight_control_action(state, tool_name, bound_id, action_kind, sensitive)
-    {
-        Ok(preflight) => preflight,
-        Err(error) => return error,
-    };
+    let preflight =
+        match preflight_control_action(state, tool_name, bound_id, action_kind, sensitive) {
+            Ok(preflight) => preflight,
+            Err(error) => return error,
+        };
     let mut output = operation();
     let ok = output
         .get("ok")

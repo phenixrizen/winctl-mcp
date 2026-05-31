@@ -43,12 +43,17 @@ createApp({
       refreshing: false,
       error: null,
       selectedTab: 'overview',
+      selectedBoundId: '',
+      uiaSnapshot: null,
+      screenshotResult: null,
+      inspectError: null,
       autoRefresh: true,
       lastUpdated: null,
       intervalId: null,
       tabs: [
         { id: 'overview', label: 'Overview' },
         { id: 'control', label: 'Control' },
+        { id: 'inspect', label: 'Inspect' },
         { id: 'windows', label: 'Windows' },
         { id: 'processes', label: 'Processes' },
         { id: 'memory', label: 'Memory' },
@@ -112,6 +117,15 @@ createApp({
       if (this.refreshing) return 'bg-[#ffd166]';
       return 'bg-[#06d6a0]';
     },
+    activeBoundId() {
+      return this.selectedBoundId || this.boundWindows[0]?.bound_id || '';
+    },
+    screenshotImageUrl() {
+      const path = this.screenshotResult?.screenshot?.output_path;
+      if (!path) return '';
+      const tokenQuery = authToken ? `&token=${encodeURIComponent(authToken)}` : '';
+      return `/dashboard/capture-file?path=${encodeURIComponent(path)}${tokenQuery}`;
+    },
     controlBadgeClass() {
       const status = this.controlState.status;
       if (status === 'revoked' || status === 'blocked') return 'badge-error';
@@ -163,6 +177,34 @@ createApp({
     },
     badgeClass(value) {
       return value ? 'badge-success' : 'badge-ghost';
+    },
+    async loadUiaSnapshot() {
+      if (!this.activeBoundId) return;
+      this.inspectError = null;
+      try {
+        const response = await fetch(`/dashboard/uia?bound_id=${encodeURIComponent(this.activeBoundId)}`, {
+          cache: 'no-store',
+          headers: authHeaders(),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        this.uiaSnapshot = await response.json();
+      } catch (error) {
+        this.inspectError = String(error);
+      }
+    },
+    async captureScreenshot() {
+      if (!this.activeBoundId) return;
+      this.inspectError = null;
+      try {
+        const response = await fetch(`/dashboard/screenshot?bound_id=${encodeURIComponent(this.activeBoundId)}`, {
+          cache: 'no-store',
+          headers: authHeaders(),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        this.screenshotResult = await response.json();
+      } catch (error) {
+        this.inspectError = String(error);
+      }
     },
   },
   template: `
@@ -359,6 +401,43 @@ createApp({
                 </tbody>
               </table>
             </div>
+          </section>
+        </section>
+
+        <section v-if="selectedTab === 'inspect'" class="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+          <section class="winctl-card">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+              <h2 class="text-sm font-semibold">Active binding</h2>
+              <span class="badge badge-info badge-outline">{{ boundWindows.length }}</span>
+            </div>
+            <div class="space-y-4 p-4">
+              <select v-model="selectedBoundId" class="select select-bordered w-full">
+                <option value="">First bound window</option>
+                <option v-for="bound in boundWindows" :key="bound.bound_id" :value="bound.bound_id">
+                  {{ boundTitle(bound) }} - {{ bound.bound_id }}
+                </option>
+              </select>
+              <div class="flex flex-wrap gap-2">
+                <button type="button" class="btn btn-sm btn-info" :disabled="!activeBoundId" @click="loadUiaSnapshot">
+                  UIA snapshot
+                </button>
+                <button type="button" class="btn btn-sm" :disabled="!activeBoundId" @click="captureScreenshot">
+                  Screenshot
+                </button>
+              </div>
+              <div v-if="inspectError" class="alert alert-error text-sm">{{ inspectError }}</div>
+              <div v-if="screenshotResult?.screenshot" class="space-y-3">
+                <img v-if="screenshotImageUrl" :src="screenshotImageUrl" alt="Bound window screenshot" class="winctl-screenshot" />
+                <pre class="winctl-json m-0 p-3 text-xs">{{ pretty(screenshotResult.screenshot) }}</pre>
+              </div>
+            </div>
+          </section>
+
+          <section class="winctl-card overflow-hidden">
+            <div class="winctl-card-header px-4 py-3">
+              <h2 class="text-sm font-semibold">UI Automation tree</h2>
+            </div>
+            <pre class="winctl-json m-0 p-4 text-xs">{{ pretty(uiaSnapshot ?? {}) }}</pre>
           </section>
         </section>
 

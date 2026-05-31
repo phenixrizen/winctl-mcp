@@ -197,6 +197,10 @@
 
 ## Phase 16: Dashboard and System Tray Enhancements
 
+**Status:** Complete for first-pass dashboard inspection and tray recorder shortcuts.
+
+**Audit comments:** Added dashboard control/inspection surfaces, authenticated UIA snapshot and screenshot endpoints, capture-image viewing, and tray shortcuts for recorder access/recording toggle. Visual diff browsing, manifest quick-launch catalogs, and completion monitoring remain follow-up UX work.
+
 - Add a live view of the UI Automation tree and real-time screenshot feeds to the `/dashboard` for debugging active bindings.
 - Add visual diff viewers to the dashboard for inspecting `capture.compare_baseline` failures.
 - Expand the `winctl-tray` app with quick-launch shortcuts for common test manifests and macro suites.

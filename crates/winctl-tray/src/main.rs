@@ -32,6 +32,7 @@ fn run() -> anyhow::Result<()> {
             Ok(())
         }
         CommandMode::OpenDashboard => open_dashboard(&cli.config),
+        CommandMode::OpenRecorder | CommandMode::RecordingToggle => open_recorder(&cli.config),
         CommandMode::DashboardWindow => run_dashboard_window(&cli.config),
         CommandMode::RunTray => run_tray(&cli.config),
     }
@@ -51,6 +52,8 @@ enum CommandMode {
     Restart,
     CopyMcpUrl,
     OpenDashboard,
+    OpenRecorder,
+    RecordingToggle,
     DashboardWindow,
     RunTray,
 }
@@ -122,6 +125,17 @@ impl TrayConfig {
                 percent_encode_query_value(token)
             ),
             _ => format!("http://{}/dashboard", self.listen),
+        }
+    }
+
+    fn recorder_url(&self) -> String {
+        match &self.auth_token {
+            Some(token) if !token.is_empty() => format!(
+                "http://{}/recorder?token={}",
+                self.listen,
+                percent_encode_query_value(token)
+            ),
+            _ => format!("http://{}/recorder", self.listen),
         }
     }
 
@@ -198,6 +212,8 @@ impl Cli {
                 "restart" => command = CommandMode::Restart,
                 "copy-mcp-url" => command = CommandMode::CopyMcpUrl,
                 "open-dashboard" => command = CommandMode::OpenDashboard,
+                "open-recorder" => command = CommandMode::OpenRecorder,
+                "recording-toggle" => command = CommandMode::RecordingToggle,
                 "dashboard-window" => command = CommandMode::DashboardWindow,
                 "run" => command = CommandMode::RunTray,
                 "--server-exe" => {
@@ -321,6 +337,19 @@ fn print_status(config: &TrayConfig) -> anyhow::Result<()> {
 
 fn open_dashboard(config: &TrayConfig) -> anyhow::Result<()> {
     let url = config.dashboard_url();
+    #[cfg(windows)]
+    {
+        spawn_dashboard_window(&url)?;
+    }
+    #[cfg(not(windows))]
+    {
+        println!("{url}");
+    }
+    Ok(())
+}
+
+fn open_recorder(config: &TrayConfig) -> anyhow::Result<()> {
+    let url = config.recorder_url();
     #[cfg(windows)]
     {
         spawn_dashboard_window(&url)?;
@@ -533,8 +562,8 @@ mod windows_tray {
     };
 
     use super::{
-        copy_mcp_url_to_clipboard, open_dashboard, server_pid, start_server, stop_server,
-        TrayConfig,
+        copy_mcp_url_to_clipboard, open_dashboard, open_recorder, server_pid, start_server,
+        stop_server, TrayConfig,
     };
 
     const TRAY_UID: u32 = 1;
@@ -544,7 +573,9 @@ mod windows_tray {
     const MENU_STOP_SERVER: u32 = 1003;
     const MENU_RESTART_SERVER: u32 = 1004;
     const MENU_COPY_MCP_URL: u32 = 1005;
-    const MENU_QUIT: u32 = 1006;
+    const MENU_OPEN_RECORDER: u32 = 1006;
+    const MENU_RECORDING_TOGGLE: u32 = 1007;
+    const MENU_QUIT: u32 = 1008;
 
     struct TrayState {
         config: TrayConfig,
@@ -707,7 +738,10 @@ mod windows_tray {
         let running = server_pid(&state.config).is_some();
         unsafe {
             append_menu_item(menu, MENU_OPEN_DASHBOARD, "Open Dashboard", true)?;
+            append_menu_item(menu, MENU_OPEN_RECORDER, "Open Recorder", true)?;
             append_menu_item(menu, MENU_COPY_MCP_URL, "Copy MCP URL", true)?;
+            append_separator(menu)?;
+            append_menu_item(menu, MENU_RECORDING_TOGGLE, "Recording Toggle", true)?;
             append_separator(menu)?;
             append_menu_item(menu, MENU_START_SERVER, "Start Server", !running)?;
             append_menu_item(menu, MENU_STOP_SERVER, "Stop Server", running)?;
@@ -758,6 +792,7 @@ mod windows_tray {
     unsafe fn handle_command(hwnd: HWND, state: &mut TrayState, command_id: u32) {
         let result = match command_id {
             MENU_OPEN_DASHBOARD => open_dashboard(&state.config),
+            MENU_OPEN_RECORDER | MENU_RECORDING_TOGGLE => open_recorder(&state.config),
             MENU_START_SERVER => start_server(&state.config),
             MENU_STOP_SERVER => stop_server(&state.config),
             MENU_RESTART_SERVER => {
@@ -777,6 +812,8 @@ mod windows_tray {
                 let _ = unsafe { modify_icon_tip(hwnd, state.icon) };
                 if command_id == MENU_COPY_MCP_URL {
                     let _ = unsafe { show_balloon(hwnd, "winctl-mcp", "MCP URL copied") };
+                } else if command_id == MENU_RECORDING_TOGGLE {
+                    let _ = unsafe { show_balloon(hwnd, "winctl-mcp", "Recorder opened") };
                 }
             }
             Err(error) => {
@@ -1049,6 +1086,13 @@ listen = "127.0.0.1:8765"
             cli.config.dashboard_url(),
             "http://127.0.0.1:8765/dashboard?token=test"
         );
+    }
+
+    #[test]
+    fn parses_recorder_shortcuts() {
+        let cli = Cli::parse([OsString::from("recording-toggle")]).unwrap();
+        assert_eq!(cli.command, CommandMode::RecordingToggle);
+        assert_eq!(cli.config.recorder_url(), "http://127.0.0.1:8765/recorder");
     }
 
     #[test]

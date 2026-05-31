@@ -34,7 +34,11 @@ pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_
     } else if let Some(selector) = &request.selector {
         find_ui_elements(&snapshot, selector)
     } else {
-        return fail("uia_selector_required", "element_ref or selector is required", None);
+        return fail(
+            "uia_selector_required",
+            "element_ref or selector is required",
+            None,
+        );
     };
     let exists = !matches.is_empty();
     let mut failures = Vec::new();
@@ -228,10 +232,7 @@ pub fn assert_clipboard(request: AssertClipboardRequest) -> serde_json::Value {
     })
 }
 
-pub fn capture_ocr_region(
-    state: &AppState,
-    request: CaptureOcrRegionRequest,
-) -> serde_json::Value {
+pub fn capture_ocr_region(state: &AppState, request: CaptureOcrRegionRequest) -> serde_json::Value {
     tracing::info!(
         image_path = ?request.image_path,
         bound_id = ?request.bound_id,
@@ -315,11 +316,23 @@ pub fn capture_compare_baseline(
     let baseline_path = PathBuf::from(&request.baseline_path);
     let actual = match image::open(&actual_path) {
         Ok(image) => image.to_rgba8(),
-        Err(error) => return fail("actual_image_open_failed", &format!("{error}"), Some(actual_path)),
+        Err(error) => {
+            return fail(
+                "actual_image_open_failed",
+                &format!("{error}"),
+                Some(actual_path),
+            )
+        }
     };
     let baseline = match image::open(&baseline_path) {
         Ok(image) => image.to_rgba8(),
-        Err(error) => return fail("baseline_image_open_failed", &format!("{error}"), Some(baseline_path)),
+        Err(error) => {
+            return fail(
+                "baseline_image_open_failed",
+                &format!("{error}"),
+                Some(baseline_path),
+            )
+        }
     };
     if actual.dimensions() != baseline.dimensions() {
         return serde_json::json!({
@@ -349,10 +362,11 @@ pub fn capture_compare_baseline(
     }
     let max_different_pixels = request.max_different_pixels.unwrap_or(0);
     let passed = different_pixels <= max_different_pixels;
-    let diff_path = request
-        .diff_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| state.capture_dir.join(format!("baseline-diff-{}.png", now_unix_ms())));
+    let diff_path = request.diff_path.map(PathBuf::from).unwrap_or_else(|| {
+        state
+            .capture_dir
+            .join(format!("baseline-diff-{}.png", now_unix_ms()))
+    });
     let diff_save = diff.save(&diff_path).map(|_| diff_path.clone());
     serde_json::json!({
         "ok": true,
@@ -413,7 +427,13 @@ fn resolve_image_path(
         .and_then(|screenshot| screenshot.get("output_path"))
         .and_then(|value| value.as_str())
         .map(PathBuf::from)
-        .ok_or_else(|| fail("screenshot_path_missing", "screenshot did not include output_path", None))
+        .ok_or_else(|| {
+            fail(
+                "screenshot_path_missing",
+                "screenshot did not include output_path",
+                None,
+            )
+        })
 }
 
 fn snapshot_summary(snapshot: &winctl::UiAutomationSnapshot) -> serde_json::Value {
