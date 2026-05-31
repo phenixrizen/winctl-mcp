@@ -4703,6 +4703,103 @@ mod tests {
     }
 
     #[test]
+    fn macro_image_checkpoint_runs_baseline_comparison() {
+        let capture_dir = std::env::temp_dir().join(format!(
+            "winctl-mcp-image-checkpoint-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&capture_dir).unwrap();
+        let baseline_path = capture_dir.join("baseline.png");
+        let actual_path = capture_dir.join("actual.png");
+        let image = image::ImageBuffer::from_pixel(3, 3, image::Rgba([20u8, 40, 60, 255]));
+        image.save(&baseline_path).unwrap();
+        image.save(&actual_path).unwrap();
+
+        let state = AppState::with_capture_dir_and_memory(
+            capture_dir.clone(),
+            winctl_memory::MemoryStore::open_in_memory().unwrap(),
+        );
+        let manifest = checkpoint_manifest(vec![winctl_macro::MacroStep {
+            id: "image-checkpoint".into(),
+            tool: "macro.assert_image_checkpoint".into(),
+            args: serde_json::json!({
+                "actual_path": actual_path,
+                "baseline_path": baseline_path,
+                "max_different_pixels": 0
+            }),
+            target: Some(winctl_macro::MacroTarget::ImageCheckpoint {
+                checkpoint_id: "baseline".into(),
+                path: None,
+                checksum_sha256: None,
+            }),
+            timeout_ms: None,
+            required: true,
+            continue_on_failure: false,
+            coordinate_fallback: None,
+            audit: Default::default(),
+        }]);
+
+        let value = tools::macros::macro_run(
+            &state,
+            MacroRunRequest {
+                manifest: Some(manifest),
+                memory_id: None,
+                max_steps: None,
+            },
+        );
+
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["result"]["status"], "succeeded");
+        let step_output = &value["result"]["step_results"][0]["output"];
+        assert_eq!(step_output["assertion"], "image_checkpoint");
+        assert_eq!(step_output["comparison"]["different_pixels"], 0);
+        assert_ne!(
+            step_output["error"]["code"],
+            "macro_assertion_not_implemented"
+        );
+    }
+
+    #[test]
+    fn macro_text_checkpoint_fails_macro_when_text_is_missing() {
+        let state = AppState::with_capture_dir_and_memory(
+            std::env::temp_dir().join("winctl-mcp-test-captures"),
+            winctl_memory::MemoryStore::open_in_memory().unwrap(),
+        );
+        let manifest = checkpoint_manifest(vec![winctl_macro::MacroStep {
+            id: "text-checkpoint".into(),
+            tool: "macro.assert_text_checkpoint".into(),
+            args: serde_json::json!({
+                "actual_text": "Settings pane is ready",
+                "contains": "missing text"
+            }),
+            target: Some(winctl_macro::MacroTarget::TextCheckpoint {
+                text: "missing text".into(),
+            }),
+            timeout_ms: None,
+            required: true,
+            continue_on_failure: false,
+            coordinate_fallback: None,
+            audit: Default::default(),
+        }]);
+
+        let value = tools::macros::macro_run(
+            &state,
+            MacroRunRequest {
+                manifest: Some(manifest),
+                memory_id: None,
+                max_steps: None,
+            },
+        );
+
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["result"]["status"], "failed");
+        let step = &value["result"]["step_results"][0];
+        assert_eq!(step["status"], "failed");
+        assert_eq!(step["error"]["code"], "macro_assertion_failed");
+        assert_eq!(step["output"]["assertion"], "text_checkpoint");
+    }
+
+    #[test]
     fn process_kill_refuses_untracked_pid() {
         let state = AppState::default();
         let value = tools::process::process_kill(
@@ -4900,6 +4997,39 @@ dimension = 384
             }],
             waits: vec![],
             assertions: vec![],
+            cleanup: vec![],
+            artifacts: Default::default(),
+            replay: Default::default(),
+        }
+    }
+
+    fn checkpoint_manifest(
+        assertions: Vec<winctl_macro::MacroStep>,
+    ) -> winctl_macro::MacroManifest {
+        winctl_macro::MacroManifest {
+            version: winctl_macro::MACRO_MANIFEST_VERSION.into(),
+            kind: "test_procedure".into(),
+            title: "Checkpoint macro".into(),
+            description: "Exercise macro checkpoint assertions.".into(),
+            tags: vec!["test".into()],
+            app_identity: Some(winctl_macro::AppIdentity {
+                executable_name: Some("Fixture.exe".into()),
+                executable_path: None,
+                product_name: None,
+                required: true,
+                extra: serde_json::Value::Null,
+            }),
+            launch: None,
+            bind: Some(winctl_macro::BindingStrategy {
+                strategy: "bound_window".into(),
+                required_executable: Some("Fixture.exe".into()),
+                expected_identity_json: None,
+                allow_child_process_windows: false,
+            }),
+            preconditions: vec![],
+            steps: vec![],
+            waits: vec![],
+            assertions,
             cleanup: vec![],
             artifacts: Default::default(),
             replay: Default::default(),

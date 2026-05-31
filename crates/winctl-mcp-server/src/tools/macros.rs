@@ -16,6 +16,7 @@ use winctl_memory::{MemoryListRequest, RememberRequest};
 use crate::{
     AppLaunchRequest, AppState, BoundIdRequest, BrowserAssertRequest, BrowserDescribeRequest,
     BrowserExtractContentRequest, BrowserListRequest, BrowserWaitForNavigationRequest,
+    CaptureCompareBaselineRequest, CaptureOcrRegionRequest, CaptureReadTextRequest,
     DisplayScreenshotRequest, MacroAbortRequest, MacroDryRunRequest, MacroExportResultRequest,
     MacroGetRequest, MacroListRequest, MacroManifestRequest, MacroPromoteRequest, MacroRunRequest,
     MacroRunStepRequest, ProcessDescribeRequest, ProcessKillRequest, UiFindRequest,
@@ -60,6 +61,34 @@ struct ExecutionContext {
     launch_id: Option<String>,
     pid: Option<u32>,
     bound_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MacroImageCheckpointArgs {
+    actual_path: Option<String>,
+    baseline_path: Option<String>,
+    diff_path: Option<String>,
+    bound_id: Option<String>,
+    tolerance: Option<u8>,
+    max_different_pixels: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MacroTextCheckpointArgs {
+    text: Option<String>,
+    expected: Option<String>,
+    contains: Option<String>,
+    actual_text: Option<String>,
+    image_path: Option<String>,
+    bound_id: Option<String>,
+    x: Option<u32>,
+    y: Option<u32>,
+    width: Option<u32>,
+    height: Option<u32>,
+    max_depth: Option<usize>,
+    max_elements: Option<usize>,
+    use_ocr: Option<bool>,
+    case_sensitive: Option<bool>,
 }
 
 impl ExecutionContext {
@@ -826,13 +855,8 @@ fn dispatch_tool(
         "uia.find" => Ok(crate::tools::uia::uia_find(state, parse_args(args)?)),
         "uia.resolve" => Ok(crate::tools::uia::uia_resolve(state, parse_args(args)?)),
         "macro.assert_uia_element" => assert_uia_element(state, args, context, step),
-        "macro.assert_image_checkpoint" | "macro.assert_text_checkpoint" => Ok(serde_json::json!({
-            "ok": false,
-            "error": {
-                "code": "macro_assertion_not_implemented",
-                "message": format!("{tool} validation is reserved for the artifact assertion implementation")
-            }
-        })),
+        "macro.assert_image_checkpoint" => assert_image_checkpoint(state, args, context, step),
+        "macro.assert_text_checkpoint" => assert_text_checkpoint(state, args, context, step),
         other => Err(MacroStepError {
             kind: MacroStepErrorKind::ValidationFailure,
             code: "unknown_tool".into(),
@@ -840,6 +864,187 @@ fn dispatch_tool(
             diagnostics: Value::Null,
         }),
     }
+}
+
+fn assert_image_checkpoint(
+    state: &AppState,
+    args: Value,
+    context: &ExecutionContext,
+    step: &MacroStep,
+) -> Result<Value, MacroStepError> {
+    let request = serde_json::from_value::<MacroImageCheckpointArgs>(args).map_err(|error| {
+        MacroStepError {
+            kind: MacroStepErrorKind::ValidationFailure,
+            code: "macro_step_args_invalid".into(),
+            message: error.to_string(),
+            diagnostics: Value::Null,
+        }
+    })?;
+    let baseline_path = request
+        .baseline_path
+        .or_else(|| match &step.target {
+            Some(winctl_macro::MacroTarget::ImageCheckpoint { path, .. }) => path.clone(),
+            _ => None,
+        })
+        .ok_or_else(|| MacroStepError {
+            kind: MacroStepErrorKind::ValidationFailure,
+            code: "image_baseline_required".into(),
+            message: "macro.assert_image_checkpoint requires baseline_path or an image checkpoint target path".into(),
+            diagnostics: Value::Null,
+        })?;
+    let actual_path = match request.actual_path {
+        Some(path) => path,
+        None => {
+            let bound_id = request.bound_id.or_else(|| context.bound_id.clone()).ok_or_else(|| {
+                MacroStepError {
+                    kind: MacroStepErrorKind::TargetIdentityFailure,
+                    code: "missing_bound_id".into(),
+                    message: "macro.assert_image_checkpoint requires actual_path or a bound_id/context bound_id to capture".into(),
+                    diagnostics: Value::Null,
+                }
+            })?;
+            let capture = crate::tools::capture::screenshot_window(state, bound_id);
+            if !capture.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                return Ok(capture);
+            }
+            capture
+                .get("screenshot")
+                .and_then(|screenshot| screenshot.get("output_path"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| MacroStepError {
+                    kind: MacroStepErrorKind::ToolExecutionFailure,
+                    code: "screenshot_path_missing".into(),
+                    message: "screenshot did not include output_path".into(),
+                    diagnostics: capture,
+                })?
+        }
+    };
+    let comparison = crate::tools::assertions::capture_compare_baseline(
+        state,
+        CaptureCompareBaselineRequest {
+            actual_path: actual_path.clone(),
+            baseline_path: baseline_path.clone(),
+            tolerance: request.tolerance,
+            max_different_pixels: request.max_different_pixels,
+            diff_path: request.diff_path,
+        },
+    );
+    let provider_ok = comparison
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let passed = provider_ok
+        && comparison
+            .get("passed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    Ok(serde_json::json!({
+        "ok": passed,
+        "passed": passed,
+        "assertion": "image_checkpoint",
+        "actual_path": actual_path,
+        "baseline_path": baseline_path,
+        "comparison": comparison,
+        "error": (!passed).then(|| serde_json::json!({
+            "code": "macro_assertion_failed",
+            "message": "image checkpoint did not match baseline"
+        })),
+    }))
+}
+
+fn assert_text_checkpoint(
+    state: &AppState,
+    args: Value,
+    context: &ExecutionContext,
+    step: &MacroStep,
+) -> Result<Value, MacroStepError> {
+    let request = serde_json::from_value::<MacroTextCheckpointArgs>(args).map_err(|error| {
+        MacroStepError {
+            kind: MacroStepErrorKind::ValidationFailure,
+            code: "macro_step_args_invalid".into(),
+            message: error.to_string(),
+            diagnostics: Value::Null,
+        }
+    })?;
+    let expected = request
+        .contains
+        .or(request.expected)
+        .or(request.text)
+        .or_else(|| match &step.target {
+            Some(winctl_macro::MacroTarget::TextCheckpoint { text }) => Some(text.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| MacroStepError {
+            kind: MacroStepErrorKind::ValidationFailure,
+            code: "text_checkpoint_required".into(),
+            message: "macro.assert_text_checkpoint requires text, expected, contains, or a text checkpoint target".into(),
+            diagnostics: Value::Null,
+        })?;
+    let bound_id = request.bound_id.or_else(|| context.bound_id.clone());
+    let source = if let Some(actual_text) = request.actual_text {
+        serde_json::json!({
+            "ok": true,
+            "provider": "literal",
+            "text": actual_text,
+        })
+    } else if request.image_path.is_some() || request.use_ocr.unwrap_or(false) {
+        crate::tools::assertions::capture_ocr_region(
+            state,
+            CaptureOcrRegionRequest {
+                image_path: request.image_path,
+                bound_id,
+                x: request.x,
+                y: request.y,
+                width: request.width,
+                height: request.height,
+            },
+        )
+    } else {
+        let bound_id = bound_id.ok_or_else(|| MacroStepError {
+            kind: MacroStepErrorKind::TargetIdentityFailure,
+            code: "missing_bound_id".into(),
+            message: "macro.assert_text_checkpoint requires actual_text, image_path/use_ocr, or a bound_id/context bound_id".into(),
+            diagnostics: Value::Null,
+        })?;
+        crate::tools::assertions::capture_read_text(
+            state,
+            CaptureReadTextRequest {
+                bound_id,
+                max_depth: request.max_depth,
+                max_elements: request.max_elements,
+            },
+        )
+    };
+    if !source.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(source);
+    }
+    let actual_text = source
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let case_sensitive = request.case_sensitive.unwrap_or(false);
+    let passed = if case_sensitive {
+        actual_text.contains(&expected)
+    } else {
+        actual_text
+            .to_ascii_lowercase()
+            .contains(&expected.to_ascii_lowercase())
+    };
+    Ok(serde_json::json!({
+        "ok": passed,
+        "passed": passed,
+        "assertion": "text_checkpoint",
+        "expected": expected,
+        "case_sensitive": case_sensitive,
+        "actual_text": actual_text,
+        "source": source,
+        "error": (!passed).then(|| serde_json::json!({
+            "code": "macro_assertion_failed",
+            "message": "text checkpoint did not contain expected text"
+        })),
+    }))
 }
 
 fn assert_uia_element(

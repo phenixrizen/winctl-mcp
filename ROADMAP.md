@@ -123,9 +123,9 @@
 
 ## Phase 10: Test Manifest Standard
 
-**Status:** Complete for manifest foundation; checkpoint assertion wiring remains open.
+**Status:** Complete.
 
-**Audit comments:** Implemented the versioned test manifest layer with validation, dry-run, run, export result, and macro-manifest integration. `macro.assert_image_checkpoint` and `macro.assert_text_checkpoint` are still runner stubs and need to call the existing visual/text assertion providers.
+**Audit comments:** Implemented the versioned test manifest layer with validation, dry-run, run, export result, and macro-manifest integration. `macro.assert_image_checkpoint` now calls the visual baseline comparison provider, and `macro.assert_text_checkpoint` now checks literal text, OCR output, or `capture.read_text` output. Assertion failures return `ok=false` so macro/test runs fail correctly.
 
 - Define a versioned YAML or JSON manifest for UI tests.
 - Include app launch, binding strategy, preconditions, actions, waits, assertions, screenshots, cleanup, and artifact paths.
@@ -168,7 +168,7 @@
 
 **Status:** Mostly complete.
 
-**Audit comments:** Added `assert.element`, `assert.text_visible`, `assert.pixel_color`, `assert.window_count`, `assert.clipboard`, `capture.read_text`, `capture.ocr_region`, and `capture.compare_baseline`. `capture.ocr_region` now crops the requested region and runs a direct Tesseract OCR provider with word bounding boxes; an in-box Windows.Media.Ocr provider remains future work for systems without Tesseract. The standalone visual/text providers still need to be wired into macro/test checkpoint assertions.
+**Audit comments:** Added `assert.element`, `assert.text_visible`, `assert.pixel_color`, `assert.window_count`, `assert.clipboard`, `capture.read_text`, `capture.ocr_region`, and `capture.compare_baseline`. `capture.ocr_region` now crops the requested region and runs a direct Tesseract OCR provider with word bounding boxes; an in-box Windows.Media.Ocr provider remains future work for systems without Tesseract. The visual/text providers are wired into macro/test checkpoint assertions.
 
 - Add first-class assertion tools that return structured pass/fail: `assert.element` (exists/enabled/value/name), `assert.text_visible`, `assert.pixel_color`, and `assert.window_count`.
 - Add `capture.ocr_region` and `capture.read_text` for text extraction from custom-rendered, canvas, or GDI-drawn UIs that the UIA tree cannot expose.
