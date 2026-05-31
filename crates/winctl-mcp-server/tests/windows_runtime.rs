@@ -464,6 +464,24 @@ async fn windows_control_audit_log_persists_across_restart() {
             .await;
         assert_ok("control.state restarted audit", &state);
         assert_audit_entry(&state, "armed", &marker);
+
+        let notifications = restarted
+            .call_tool("notifications.list", serde_json::json!({"max_items": 3}))
+            .await;
+        assert_ok("notifications.list", &notifications);
+        assert_eq!(notifications["provider_enabled"], true);
+        assert_eq!(
+            notifications["provider"],
+            "windows_user_notification_listener"
+        );
+        assert!(
+            notifications["access"]["status"].is_string(),
+            "notifications.list should report provider access state: {notifications:#}"
+        );
+        assert!(
+            notifications["notifications"].is_array(),
+            "notifications.list should return a notification array even when access is denied: {notifications:#}"
+        );
     }
 }
 

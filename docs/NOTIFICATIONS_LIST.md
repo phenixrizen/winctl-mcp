@@ -12,4 +12,6 @@ Description: Return Windows notification inspection status and any available pro
 
 ## Notes
 
-This first implementation reports provider availability and returns an empty list when no notification provider is enabled.
+On Windows, this uses `Windows.UI.Notifications.Management.UserNotificationListener`. If notification-listener access is not granted, the tool still returns `ok: true`, `provider_enabled: true`, an empty `notifications` array, and an `access` object explaining whether the state is `allowed`, `denied`, or `unspecified`.
+
+The tool does not automatically request notification-listener consent. Grant access in Windows privacy settings, then call the tool again to read available toast notifications.

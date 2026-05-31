@@ -71,7 +71,7 @@
 
 **Status:** Complete.
 
-**Audit comments:** Implemented guarded clipboard, filesystem, artifact export, registry, notifications, and process diagnostics tools. Destructive actions remain policy-gated.
+**Audit comments:** Implemented guarded clipboard, filesystem, artifact export, registry, notifications, and process diagnostics tools. `notifications.list` uses the Windows `UserNotificationListener` provider when running on Windows and reports explicit listener access state for denied or unspecified consent. Destructive actions remain policy-gated.
 
 - Add guarded clipboard read/write tools.
 - Add filesystem read, list, search, copy, move, delete, and artifact export with allowlist policy.

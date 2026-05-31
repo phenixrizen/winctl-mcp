@@ -342,14 +342,241 @@ pub fn notifications_list(
     request: NotificationsListRequest,
 ) -> serde_json::Value {
     tracing::info!(max_items = ?request.max_items, "notifications.list requested");
+    let max_items = request.max_items.unwrap_or(50).clamp(1, 500);
+    notifications_list_platform(max_items)
+}
+
+#[cfg(not(windows))]
+fn notifications_list_platform(max_items: usize) -> serde_json::Value {
+    let _ = max_items;
     serde_json::json!({
         "ok": true,
         "notifications": [],
         "warnings": [
-            "Windows notification inspection requires a dedicated notification provider; no provider is enabled in this build"
+            "Windows notification inspection is only available on Windows"
         ],
-        "provider_enabled": false
+        "provider_enabled": false,
+        "provider": "windows_user_notification_listener",
+        "access_status": "unsupported_platform",
+        "access": {
+            "status": "unsupported_platform",
+            "can_read_notifications": false,
+            "requires_user_consent": false
+        }
     })
+}
+
+#[cfg(windows)]
+fn notifications_list_platform(max_items: usize) -> serde_json::Value {
+    match windows_notifications_list(max_items) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(error = %error, "notifications.list provider failed");
+            serde_json::json!({
+                "ok": true,
+                "notifications": [],
+                "warnings": [format!("Windows notification provider failed: {error}")],
+                "provider_enabled": true,
+                "provider": "windows_user_notification_listener",
+                "access_status": "provider_error",
+                "access": {
+                    "status": "provider_error",
+                    "can_read_notifications": false,
+                    "requires_user_consent": false
+                },
+                "error": {
+                    "code": "notifications_provider_failed",
+                    "message": error
+                }
+            })
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_notifications_list(max_items: usize) -> Result<serde_json::Value, String> {
+    use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
+    use windows::UI::Notifications::Management::{
+        UserNotificationListener, UserNotificationListenerAccessStatus,
+    };
+    use windows::UI::Notifications::NotificationKinds;
+
+    let ro_initialized = match unsafe { RoInitialize(RO_INIT_MULTITHREADED) } {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(error = %error, "RoInitialize failed before notifications.list; trying WinRT activation anyway");
+            false
+        }
+    };
+    let result = (|| {
+        let listener = UserNotificationListener::Current().map_err(|error| error.to_string())?;
+        let access_status = listener
+            .GetAccessStatus()
+            .map_err(|error| error.to_string())?;
+        let access = notification_access_json(access_status);
+        if access_status != UserNotificationListenerAccessStatus::Allowed {
+            let status = notification_access_status(access_status);
+            return Ok(serde_json::json!({
+                "ok": true,
+                "notifications": [],
+                "warnings": [format!("notification access is {status}; grant notification listener access in Windows privacy settings to read notifications")],
+                "provider_enabled": true,
+                "provider": "windows_user_notification_listener",
+                "access_status": status,
+                "access": access,
+                "truncated": false,
+                "total_available": 0,
+            }));
+        }
+
+        let notifications = listener
+            .GetNotificationsAsync(NotificationKinds::Toast)
+            .map_err(|error| error.to_string())?
+            .join()
+            .map_err(|error| error.to_string())?;
+        let total_available = notifications.Size().map_err(|error| error.to_string())? as usize;
+        let count = total_available.min(max_items);
+        let mut items = Vec::with_capacity(count);
+        let mut warnings = Vec::new();
+        for index in 0..count {
+            match notifications.GetAt(index as u32) {
+                Ok(notification) => {
+                    items.push(user_notification_json(&notification, &mut warnings))
+                }
+                Err(error) => warnings.push(format!(
+                    "failed to read notification at index {index}: {error}"
+                )),
+            }
+        }
+        Ok(serde_json::json!({
+            "ok": true,
+            "notifications": items,
+            "warnings": warnings,
+            "provider_enabled": true,
+            "provider": "windows_user_notification_listener",
+            "access_status": "allowed",
+            "access": access,
+            "truncated": total_available > count,
+            "total_available": total_available,
+        }))
+    })();
+    if ro_initialized {
+        unsafe { RoUninitialize() };
+    }
+    result
+}
+
+#[cfg(windows)]
+fn notification_access_json(
+    status: windows::UI::Notifications::Management::UserNotificationListenerAccessStatus,
+) -> serde_json::Value {
+    let status_text = notification_access_status(status);
+    serde_json::json!({
+        "status": status_text,
+        "raw": status.0,
+        "can_read_notifications": status == windows::UI::Notifications::Management::UserNotificationListenerAccessStatus::Allowed,
+        "requires_user_consent": status != windows::UI::Notifications::Management::UserNotificationListenerAccessStatus::Allowed,
+    })
+}
+
+#[cfg(windows)]
+fn notification_access_status(
+    status: windows::UI::Notifications::Management::UserNotificationListenerAccessStatus,
+) -> &'static str {
+    use windows::UI::Notifications::Management::UserNotificationListenerAccessStatus;
+    if status == UserNotificationListenerAccessStatus::Allowed {
+        "allowed"
+    } else if status == UserNotificationListenerAccessStatus::Denied {
+        "denied"
+    } else if status == UserNotificationListenerAccessStatus::Unspecified {
+        "unspecified"
+    } else {
+        "unknown"
+    }
+}
+
+#[cfg(windows)]
+fn user_notification_json(
+    user_notification: &windows::UI::Notifications::UserNotification,
+    warnings: &mut Vec<String>,
+) -> serde_json::Value {
+    let id = user_notification.Id().ok();
+    let creation_time = user_notification.CreationTime().ok();
+    let mut texts = Vec::new();
+    let mut bindings = Vec::new();
+    match user_notification.Notification() {
+        Ok(notification) => match notification.Visual() {
+            Ok(visual) => match visual.Bindings() {
+                Ok(binding_list) => {
+                    if let Ok(binding_count) = binding_list.Size() {
+                        for binding_index in 0..binding_count {
+                            match binding_list.GetAt(binding_index) {
+                                Ok(binding) => {
+                                    let template = binding
+                                        .Template()
+                                        .ok()
+                                        .map(|value| value.to_string_lossy());
+                                    let mut binding_texts = Vec::new();
+                                    match binding.GetTextElements() {
+                                        Ok(text_elements) => {
+                                            if let Ok(text_count) = text_elements.Size() {
+                                                for text_index in 0..text_count {
+                                                    match text_elements.GetAt(text_index) {
+                                                        Ok(text) => {
+                                                            if let Ok(value) = text.Text() {
+                                                                let value = value.to_string_lossy();
+                                                                texts.push(value.clone());
+                                                                binding_texts.push(value);
+                                                            }
+                                                        }
+                                                        Err(error) => warnings.push(format!(
+                                                            "failed to read notification text element {text_index}: {error}"
+                                                        )),
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(error) => warnings.push(format!(
+                                            "failed to read notification text elements: {error}"
+                                        )),
+                                    }
+                                    bindings.push(serde_json::json!({
+                                        "template": template,
+                                        "text": binding_texts,
+                                    }));
+                                }
+                                Err(error) => warnings.push(format!(
+                                    "failed to read notification binding {binding_index}: {error}"
+                                )),
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    warnings.push(format!("failed to read notification bindings: {error}"))
+                }
+            },
+            Err(error) => warnings.push(format!("failed to read notification visual: {error}")),
+        },
+        Err(error) => warnings.push(format!("failed to read notification payload: {error}")),
+    }
+    serde_json::json!({
+        "id": id,
+        "kind": "toast",
+        "creation_time_winrt_ticks": creation_time.map(|value| value.UniversalTime),
+        "creation_time_unix_ms": creation_time.and_then(notification_datetime_unix_ms),
+        "text": texts,
+        "bindings": bindings,
+    })
+}
+
+#[cfg(windows)]
+fn notification_datetime_unix_ms(value: windows::Foundation::DateTime) -> Option<i64> {
+    const WINDOWS_TO_UNIX_EPOCH_100NS: i64 = 116_444_736_000_000_000;
+    value
+        .UniversalTime
+        .checked_sub(WINDOWS_TO_UNIX_EPOCH_100NS)
+        .map(|ticks| ticks / 10_000)
 }
 
 pub fn process_diagnostics(
