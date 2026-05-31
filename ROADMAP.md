@@ -15,7 +15,7 @@
 
 **Status:** Complete.
 
-**Audit comments:** Implemented as the baseline server/tool surface. The foundation now includes Streamable HTTP, stdio compatibility, config/logging, process ownership, capture paths, and native tray/dashboard runtime pieces.
+**Audit comments:** Implemented as the baseline server/tool surface. The foundation now includes Streamable HTTP, stdio compatibility, config/logging, process ownership, capture paths, and native tray/dashboard runtime pieces. `process.kill` supports tracked-process termination, but the advertised `kill_tree` option remains follow-up work.
 
 - Window enumeration, find, bind, describe, focus, monitor listing, and point diagnostics.
 - Bound-window click, text input, window screenshots, and display screenshots.
@@ -49,7 +49,7 @@
 
 **Status:** Complete.
 
-**Audit comments:** Implemented through `app.launch`, process/window ownership metadata, `windows.for_process`, and window move/resize/minimize/maximize/restore/close/foreground diagnostics.
+**Audit comments:** Implemented through `app.launch`, process/window ownership metadata, `windows.for_process`, and window move/resize/minimize/maximize/restore/close/foreground diagnostics. Child-process tree termination for tracked launches remains open behind the guarded `process.kill kill_tree` option.
 
 - Add richer app launch modes for packaged apps, Start Menu entries, protocol handlers, and working-directory presets.
 - Add window move, resize, minimize, maximize, restore, close, and foreground diagnostics.
@@ -123,9 +123,9 @@
 
 ## Phase 10: Test Manifest Standard
 
-**Status:** Complete.
+**Status:** Complete for manifest foundation; checkpoint assertion wiring remains open.
 
-**Audit comments:** Implemented the versioned test manifest layer with validation, dry-run, run, export result, and macro-manifest integration.
+**Audit comments:** Implemented the versioned test manifest layer with validation, dry-run, run, export result, and macro-manifest integration. `macro.assert_image_checkpoint` and `macro.assert_text_checkpoint` are still runner stubs and need to call the existing visual/text assertion providers.
 
 - Define a versioned YAML or JSON manifest for UI tests.
 - Include app launch, binding strategy, preconditions, actions, waits, assertions, screenshots, cleanup, and artifact paths.
@@ -168,7 +168,7 @@
 
 **Status:** Mostly complete.
 
-**Audit comments:** Added `assert.element`, `assert.text_visible`, `assert.pixel_color`, `assert.window_count`, `assert.clipboard`, `capture.read_text`, `capture.ocr_region`, and `capture.compare_baseline`. `capture.ocr_region` now crops the requested region and runs a direct Tesseract OCR provider with word bounding boxes; an in-box Windows.Media.Ocr provider remains future work for systems without Tesseract.
+**Audit comments:** Added `assert.element`, `assert.text_visible`, `assert.pixel_color`, `assert.window_count`, `assert.clipboard`, `capture.read_text`, `capture.ocr_region`, and `capture.compare_baseline`. `capture.ocr_region` now crops the requested region and runs a direct Tesseract OCR provider with word bounding boxes; an in-box Windows.Media.Ocr provider remains future work for systems without Tesseract. The standalone visual/text providers still need to be wired into macro/test checkpoint assertions.
 
 - Add first-class assertion tools that return structured pass/fail: `assert.element` (exists/enabled/value/name), `assert.text_visible`, `assert.pixel_color`, and `assert.window_count`.
 - Add `capture.ocr_region` and `capture.read_text` for text extraction from custom-rendered, canvas, or GDI-drawn UIs that the UIA tree cannot expose.

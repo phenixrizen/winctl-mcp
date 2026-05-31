@@ -2,17 +2,20 @@
 
 **Audience:** a coding agent (Codex) continuing implementation.
 **Date:** 2026-05-31
-**Branch audited:** `feat/more_features` @ `ce36fb5` (Round 2; Round 1 was `f62d517`)
+**Branch audited:** `feat/more_features` @ `d51a595` (Round 2; Round 1 was `f62d517`)
 
 ---
 
-## 0. Status update — Round 2 (`ce36fb5`, updated 2026-05-31)
+## 0. Status update — Round 2 (`d51a595`, updated 2026-05-31)
 
 Commit `ce36fb5 "replace phase provider stubs with native implementations"`
 addressed most of the Tier A/B stubs from this handoff. **Verified against source
 and confirmed to compile for Windows targets** (full workspace, no errors).
 Every native path is `cfg(windows)`-gated with `cfg(not(windows))` fallbacks, so the
 Linux build still passes.
+
+Follow-up commits `3d3ee36` and `d51a595` added the Windows runtime UIA integration
+test gate and made public Windows release direction MSVC-first.
 
 | Handoff item | Round-2 result | Evidence |
 | --- | --- | --- |
@@ -25,6 +28,8 @@ Linux build still passes.
 | B3 `crash_report` Event Log + WER | **DONE** | Shells `wevtutil.exe` for Application errors; scans `%LOCALAPPDATA%\CrashDumps` + WER `ReportQueue` in `diagnostics.rs`. |
 | C1 CDP WebSocket | **DONE** | `tokio-tungstenite` `connect_async` → `Runtime.evaluate`, `DOMSnapshot.captureSnapshot`, `Accessibility.getFullAXTree`, `CSS.getComputedStyleForNode` in `web.rs`. |
 | R2-1 Windows runtime integration | **DONE** | Added Windows-native MCP integration coverage that launches `winctl-test-target`, binds by PID/HWND, exercises `uia.invoke/set_value/get_value/toggle/select/expand_collapse/range_value/scroll_into_view/set_focus`, reads `process.metrics`, and verifies the Ctrl+Alt+Esc emergency-stop hotkey. Verified locally with `cargo test --workspace --target x86_64-pc-windows-msvc --test windows_runtime -- --nocapture`; GNU compatibility was also checked from Windows cargo. Added a `windows-latest` CI job as the backstop. |
+| R2-6 `process.kill` tree termination | **STILL OPEN** | `process.kill` accepts `kill_tree`, but `process.rs` returns `kill_tree_not_implemented`. Implement guarded child-process tree termination using Windows process snapshots, terminate leaves-up, and preserve the current MCP-launched ownership model. |
+| R2-7 Macro/test checkpoint assertions | **STILL OPEN** | `macro.assert_image_checkpoint` and `macro.assert_text_checkpoint` are still engine stubs. Wire them to the existing visual/text assertion providers so test manifests can enforce image and OCR/text regression checks. |
 
 **The remaining work has shifted from "build the providers" to "verify them at
 runtime" plus the two human-notification surfaces.** Re-prioritized list:
@@ -44,13 +49,21 @@ runtime" plus the two human-notification surfaces.** Re-prioritized list:
    to the `EvtQuery`/`EvtNext` API for structured, robust results.
 5. **R2-5 — UIA refinements.** Desired-state idempotent `uia.toggle` and
    add/remove modes for `uia.select` (roadmap-noted).
-6. **Still open from earlier:** Phase 14 native dialog/UAC handling + run-video
+6. **R2-6 — `process.kill` `kill_tree` support.** Implement child-process tree
+   termination only for processes launched and tracked by the current MCP server
+   session; refuse unowned descendants or unverifiable ownership.
+7. **R2-7 — Macro/test checkpoint assertion wiring.** Connect
+   `macro.assert_image_checkpoint` to `capture.compare_baseline` and
+   `macro.assert_text_checkpoint` to the OCR/text assertion path so manifests can
+   run visual and text checkpoints directly.
+8. **Still open from earlier:** Phase 14 native dialog/UAC handling + run-video
    capture; Phase 16 dashboard visual-diff viewer, manifest quick-launch, and
    toast/completion alerts; durable (append-only) consent audit log instead of the
-   in-memory 200-event ring.
+   in-memory 200-event ring. `notifications.list` remains a low-priority provider
+   stub.
 
-Tasks A2 (toast + overlay), and the cross-cutting notes in §4 below remain current.
-Tasks A1, B1, B2, B3, C1 are now DONE except as qualified above.
+Tasks A2 (toast + overlay), R2-6/R2-7, and the cross-cutting notes in §4 below
+remain current. Tasks A1, B1, B2, B3, C1 are now DONE except as qualified above.
 
 ---
 
