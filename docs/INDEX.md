@@ -12,6 +12,12 @@
 | `winctl-mcp` | [`browser.screenshot_checkpoint`](BROWSER_SCREENSHOT_CHECKPOINT.md) | Capture a screenshot checkpoint for a revalidated bound browser window. |
 | `winctl-mcp` | [`clipboard.read`](CLIPBOARD_READ.md) | Read Unicode clipboard text with optional truncation. |
 | `winctl-mcp` | [`clipboard.write`](CLIPBOARD_WRITE.md) | Write Unicode clipboard text only when clipboard mutation is explicitly enabled. |
+| `winctl-mcp` | [`control.state`](CONTROL_STATE.md) | Return desktop-control gate state, active target identity, consent decision, and recent control events. |
+| `winctl-mcp` | [`control.arm`](CONTROL_ARM.md) | Arm desktop control for a session or bound target before sensitive actions. |
+| `winctl-mcp` | [`control.consent`](CONTROL_CONSENT.md) | Record an allow_once, allow_session, deny, or revoke_session decision for desktop-control actions. |
+| `winctl-mcp` | [`control.notify`](CONTROL_NOTIFY.md) | Record a pending desktop-control notification event for tray or dashboard display. |
+| `winctl-mcp` | [`control.revoke`](CONTROL_REVOKE.md) | Emergency-stop desktop control and reject future sensitive actions until rearmed. |
+| `winctl-mcp` | [`control.emergency_stop`](CONTROL_EMERGENCY_STOP.md) | Alias for control.revoke. |
 | `winctl-mcp` | [`filesystem.read`](FILESYSTEM_READ.md) | Read a UTF-8 file from an allowlisted filesystem root with bounded size. |
 | `winctl-mcp` | [`filesystem.list`](FILESYSTEM_LIST.md) | List files and directories beneath an allowlisted filesystem root. |
 | `winctl-mcp` | [`filesystem.search`](FILESYSTEM_SEARCH.md) | Search file names and bounded UTF-8 file content beneath an allowlisted filesystem root. |

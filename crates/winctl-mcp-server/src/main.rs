@@ -50,6 +50,7 @@ pub struct AppState {
     pub memory: Arc<Mutex<winctl_memory::MemoryStore>>,
     pub macro_runtime: Arc<Mutex<tools::macros::MacroRuntimeState>>,
     pub recorder_runtime: Arc<Mutex<tools::recorder::RecorderRuntimeState>>,
+    pub control_runtime: Arc<Mutex<tools::control::ControlRuntimeState>>,
     launch_counter: Arc<AtomicU64>,
 }
 
@@ -157,6 +158,7 @@ impl AppState {
             recorder_runtime: Arc::new(
                 Mutex::new(tools::recorder::RecorderRuntimeState::default()),
             ),
+            control_runtime: Arc::new(Mutex::new(tools::control::ControlRuntimeState::default())),
             launch_counter: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -724,6 +726,37 @@ pub struct UiResolveRequest {
     pub max_elements: Option<usize>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct ControlArmRequest {
+    pub session_id: Option<String>,
+    pub bound_id: Option<String>,
+    pub allow_for_ms: Option<u64>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ControlConsentRequest {
+    pub decision: String,
+    pub session_id: Option<String>,
+    pub bound_id: Option<String>,
+    pub allow_for_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct ControlRevokeRequest {
+    pub session_id: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ControlNotifyRequest {
+    pub tool_name: String,
+    pub bound_id: Option<String>,
+    pub action_kind: Option<String>,
+    pub session_id: Option<String>,
+    pub countdown_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroManifestRequest {
     pub manifest: winctl_macro::MacroManifest,
@@ -833,6 +866,95 @@ impl WinctlMcpServer {
                 "schema_version": winctl_memory::MEMORY_SCHEMA_VERSION,
             }
         }))
+    }
+
+    #[tool(
+        name = "control.state",
+        description = "Return desktop-control gate state, active target identity, consent decision, and recent control events."
+    )]
+    pub async fn control_state(&self) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        run_blocking_tool("control.state", move || tools::control::control_state(&state)).await
+    }
+
+    #[tool(
+        name = "control.arm",
+        description = "Arm desktop control for a session or bound target before sensitive focus, input, close, kill, mutation, macro, test, or UIA actions."
+    )]
+    pub async fn control_arm(
+        &self,
+        request: Parameters<ControlArmRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("control.arm", move || {
+            tools::control::control_arm(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "control.consent",
+        description = "Record an allow_once, allow_session, deny, or revoke_session decision for desktop-control actions."
+    )]
+    pub async fn control_consent(
+        &self,
+        request: Parameters<ControlConsentRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("control.consent", move || {
+            tools::control::control_consent(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "control.notify",
+        description = "Record a pending desktop-control notification event for tray or dashboard display."
+    )]
+    pub async fn control_notify(
+        &self,
+        request: Parameters<ControlNotifyRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("control.notify", move || {
+            tools::control::control_notify(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "control.revoke",
+        description = "Emergency-stop desktop control and reject future sensitive actions until rearmed."
+    )]
+    pub async fn control_revoke(
+        &self,
+        request: Parameters<ControlRevokeRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("control.revoke", move || {
+            tools::control::control_revoke(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "control.emergency_stop",
+        description = "Alias for control.revoke; immediately stops desktop control and requires a new arm/consent decision."
+    )]
+    pub async fn control_emergency_stop(
+        &self,
+        request: Parameters<ControlRevokeRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("control.emergency_stop", move || {
+            tools::control::control_revoke(&state, request)
+        })
+        .await
     }
 
     #[tool(
@@ -982,7 +1104,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.run", move || {
-            tools::macros::macro_run(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "macro.run",
+                None,
+                "macro_replay",
+                true,
+                || tools::macros::macro_run(&state, request),
+            )
         })
         .await
     }
@@ -998,7 +1127,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.run_step", move || {
-            tools::macros::macro_run_step(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "macro.run_step",
+                None,
+                "macro_replay",
+                true,
+                || tools::macros::macro_run_step(&state, request),
+            )
         })
         .await
     }
@@ -1188,7 +1324,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("windows.focus", move || {
-            tools::windows::windows_focus(&state, bound_id)
+            tools::control::with_control_gate(
+                &state,
+                "windows.focus",
+                Some(&bound_id),
+                "focus",
+                true,
+                || tools::windows::windows_focus(&state, bound_id.clone()),
+            )
         })
         .await
     }
@@ -1345,7 +1488,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("windows.close", move || {
-            tools::windows::windows_close(&state, bound_id)
+            tools::control::with_control_gate(
+                &state,
+                "windows.close",
+                Some(&bound_id),
+                "close",
+                true,
+                || tools::windows::windows_close(&state, bound_id.clone()),
+            )
         })
         .await
     }
@@ -1521,7 +1671,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("clipboard.write", move || {
-            tools::system::clipboard_write(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "clipboard.write",
+                None,
+                "clipboard_write",
+                true,
+                || tools::system::clipboard_write(&state, request),
+            )
         })
         .await
     }
@@ -1585,7 +1742,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("filesystem.copy", move || {
-            tools::system::filesystem_copy(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "filesystem.copy",
+                None,
+                "filesystem_mutation",
+                true,
+                || tools::system::filesystem_copy(&state, request),
+            )
         })
         .await
     }
@@ -1601,7 +1765,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("filesystem.move", move || {
-            tools::system::filesystem_move(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "filesystem.move",
+                None,
+                "filesystem_mutation",
+                true,
+                || tools::system::filesystem_move(&state, request),
+            )
         })
         .await
     }
@@ -1617,7 +1788,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("filesystem.delete", move || {
-            tools::system::filesystem_delete(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "filesystem.delete",
+                None,
+                "filesystem_mutation",
+                true,
+                || tools::system::filesystem_delete(&state, request),
+            )
         })
         .await
     }
@@ -1681,7 +1859,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("registry.write", move || {
-            tools::system::registry_write(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "registry.write",
+                None,
+                "registry_mutation",
+                true,
+                || tools::system::registry_write(&state, request),
+            )
         })
         .await
     }
@@ -1697,7 +1882,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("registry.delete", move || {
-            tools::system::registry_delete(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "registry.delete",
+                None,
+                "registry_mutation",
+                true,
+                || tools::system::registry_delete(&state, request),
+            )
         })
         .await
     }
@@ -1868,7 +2060,17 @@ impl WinctlMcpServer {
     pub async fn test_run(&self, request: Parameters<TestRunRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
-        run_blocking_tool("test.run", move || tools::tests::test_run(&state, request)).await
+        run_blocking_tool("test.run", move || {
+            tools::control::with_control_gate(
+                &state,
+                "test.run",
+                None,
+                "test_replay",
+                true,
+                || tools::tests::test_run(&state, request),
+            )
+        })
+        .await
     }
 
     #[tool(
@@ -1946,7 +2148,14 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("process.kill", move || {
-            tools::process::process_kill(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "process.kill",
+                None,
+                "process_kill",
+                true,
+                || tools::process::process_kill(&state, request),
+            )
         })
         .await
     }
@@ -1974,8 +2183,16 @@ impl WinctlMcpServer {
     pub async fn input_click(&self, request: Parameters<ClickRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
+        let bound_id = request.bound_id.clone();
         run_blocking_tool("input.click", move || {
-            tools::input::input_click(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "input.click",
+                Some(&bound_id),
+                "pointer_input",
+                true,
+                || tools::input::input_click(&state, request),
+            )
         })
         .await
     }
@@ -1990,8 +2207,16 @@ impl WinctlMcpServer {
     ) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
+        let bound_id = request.bound_id.clone();
         run_blocking_tool("input.mouse_move", move || {
-            tools::input::input_mouse_move(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "input.mouse_move",
+                Some(&bound_id),
+                "pointer_input",
+                false,
+                || tools::input::input_mouse_move(&state, request),
+            )
         })
         .await
     }
@@ -2006,8 +2231,16 @@ impl WinctlMcpServer {
     ) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
+        let bound_id = request.bound_id.clone();
         run_blocking_tool("input.double_click", move || {
-            tools::input::input_double_click(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "input.double_click",
+                Some(&bound_id),
+                "pointer_input",
+                true,
+                || tools::input::input_double_click(&state, request),
+            )
         })
         .await
     }
@@ -2019,8 +2252,16 @@ impl WinctlMcpServer {
     pub async fn input_drag(&self, request: Parameters<DragRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
+        let bound_id = request.bound_id.clone();
         run_blocking_tool("input.drag", move || {
-            tools::input::input_drag(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "input.drag",
+                Some(&bound_id),
+                "pointer_input",
+                true,
+                || tools::input::input_drag(&state, request),
+            )
         })
         .await
     }
@@ -2035,8 +2276,16 @@ impl WinctlMcpServer {
     ) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
+        let bound_id = request.bound_id.clone();
         run_blocking_tool("input.scroll", move || {
-            tools::input::input_scroll(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "input.scroll",
+                Some(&bound_id),
+                "pointer_input",
+                true,
+                || tools::input::input_scroll(&state, request),
+            )
         })
         .await
     }
@@ -2048,8 +2297,16 @@ impl WinctlMcpServer {
     pub async fn input_key_down(&self, request: Parameters<KeyRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
+        let bound_id = request.bound_id.clone();
         run_blocking_tool("input.key_down", move || {
-            tools::input::input_key_down(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "input.key_down",
+                Some(&bound_id),
+                "keyboard_input",
+                true,
+                || tools::input::input_key_down(&state, request),
+            )
         })
         .await
     }
@@ -2061,8 +2318,16 @@ impl WinctlMcpServer {
     pub async fn input_key_up(&self, request: Parameters<KeyRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
+        let bound_id = request.bound_id.clone();
         run_blocking_tool("input.key_up", move || {
-            tools::input::input_key_up(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "input.key_up",
+                Some(&bound_id),
+                "keyboard_input",
+                true,
+                || tools::input::input_key_up(&state, request),
+            )
         })
         .await
     }
@@ -2077,8 +2342,16 @@ impl WinctlMcpServer {
     ) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
+        let bound_id = request.bound_id.clone();
         run_blocking_tool("input.shortcut", move || {
-            tools::input::input_shortcut(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "input.shortcut",
+                Some(&bound_id),
+                "keyboard_input",
+                true,
+                || tools::input::input_shortcut(&state, request),
+            )
         })
         .await
     }
@@ -2102,8 +2375,16 @@ impl WinctlMcpServer {
     ) -> Json<serde_json::Value> {
         let state = self.state.clone();
         let request = request.0;
+        let bound_id = request.bound_id.clone();
         run_blocking_tool("input.type_text", move || {
-            tools::input::input_type_text(&state, request)
+            tools::control::with_control_gate(
+                &state,
+                "input.type_text",
+                Some(&bound_id),
+                "text_input",
+                true,
+                || tools::input::input_type_text(&state, request),
+            )
         })
         .await
     }
@@ -2445,6 +2726,10 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
             limit: Some(20),
         },
     );
+    let control = tools::control::control_state(&state.app_state)
+        .get("control")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     AxumJson(serde_json::json!({
         "ok": true,
         "service": "winctl-mcp-server",
@@ -2455,6 +2740,7 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
         "launched_processes": launched,
         "memory": memory,
         "macros": macros,
+        "control": control,
         "connected_clients": serde_json::Value::Null,
         "recent_requests": [],
         "warnings": [
@@ -3331,6 +3617,12 @@ mod tests {
                 "capture.wait_for_window_image_change",
                 "clipboard.read",
                 "clipboard.write",
+                "control.arm",
+                "control.consent",
+                "control.emergency_stop",
+                "control.notify",
+                "control.revoke",
+                "control.state",
                 "filesystem.copy",
                 "filesystem.delete",
                 "filesystem.list",

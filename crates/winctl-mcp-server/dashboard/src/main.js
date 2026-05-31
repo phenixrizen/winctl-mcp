@@ -48,6 +48,7 @@ createApp({
       intervalId: null,
       tabs: [
         { id: 'overview', label: 'Overview' },
+        { id: 'control', label: 'Control' },
         { id: 'windows', label: 'Windows' },
         { id: 'processes', label: 'Processes' },
         { id: 'memory', label: 'Memory' },
@@ -67,6 +68,12 @@ createApp({
     },
     macroItems() {
       return this.data?.macros?.items ?? this.data?.macros?.macros ?? [];
+    },
+    controlState() {
+      return this.data?.control ?? {};
+    },
+    controlEvents() {
+      return this.controlState.events ?? [];
     },
     warnings() {
       return this.data?.warnings ?? [];
@@ -100,8 +107,17 @@ createApp({
     },
     statusColor() {
       if (this.error) return 'bg-[#ff6b6b]';
+      if (this.controlState.status === 'revoked' || this.controlState.status === 'blocked') return 'bg-[#ff6b6b]';
+      if (this.controlState.status === 'controlling' || this.controlState.status === 'warning') return 'bg-[#ffd166]';
       if (this.refreshing) return 'bg-[#ffd166]';
       return 'bg-[#06d6a0]';
+    },
+    controlBadgeClass() {
+      const status = this.controlState.status;
+      if (status === 'revoked' || status === 'blocked') return 'badge-error';
+      if (status === 'controlling' || status === 'warning') return 'badge-warning';
+      if (status === 'armed') return 'badge-success';
+      return 'badge-ghost';
     },
   },
   mounted() {
@@ -220,6 +236,13 @@ createApp({
               <div class="text-xs font-bold uppercase text-slate-500">Macros</div>
               <div class="mt-2 text-3xl font-semibold">{{ macroItems.length }}</div>
             </article>
+            <article class="winctl-card p-4">
+              <div class="winctl-kpi-accent mb-4"></div>
+              <div class="text-xs font-bold uppercase text-slate-500">Control</div>
+              <div class="mt-3">
+                <span class="badge" :class="controlBadgeClass">{{ controlState.status || 'idle' }}</span>
+              </div>
+            </article>
           </div>
 
           <div class="grid gap-5 lg:grid-cols-[1fr_1.15fr]">
@@ -263,6 +286,79 @@ createApp({
             <ul class="divide-y divide-slate-200 text-sm dark:divide-slate-700">
               <li v-for="warning in warnings" :key="warning" class="px-4 py-3">{{ warning }}</li>
             </ul>
+          </section>
+        </section>
+
+        <section v-if="selectedTab === 'control'" class="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
+          <section class="winctl-card">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+              <h2 class="text-sm font-semibold">Control gate</h2>
+              <span class="badge" :class="controlBadgeClass">{{ controlState.status || 'idle' }}</span>
+            </div>
+            <dl class="divide-y divide-slate-200 text-sm dark:divide-slate-700">
+              <div class="grid grid-cols-[150px_1fr] gap-3 px-4 py-3">
+                <dt class="text-slate-500">Session</dt>
+                <dd class="winctl-code break-all text-xs">{{ controlState.session_id || 'n/a' }}</dd>
+              </div>
+              <div class="grid grid-cols-[150px_1fr] gap-3 px-4 py-3">
+                <dt class="text-slate-500">Bound target</dt>
+                <dd class="winctl-code break-all text-xs">{{ controlState.bound_id || 'n/a' }}</dd>
+              </div>
+              <div class="grid grid-cols-[150px_1fr] gap-3 px-4 py-3">
+                <dt class="text-slate-500">Active tool</dt>
+                <dd class="winctl-code text-xs">{{ controlState.active_tool || 'n/a' }}</dd>
+              </div>
+              <div class="grid grid-cols-[150px_1fr] gap-3 px-4 py-3">
+                <dt class="text-slate-500">Action</dt>
+                <dd class="winctl-code text-xs">{{ controlState.active_action_kind || 'n/a' }}</dd>
+              </div>
+              <div class="grid grid-cols-[150px_1fr] gap-3 px-4 py-3">
+                <dt class="text-slate-500">Armed until</dt>
+                <dd>{{ formatUnixMs(controlState.armed_until_unix_ms) }}</dd>
+              </div>
+              <div class="grid grid-cols-[150px_1fr] gap-3 px-4 py-3">
+                <dt class="text-slate-500">Emergency stop</dt>
+                <dd>
+                  <span class="badge badge-sm" :class="badgeClass(controlState.emergency_stop_active)">
+                    {{ controlState.emergency_stop_active ? 'Active' : 'Clear' }}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="winctl-card overflow-hidden">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+              <h2 class="text-sm font-semibold">Recent control events</h2>
+              <span class="badge badge-info badge-outline">{{ controlEvents.length }}</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="table winctl-table table-sm min-w-[880px]">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Kind</th>
+                    <th>Status</th>
+                    <th>Tool</th>
+                    <th>Target</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!controlEvents.length">
+                    <td colspan="6" class="py-8 text-center text-slate-500">No control events</td>
+                  </tr>
+                  <tr v-for="event in controlEvents.slice().reverse()" :key="event.id">
+                    <td class="text-xs">{{ formatUnixMs(event.timestamp_unix_ms) }}</td>
+                    <td class="winctl-code text-xs">{{ event.kind }}</td>
+                    <td><span class="badge badge-ghost badge-sm">{{ event.status }}</span></td>
+                    <td class="winctl-code text-xs">{{ event.tool_name || 'n/a' }}</td>
+                    <td class="winctl-code max-w-[220px] truncate text-xs">{{ event.bound_id || 'n/a' }}</td>
+                    <td class="max-w-[360px] truncate text-xs">{{ event.message }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </section>
         </section>
 

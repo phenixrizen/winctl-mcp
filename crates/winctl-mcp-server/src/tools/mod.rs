@@ -1,5 +1,6 @@
 pub mod browser;
 pub mod capture;
+pub mod control;
 pub mod input;
 pub mod macros;
 pub mod memory;
