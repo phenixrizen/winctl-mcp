@@ -1,0 +1,628 @@
+#![cfg(windows)]
+
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde_json::Value;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+    VK_CONTROL, VK_ESCAPE, VK_MENU,
+};
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
+    if std::env::var_os("WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION").is_some() {
+        eprintln!("skipping Windows runtime integration because WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION is set");
+        return;
+    }
+
+    let server_exe = server_exe_path();
+    let target_exe = target_exe_path();
+    assert!(
+        server_exe.exists(),
+        "winctl-mcp-server exe does not exist at {}",
+        server_exe.display()
+    );
+    assert!(
+        target_exe.exists(),
+        "winctl-test-target exe does not exist at {}; run cargo build --workspace --target x86_64-pc-windows-gnu first or set WINCTL_TEST_TARGET_EXE",
+        target_exe.display()
+    );
+
+    let mut harness = McpHarness::start(&server_exe).await;
+    harness.initialize().await;
+
+    let launch = harness
+        .call_tool(
+            "process.launch",
+            serde_json::json!({
+                "exe": target_exe.to_string_lossy(),
+                "args": [
+                    "--title", "winctl runtime target",
+                    "--class", "WinctlRuntimeTarget",
+                    "--width", "860",
+                    "--height", "560",
+                    "--duration-ms", "60000",
+                    "--automation-controls"
+                ],
+                "wait_for_window": true,
+                "timeout_ms": 10000
+            }),
+        )
+        .await;
+    assert_ok("process.launch", &launch);
+    let pid = launch["pid"].as_u64().expect("launch should return pid") as u32;
+    let launch_id = launch["launch_id"]
+        .as_str()
+        .expect("launch should return launch_id")
+        .to_owned();
+    let hwnd = launch["candidate_top_level_windows"]
+        .as_array()
+        .and_then(|windows| windows.first())
+        .and_then(|window| window["hwnd_hex"].as_str())
+        .expect("launch should return a candidate HWND")
+        .to_owned();
+
+    let bind = harness
+        .call_tool(
+            "windows.bind",
+            serde_json::json!({
+                "pid": pid,
+                "hwnd": hwnd,
+                "must_be_visible": true
+            }),
+        )
+        .await;
+    assert_ok("windows.bind", &bind);
+    let bound_id = bind["bound"]["bound_id"]
+        .as_str()
+        .expect("bind should return bound_id")
+        .to_owned();
+
+    let arm = harness
+        .call_tool(
+            "control.arm",
+            serde_json::json!({
+                "session_id": "windows-runtime-test",
+                "bound_id": bound_id,
+                "allow_for_ms": 60000,
+                "reason": "Windows runtime integration test"
+            }),
+        )
+        .await;
+    assert_ok("control.arm", &arm);
+
+    let invoke = harness
+        .call_tool(
+            "uia.invoke",
+            action_args(&bound_id, selector("Invoke Action", "Button")),
+        )
+        .await;
+    assert_direct_pattern("uia.invoke", &invoke, "InvokePattern.Invoke");
+    let status = harness
+        .call_tool(
+            "uia.find",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "selector": {"name": "invoke=done", "role": "Text"},
+                "max_depth": 12,
+                "max_elements": 4000
+            }),
+        )
+        .await;
+    assert_ok("uia.find status", &status);
+    assert!(
+        status["match_count"].as_u64().unwrap_or_default() >= 1,
+        "InvokePattern should update the target app status text: {status:#}"
+    );
+
+    let set_value = harness
+        .call_tool(
+            "uia.set_value",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "selector": {"role": "Edit"},
+                "value": "set by Windows UIA integration",
+                "max_depth": 12,
+                "max_elements": 4000
+            }),
+        )
+        .await;
+    assert_direct_pattern("uia.set_value", &set_value, "ValuePattern.SetValue");
+    let get_value = harness
+        .call_tool(
+            "uia.get_value",
+            action_args(&bound_id, serde_json::json!({"role": "Edit"})),
+        )
+        .await;
+    assert_direct_pattern("uia.get_value", &get_value, "ValuePattern.CurrentValue");
+    assert_eq!(
+        get_value["outcome"]["value"]["value"],
+        "set by Windows UIA integration"
+    );
+
+    let focus = harness
+        .call_tool(
+            "uia.set_focus",
+            action_args(&bound_id, serde_json::json!({"role": "Edit"})),
+        )
+        .await;
+    assert_direct_pattern("uia.set_focus", &focus, "IUIAutomationElement.SetFocus");
+    assert_eq!(focus["outcome"]["after"]["focused"], true);
+
+    let toggle = harness
+        .call_tool(
+            "uia.toggle",
+            action_args(&bound_id, selector("Toggle Choice", "CheckBox")),
+        )
+        .await;
+    assert_direct_pattern("uia.toggle", &toggle, "TogglePattern.Toggle");
+    assert_eq!(toggle["outcome"]["value"]["before_state"], "off");
+    if toggle["outcome"]["value"]["after_state"] != "on" {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let toggle_back = harness
+        .call_tool(
+            "uia.toggle",
+            action_args(&bound_id, selector("Toggle Choice", "CheckBox")),
+        )
+        .await;
+    assert_direct_pattern("uia.toggle second", &toggle_back, "TogglePattern.Toggle");
+    assert_eq!(toggle_back["outcome"]["value"]["before_state"], "on");
+
+    let select = harness
+        .call_tool(
+            "uia.select",
+            action_args(&bound_id, selector("Scroll Item 02", "ListItem")),
+        )
+        .await;
+    assert_direct_pattern("uia.select", &select, "SelectionItemPattern.Select");
+    assert_eq!(select["outcome"]["value"]["selected"], true);
+
+    let expand = harness
+        .call_tool("uia.expand_collapse", expand_args(&bound_id, "expand"))
+        .await;
+    assert_direct_pattern_prefix(
+        "uia.expand_collapse expand",
+        &expand,
+        "ExpandCollapsePattern",
+    );
+    assert_eq!(expand["outcome"]["value"]["actual_action"], "expand");
+    assert_eq!(expand["outcome"]["value"]["after_state"], "expanded");
+    send_key(VK_ESCAPE);
+
+    let range = harness
+        .call_tool(
+            "uia.range_value",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "selector": {"role": "Slider"},
+                "value": 70.0,
+                "max_depth": 12,
+                "max_elements": 4000
+            }),
+        )
+        .await;
+    assert_direct_pattern("uia.range_value", &range, "RangeValuePattern.SetValue");
+    assert!(
+        range["outcome"]["value"]["after_value"]
+            .as_f64()
+            .unwrap_or_default()
+            >= 69.0,
+        "RangeValuePattern should set the slider value: {range:#}"
+    );
+
+    let scroll = harness
+        .call_tool(
+            "uia.scroll_into_view",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "selector": {
+                    "name": "Scroll Item 30",
+                    "role": "ListItem",
+                    "include_offscreen": true
+                },
+                "max_depth": 12,
+                "max_elements": 4000
+            }),
+        )
+        .await;
+    assert_direct_pattern(
+        "uia.scroll_into_view",
+        &scroll,
+        "ScrollItemPattern.ScrollIntoView",
+    );
+    assert_eq!(scroll["outcome"]["after"]["offscreen"], false);
+
+    let metrics = harness
+        .call_tool("process.metrics", serde_json::json!({"pid": pid}))
+        .await;
+    assert_ok("process.metrics", &metrics);
+    assert_eq!(metrics["provider_enabled"], true);
+    assert!(
+        metrics["metrics"]["working_set_bytes"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0,
+        "process.metrics should report a nonzero working set: {metrics:#}"
+    );
+    assert!(
+        metrics["metrics"]["handle_count"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0,
+        "process.metrics should report a nonzero handle count: {metrics:#}"
+    );
+
+    send_ctrl_alt_esc();
+    let emergency = harness.wait_for_emergency_stop().await;
+    assert_eq!(emergency["control"]["emergency_stop_active"], true);
+    assert_eq!(emergency["control"]["status"], "revoked");
+
+    let rearm = harness
+        .call_tool(
+            "control.arm",
+            serde_json::json!({
+                "session_id": "windows-runtime-test-cleanup",
+                "bound_id": bound_id,
+                "allow_for_ms": 10000,
+                "reason": "cleanup after emergency-stop verification"
+            }),
+        )
+        .await;
+    assert_ok("control.arm cleanup", &rearm);
+    let kill = harness
+        .call_tool(
+            "process.kill",
+            serde_json::json!({
+                "launch_id": launch_id,
+                "force": true
+            }),
+        )
+        .await;
+    assert_ok("process.kill cleanup", &kill);
+    assert_eq!(kill["exited"], true);
+}
+
+struct McpHarness {
+    child: Child,
+    client: reqwest::Client,
+    base: String,
+    session_id: Option<String>,
+    next_id: u64,
+}
+
+impl McpHarness {
+    async fn start(server_exe: &PathBuf) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port should bind");
+        let addr = listener.local_addr().expect("local addr should resolve");
+        drop(listener);
+        let log_path = temp_path("winctl-windows-runtime.log");
+        let child = Command::new(server_exe)
+            .arg("serve")
+            .arg("--transport")
+            .arg("http")
+            .arg("--listen")
+            .arg(addr.to_string())
+            .arg("--log-file")
+            .arg(log_path)
+            .env("RUST_LOG", "info")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("server should start");
+        let harness = Self {
+            child,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .expect("HTTP client should build"),
+            base: format!("http://{addr}"),
+            session_id: None,
+            next_id: 1,
+        };
+        harness.wait_for_health().await;
+        harness
+    }
+
+    async fn initialize(&mut self) {
+        let id = self.next_id();
+        let init = self
+            .post_mcp(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "windows-runtime-test", "version": "0.1"}
+                }
+            }))
+            .await;
+        assert_eq!(init["jsonrpc"], "2.0");
+        let session_id = init["__session_id"]
+            .as_str()
+            .expect("initialize should return Mcp-Session-Id")
+            .to_owned();
+        self.session_id = Some(session_id.clone());
+        let initialized = self
+            .client
+            .post(format!("{}/mcp", self.base))
+            .header("Accept", "text/event-stream, application/json")
+            .header("Mcp-Session-Id", session_id)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {}
+            }))
+            .send()
+            .await
+            .expect("initialized notification should send");
+        assert_eq!(initialized.status(), reqwest::StatusCode::ACCEPTED);
+    }
+
+    async fn call_tool(&mut self, name: &str, arguments: Value) -> Value {
+        let id = self.next_id();
+        let response = self
+            .post_mcp(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}
+            }))
+            .await;
+        tool_payload(name, response)
+    }
+
+    async fn wait_for_emergency_stop(&mut self) -> Value {
+        let started = std::time::Instant::now();
+        loop {
+            let state = self.call_tool("control.state", serde_json::json!({})).await;
+            if state["control"]["emergency_stop_active"] == true {
+                return state;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "timed out waiting for Ctrl+Alt+Esc emergency stop; last state: {state:#}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn wait_for_health(&self) {
+        let started = std::time::Instant::now();
+        loop {
+            match self
+                .client
+                .get(format!("{}/healthz", self.base))
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => return,
+                _ if started.elapsed() < Duration::from_secs(10) => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                _ => panic!("HTTP server did not become healthy"),
+            }
+        }
+    }
+
+    async fn post_mcp(&self, body: Value) -> Value {
+        let mut request = self
+            .client
+            .post(format!("{}/mcp", self.base))
+            .header("Accept", "text/event-stream, application/json")
+            .json(&body);
+        if let Some(session_id) = &self.session_id {
+            request = request.header("Mcp-Session-Id", session_id);
+        }
+        let response = request.send().await.expect("MCP request should send");
+        assert!(
+            response.status().is_success(),
+            "MCP request failed with status {}",
+            response.status()
+        );
+        let session = response
+            .headers()
+            .get("Mcp-Session-Id")
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let text = response.text().await.expect("MCP response should be text");
+        let mut value = if content_type.starts_with("text/event-stream") {
+            parse_first_sse_json(&text)
+        } else {
+            serde_json::from_str::<Value>(&text)
+                .unwrap_or_else(|error| panic!("HTTP MCP response was not JSON: {text:?}: {error}"))
+        };
+        if let Some(session) = session {
+            value["__session_id"] = Value::String(session);
+        }
+        value
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+}
+
+impl Drop for McpHarness {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn action_args(bound_id: &str, selector: Value) -> Value {
+    serde_json::json!({
+        "bound_id": bound_id,
+        "selector": selector,
+        "max_depth": 12,
+        "max_elements": 4000
+    })
+}
+
+fn expand_args(bound_id: &str, action: &str) -> Value {
+    serde_json::json!({
+        "bound_id": bound_id,
+        "selector": {"role": "ComboBox"},
+        "expand_collapse_action": action,
+        "max_depth": 12,
+        "max_elements": 4000
+    })
+}
+
+fn selector(name: &str, role: &str) -> Value {
+    serde_json::json!({"name": name, "role": role})
+}
+
+fn assert_ok(tool: &str, value: &Value) {
+    assert_eq!(value["ok"], true, "{tool} failed: {value:#}");
+}
+
+fn assert_direct_pattern(tool: &str, value: &Value, pattern: &str) {
+    assert_ok(tool, value);
+    assert_eq!(value["outcome"]["direct_uia_pattern_used"], true);
+    assert_eq!(value["outcome"]["pattern_used"], pattern);
+}
+
+fn assert_direct_pattern_prefix(tool: &str, value: &Value, pattern_prefix: &str) {
+    assert_ok(tool, value);
+    assert_eq!(value["outcome"]["direct_uia_pattern_used"], true);
+    let pattern = value["outcome"]["pattern_used"]
+        .as_str()
+        .expect("pattern_used should be a string");
+    assert!(
+        pattern.starts_with(pattern_prefix),
+        "{tool} used unexpected pattern {pattern:?}: {value:#}"
+    );
+}
+
+fn tool_payload(tool: &str, response: Value) -> Value {
+    assert_eq!(
+        response["jsonrpc"], "2.0",
+        "{tool} returned invalid MCP response: {response:#}"
+    );
+    let result = &response["result"];
+    assert_ne!(
+        result["isError"], true,
+        "{tool} returned an MCP tool error: {response:#}"
+    );
+    if result["structuredContent"].is_object() {
+        return result["structuredContent"].clone();
+    }
+    if let Some(content) = result["content"].as_array() {
+        for item in content {
+            if item["type"] == "text" {
+                let text = item["text"]
+                    .as_str()
+                    .expect("text content should be a string");
+                return serde_json::from_str(text).unwrap_or_else(|error| {
+                    panic!("{tool} text content was not JSON: {text:?}: {error}")
+                });
+            }
+        }
+    }
+    panic!("{tool} response did not contain JSON tool payload: {response:#}");
+}
+
+fn parse_first_sse_json(text: &str) -> Value {
+    let data = text
+        .lines()
+        .find_map(|line| line.strip_prefix("data:"))
+        .map(str::trim)
+        .unwrap_or_else(|| panic!("SSE response did not contain data: {text:?}"));
+    serde_json::from_str(data)
+        .unwrap_or_else(|error| panic!("SSE data was not JSON: {data:?}: {error}"))
+}
+
+fn target_exe_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("WINCTL_TEST_TARGET_EXE") {
+        return windows_path(&path.to_string_lossy());
+    }
+    let current = std::env::current_exe().expect("current exe should resolve");
+    let debug_dir = current
+        .parent()
+        .and_then(|deps| deps.parent())
+        .expect("test exe should live under target/.../debug/deps");
+    debug_dir.join("winctl-test-target.exe")
+}
+
+fn server_exe_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("WINCTL_MCP_SERVER_EXE") {
+        return windows_path(&path.to_string_lossy());
+    }
+    windows_path(env!("CARGO_BIN_EXE_winctl-mcp-server"))
+}
+
+fn windows_path(path: &str) -> PathBuf {
+    if path.starts_with('/') {
+        if let Ok(distro) = std::env::var("WSL_DISTRO_NAME") {
+            let mut converted = format!(r"\\wsl.localhost\{distro}");
+            converted.push_str(&path.replace('/', r"\"));
+            return PathBuf::from(converted);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn temp_path(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
+}
+
+fn send_ctrl_alt_esc() {
+    let inputs = [
+        key_input(VK_CONTROL, KEYBD_EVENT_FLAGS(0)),
+        key_input(VK_MENU, KEYBD_EVENT_FLAGS(0)),
+        key_input(VK_ESCAPE, KEYBD_EVENT_FLAGS(0)),
+        key_input(VK_ESCAPE, KEYEVENTF_KEYUP),
+        key_input(VK_MENU, KEYEVENTF_KEYUP),
+        key_input(VK_CONTROL, KEYEVENTF_KEYUP),
+    ];
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    assert_eq!(
+        sent,
+        inputs.len() as u32,
+        "SendInput should deliver Ctrl+Alt+Esc"
+    );
+}
+
+fn send_key(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
+    let inputs = [
+        key_input(vk, KEYBD_EVENT_FLAGS(0)),
+        key_input(vk, KEYEVENTF_KEYUP),
+    ];
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    assert_eq!(sent, inputs.len() as u32, "SendInput should deliver key");
+}
+
+fn key_input(
+    vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY,
+    flags: KEYBD_EVENT_FLAGS,
+) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}

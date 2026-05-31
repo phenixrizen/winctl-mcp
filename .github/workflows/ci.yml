@@ -57,3 +57,40 @@ jobs:
 
       - name: Build Windows tray
         run: make build-win-tray
+
+  windows-runtime:
+    name: Windows runtime integration
+    runs-on: windows-latest
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up MSYS2 MinGW
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: Install Rust GNU target
+        shell: pwsh
+        run: |
+          rustup default stable
+          rustup target add $env:WINDOWS_TARGET
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Build Windows workspace
+        shell: pwsh
+        run: cargo build --workspace --target $env:WINDOWS_TARGET
+
+      - name: Locate Windows UI test target
+        shell: pwsh
+        run: |
+          $target = Resolve-Path "target\$env:WINDOWS_TARGET\debug\winctl-test-target.exe"
+          "WINCTL_TEST_TARGET_EXE=$target" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Run Windows runtime integration tests
+        shell: pwsh
+        run: cargo test --workspace --target $env:WINDOWS_TARGET -- --nocapture

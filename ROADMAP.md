@@ -138,6 +138,8 @@
 
 **Audit comments:** Implemented `control.state`, `control.arm`, `control.consent`, `control.notify`, `control.revoke`, and `control.emergency_stop`, plus dashboard control indicators, sensitive-tool gate checks, and a Windows `Ctrl+Alt+Esc` global emergency-stop hotkey. Native Windows toast and target-window overlay/border indicators remain open provider work.
 
+**Verification:** A Windows runtime integration test now verifies the global Ctrl+Alt+Esc emergency-stop hotkey against a live MCP server session.
+
 - Add tray and dashboard control-state indicators for idle, armed, warning, controlling, blocked, and revoked states.
 - Show a native Windows toast before the first focus/click/type/control action in a session, including target app, PID/HWND, requesting client/session when available, and a short cancelable countdown.
 - Add an active-control indicator while input is being injected, such as a tray active state and optional target-window overlay or border.
@@ -152,6 +154,8 @@
 **Status:** Complete for core direct UI Automation patterns.
 
 **Audit comments:** Added revalidated action tools with before/after diagnostics, control-gate integration, wait support, and Windows COM providers for `InvokePattern`, `ValuePattern`, `TogglePattern`, `SelectionItemPattern`, `ExpandCollapsePattern`, `RangeValuePattern`, `ScrollItemPattern`, and `SetFocus`. Coordinate fallback is now returned as a hint rather than silently dispatched. Desired-state toggle and add/remove selection modes remain future refinements.
+
+**Verification:** A Windows runtime integration test now launches `winctl-test-target`, binds by returned PID/HWND, and exercises `uia.invoke`, `uia.set_value`, `uia.get_value`, `uia.toggle`, `uia.select`, `uia.expand_collapse`, `uia.range_value`, `uia.scroll_into_view`, and `uia.set_focus` through the MCP HTTP transport with behavior assertions.
 
 - Promote the read-only UIA snapshot layer into a strict element-action layer that operates on revalidated element references instead of pixel coordinates.
 - Add `uia.invoke`, `uia.set_value`, `uia.get_value`, `uia.toggle`, `uia.expand_collapse`, `uia.select`, `uia.set_focus`, `uia.range_value`, and `uia.scroll_into_view`, each mapped to a specific UI Automation control pattern.
@@ -177,6 +181,8 @@
 **Status:** Mostly complete.
 
 **Audit comments:** Added direct allowlisted `build.run`, `process.metrics`, `diagnostics.crash_report`, and `test.report_export`. `build.run` now terminates timed-out child processes, `process.metrics` uses native Windows CPU/memory/handle/GDI/USER counters, and `diagnostics.crash_report` queries recent Application errors plus WER paths. Native dialog/UAC handling and run-video capture remain open work.
+
+**Verification:** A Windows runtime integration test now asserts `process.metrics` returns nonzero working-set and handle counters for a launched test process.
 
 - Add a policy-allowlisted `build.run` task runner (msbuild, dotnet, cargo, cmake) with structured error/warning parsing, distinct from unguarded shell execution.
 - Capture launched-process stdout/stderr/log streams for the app under test and expose them as replay artifacts.

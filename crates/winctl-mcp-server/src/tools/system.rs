@@ -575,6 +575,8 @@ mod tests {
     fn default_allowed_roots_include_capture_dir() {
         let state = AppState::with_capture_dir(std::env::temp_dir());
         let roots = allowed_roots(&state);
-        assert!(roots.iter().any(|root| root == &std::env::temp_dir()));
+        let temp_dir =
+            std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
+        assert!(roots.iter().any(|root| root == &temp_dir));
     }
 }
