@@ -727,6 +727,57 @@ pub struct UiResolveRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct UiElementActionRequest {
+    pub bound_id: String,
+    pub element_ref: Option<String>,
+    pub selector: Option<winctl::UiElementSelector>,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+    #[serde(default)]
+    pub allow_offscreen: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct UiSetValueRequest {
+    pub bound_id: String,
+    pub element_ref: Option<String>,
+    pub selector: Option<winctl::UiElementSelector>,
+    pub value: String,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+    #[serde(default)]
+    pub allow_offscreen: bool,
+    #[serde(default = "default_true")]
+    pub replace_existing: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct UiRangeValueRequest {
+    pub bound_id: String,
+    pub element_ref: Option<String>,
+    pub selector: Option<winctl::UiElementSelector>,
+    pub value: f64,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+    #[serde(default)]
+    pub allow_offscreen: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct UiWaitForElementRequest {
+    pub bound_id: String,
+    pub element_ref: Option<String>,
+    pub selector: Option<winctl::UiElementSelector>,
+    pub timeout_ms: Option<u64>,
+    pub poll_interval_ms: Option<u64>,
+    pub max_depth: Option<usize>,
+    pub max_elements: Option<usize>,
+    pub require_enabled: Option<bool>,
+    pub require_visible: Option<bool>,
+    pub name_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ControlArmRequest {
     pub session_id: Option<String>,
     pub bound_id: Option<String>,
@@ -1254,6 +1305,230 @@ impl WinctlMcpServer {
         let request = request.0;
         run_blocking_tool("uia.resolve", move || {
             tools::uia::uia_resolve(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.invoke",
+        description = "Invoke a revalidated UI Automation element, using a safe center-click fallback when a direct pattern provider is unavailable."
+    )]
+    pub async fn uia_invoke(
+        &self,
+        request: Parameters<UiElementActionRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        let bound_id = request.bound_id.clone();
+        run_blocking_tool("uia.invoke", move || {
+            tools::control::with_control_gate(
+                &state,
+                "uia.invoke",
+                Some(&bound_id),
+                "uia_action",
+                true,
+                || tools::uia::uia_invoke(&state, request),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.set_value",
+        description = "Set text for a revalidated UI Automation element with focus/type fallback and before/after state diagnostics."
+    )]
+    pub async fn uia_set_value(
+        &self,
+        request: Parameters<UiSetValueRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        let bound_id = request.bound_id.clone();
+        run_blocking_tool("uia.set_value", move || {
+            tools::control::with_control_gate(
+                &state,
+                "uia.set_value",
+                Some(&bound_id),
+                "uia_action",
+                true,
+                || tools::uia::uia_set_value(&state, request),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.get_value",
+        description = "Read value-like UI Automation properties from a revalidated element snapshot."
+    )]
+    pub async fn uia_get_value(
+        &self,
+        request: Parameters<UiElementActionRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("uia.get_value", move || {
+            tools::uia::uia_get_value(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.toggle",
+        description = "Toggle a revalidated UI Automation element when safe fallback semantics are available; otherwise fail closed."
+    )]
+    pub async fn uia_toggle(
+        &self,
+        request: Parameters<UiElementActionRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        let bound_id = request.bound_id.clone();
+        run_blocking_tool("uia.toggle", move || {
+            tools::control::with_control_gate(
+                &state,
+                "uia.toggle",
+                Some(&bound_id),
+                "uia_action",
+                true,
+                || tools::uia::uia_toggle(&state, request),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.expand_collapse",
+        description = "Expand or collapse a revalidated UI Automation element when a supported action path exists; otherwise fail closed."
+    )]
+    pub async fn uia_expand_collapse(
+        &self,
+        request: Parameters<UiElementActionRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        let bound_id = request.bound_id.clone();
+        run_blocking_tool("uia.expand_collapse", move || {
+            tools::control::with_control_gate(
+                &state,
+                "uia.expand_collapse",
+                Some(&bound_id),
+                "uia_action",
+                true,
+                || tools::uia::uia_expand_collapse(&state, request),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.select",
+        description = "Select a revalidated UI Automation element with strict target resolution and safe fallback diagnostics."
+    )]
+    pub async fn uia_select(
+        &self,
+        request: Parameters<UiElementActionRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        let bound_id = request.bound_id.clone();
+        run_blocking_tool("uia.select", move || {
+            tools::control::with_control_gate(
+                &state,
+                "uia.select",
+                Some(&bound_id),
+                "uia_action",
+                true,
+                || tools::uia::uia_select(&state, request),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.set_focus",
+        description = "Focus a revalidated UI Automation element using strict target resolution and center-click fallback."
+    )]
+    pub async fn uia_set_focus(
+        &self,
+        request: Parameters<UiElementActionRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        let bound_id = request.bound_id.clone();
+        run_blocking_tool("uia.set_focus", move || {
+            tools::control::with_control_gate(
+                &state,
+                "uia.set_focus",
+                Some(&bound_id),
+                "uia_action",
+                true,
+                || tools::uia::uia_set_focus(&state, request),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.range_value",
+        description = "Set a numeric value on a revalidated UI Automation range element when a supported action path exists; otherwise fail closed."
+    )]
+    pub async fn uia_range_value(
+        &self,
+        request: Parameters<UiRangeValueRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        let bound_id = request.bound_id.clone();
+        run_blocking_tool("uia.range_value", move || {
+            tools::control::with_control_gate(
+                &state,
+                "uia.range_value",
+                Some(&bound_id),
+                "uia_action",
+                true,
+                || tools::uia::uia_range_value(&state, request),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.scroll_into_view",
+        description = "Scroll a revalidated UI Automation element into view when a supported action path exists; otherwise fail closed."
+    )]
+    pub async fn uia_scroll_into_view(
+        &self,
+        request: Parameters<UiElementActionRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        let bound_id = request.bound_id.clone();
+        run_blocking_tool("uia.scroll_into_view", move || {
+            tools::control::with_control_gate(
+                &state,
+                "uia.scroll_into_view",
+                Some(&bound_id),
+                "uia_action",
+                true,
+                || tools::uia::uia_scroll_into_view(&state, request),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "uia.wait_for_element",
+        description = "Wait for a UI Automation selector or element reference to resolve in fresh bound-window snapshots."
+    )]
+    pub async fn uia_wait_for_element(
+        &self,
+        request: Parameters<UiWaitForElementRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("uia.wait_for_element", move || {
+            tools::uia::uia_wait_for_element(&state, request)
         })
         .await
     }
@@ -3679,9 +3954,19 @@ mod tests {
                 "test.export_result",
                 "test.run",
                 "test.validate",
+                "uia.expand_collapse",
                 "uia.find",
+                "uia.get_value",
+                "uia.invoke",
+                "uia.range_value",
                 "uia.resolve",
+                "uia.scroll_into_view",
+                "uia.select",
+                "uia.set_focus",
+                "uia.set_value",
                 "uia.snapshot",
+                "uia.toggle",
+                "uia.wait_for_element",
                 "windows.bind",
                 "windows.close",
                 "windows.describe",

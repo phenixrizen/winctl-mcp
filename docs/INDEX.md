@@ -47,6 +47,16 @@
 | `winctl-mcp` | [`uia.snapshot`](UIA_SNAPSHOT.md) | Capture a UI Automation tree for a bound window with element roles, names, automation IDs, bounds, state, hierarchy, and stable element references. |
 | `winctl-mcp` | [`uia.find`](UIA_FIND.md) | Find UI Automation elements in a fresh bound-window snapshot by semantic selector fields. |
 | `winctl-mcp` | [`uia.resolve`](UIA_RESOLVE.md) | Revalidate a UI Automation element reference path against the current bound window snapshot. |
+| `winctl-mcp` | [`uia.invoke`](UIA_INVOKE.md) | Invoke a revalidated UI Automation element with safe fallback diagnostics. |
+| `winctl-mcp` | [`uia.set_value`](UIA_SET_VALUE.md) | Set text for a revalidated UI Automation element with before/after state diagnostics. |
+| `winctl-mcp` | [`uia.get_value`](UIA_GET_VALUE.md) | Read value-like UI Automation properties from a revalidated element snapshot. |
+| `winctl-mcp` | [`uia.toggle`](UIA_TOGGLE.md) | Toggle a revalidated UI Automation element when safe fallback semantics are available. |
+| `winctl-mcp` | [`uia.expand_collapse`](UIA_EXPAND_COLLAPSE.md) | Expand or collapse a revalidated UI Automation element when supported. |
+| `winctl-mcp` | [`uia.select`](UIA_SELECT.md) | Select a revalidated UI Automation element with strict target resolution. |
+| `winctl-mcp` | [`uia.set_focus`](UIA_SET_FOCUS.md) | Focus a revalidated UI Automation element with strict target resolution. |
+| `winctl-mcp` | [`uia.range_value`](UIA_RANGE_VALUE.md) | Set a numeric value on a revalidated UI Automation range element when supported. |
+| `winctl-mcp` | [`uia.scroll_into_view`](UIA_SCROLL_INTO_VIEW.md) | Scroll a revalidated UI Automation element into view when supported. |
+| `winctl-mcp` | [`uia.wait_for_element`](UIA_WAIT_FOR_ELEMENT.md) | Wait for a UI Automation selector or element reference to resolve in fresh snapshots. |
 | `winctl-mcp` | [`windows.list`](WINDOWS_LIST.md) | List visible and discoverable top-level Windows windows with HWND, PID, executable, class, title, and virtual desktop geometry. |
 | `winctl-mcp` | [`windows.find`](WINDOWS_FIND.md) | Find windows matching a selector and return scored diagnostics without binding or controlling them. |
 | `winctl-mcp` | [`windows.bind`](WINDOWS_BIND.md) | Bind one strict window target by stable identity before any control action. |

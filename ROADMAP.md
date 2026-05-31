@@ -149,6 +149,10 @@
 
 ## Phase 12: UI Automation Action Layer
 
+**Status:** Complete for first-pass strict action endpoints.
+
+**Audit comments:** Added revalidated action tools with before/after diagnostics, control-gate integration, wait support, and coordinate fallback for focus/invoke/select/toggle/text entry. Direct COM pattern providers still need deeper Windows-only implementation before this is considered full-fidelity UIA pattern control.
+
 - Promote the read-only UIA snapshot layer into a strict element-action layer that operates on revalidated element references instead of pixel coordinates.
 - Add `uia.invoke`, `uia.set_value`, `uia.get_value`, `uia.toggle`, `uia.expand_collapse`, `uia.select`, `uia.set_focus`, `uia.range_value`, and `uia.scroll_into_view`, each mapped to a specific UI Automation control pattern.
 - Resolve every action against a fresh bound-window snapshot, verify the element supports the requested pattern, and fail closed on stale references, unsupported patterns, disabled, or offscreen elements.
