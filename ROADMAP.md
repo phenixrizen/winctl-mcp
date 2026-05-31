@@ -134,9 +134,9 @@
 
 ## Phase 11: Desktop Control Notification and Consent
 
-**Status:** Complete for first-pass control-state gating and visible diagnostics.
+**Status:** Partially complete.
 
-**Audit comments:** Implemented `control.state`, `control.arm`, `control.consent`, `control.notify`, `control.revoke`, and `control.emergency_stop`, plus dashboard control indicators and sensitive-tool gate checks. Native toast and global hotkey integration are represented in the shared event model and remain tray/provider integration work.
+**Audit comments:** Implemented `control.state`, `control.arm`, `control.consent`, `control.notify`, `control.revoke`, and `control.emergency_stop`, plus dashboard control indicators, sensitive-tool gate checks, and a Windows `Ctrl+Alt+Esc` global emergency-stop hotkey. Native Windows toast and target-window overlay/border indicators remain open provider work.
 
 - Add tray and dashboard control-state indicators for idle, armed, warning, controlling, blocked, and revoked states.
 - Show a native Windows toast before the first focus/click/type/control action in a session, including target app, PID/HWND, requesting client/session when available, and a short cancelable countdown.
@@ -149,9 +149,9 @@
 
 ## Phase 12: UI Automation Action Layer
 
-**Status:** Complete for first-pass strict action endpoints.
+**Status:** Complete for core direct UI Automation patterns.
 
-**Audit comments:** Added revalidated action tools with before/after diagnostics, control-gate integration, wait support, and coordinate fallback for focus/invoke/select/toggle/text entry. Direct COM pattern providers still need deeper Windows-only implementation before this is considered full-fidelity UIA pattern control.
+**Audit comments:** Added revalidated action tools with before/after diagnostics, control-gate integration, wait support, and Windows COM providers for `InvokePattern`, `ValuePattern`, `TogglePattern`, `SelectionItemPattern`, `ExpandCollapsePattern`, `RangeValuePattern`, `ScrollItemPattern`, and `SetFocus`. Coordinate fallback is now returned as a hint rather than silently dispatched. Desired-state toggle and add/remove selection modes remain future refinements.
 
 - Promote the read-only UIA snapshot layer into a strict element-action layer that operates on revalidated element references instead of pixel coordinates.
 - Add `uia.invoke`, `uia.set_value`, `uia.get_value`, `uia.toggle`, `uia.expand_collapse`, `uia.select`, `uia.set_focus`, `uia.range_value`, and `uia.scroll_into_view`, each mapped to a specific UI Automation control pattern.
@@ -162,9 +162,9 @@
 
 ## Phase 13: Assertion and Visual Verification Tools
 
-**Status:** Complete for first-pass structured assertions and visual comparison.
+**Status:** Mostly complete.
 
-**Audit comments:** Added `assert.element`, `assert.text_visible`, `assert.pixel_color`, `assert.window_count`, `assert.clipboard`, `capture.read_text`, `capture.ocr_region`, and `capture.compare_baseline`. OCR currently reports provider-unavailable diagnostics; a real OCR backend remains follow-up work.
+**Audit comments:** Added `assert.element`, `assert.text_visible`, `assert.pixel_color`, `assert.window_count`, `assert.clipboard`, `capture.read_text`, `capture.ocr_region`, and `capture.compare_baseline`. `capture.ocr_region` now crops the requested region and runs a direct Tesseract OCR provider with word bounding boxes; an in-box Windows.Media.Ocr provider remains future work for systems without Tesseract.
 
 - Add first-class assertion tools that return structured pass/fail: `assert.element` (exists/enabled/value/name), `assert.text_visible`, `assert.pixel_color`, and `assert.window_count`.
 - Add `capture.ocr_region` and `capture.read_text` for text extraction from custom-rendered, canvas, or GDI-drawn UIs that the UIA tree cannot expose.
@@ -174,9 +174,9 @@
 
 ## Phase 14: Build, Diagnostics, and Test Reporting
 
-**Status:** Complete for first-pass guarded build/report diagnostics.
+**Status:** Mostly complete.
 
-**Audit comments:** Added direct allowlisted `build.run`, `process.metrics`, `diagnostics.crash_report`, and `test.report_export`. Native Event Log/WER, resource counters, UAC/dialog handling, and video capture are exposed as provider gaps for future Windows-specific integrations.
+**Audit comments:** Added direct allowlisted `build.run`, `process.metrics`, `diagnostics.crash_report`, and `test.report_export`. `build.run` now terminates timed-out child processes, `process.metrics` uses native Windows CPU/memory/handle/GDI/USER counters, and `diagnostics.crash_report` queries recent Application errors plus WER paths. Native dialog/UAC handling and run-video capture remain open work.
 
 - Add a policy-allowlisted `build.run` task runner (msbuild, dotnet, cargo, cmake) with structured error/warning parsing, distinct from unguarded shell execution.
 - Capture launched-process stdout/stderr/log streams for the app under test and expose them as replay artifacts.
@@ -187,9 +187,9 @@
 
 ## Phase 15: Deep Web Automation & App Introspection
 
-**Status:** Complete for local CDP discovery and provider diagnostics.
+**Status:** Complete for local CDP WebSocket introspection.
 
-**Audit comments:** Added `web.cdp.list_targets`, `web.cdp.evaluate`, `web.dom.snapshot`, `web.network.events`, `web.a11y.snapshot`, and `web.style.inspect`. Local target discovery is implemented over loopback HTTP; WebSocket-backed CDP commands, DOM extraction, network interception, and style/a11y snapshots remain explicit provider-unavailable gaps.
+**Audit comments:** Added `web.cdp.list_targets`, `web.cdp.evaluate`, `web.dom.snapshot`, `web.network.events`, `web.a11y.snapshot`, and `web.style.inspect`. Target discovery remains loopback-only and the WebSocket bridge now dispatches `Runtime.evaluate`, `DOMSnapshot.captureSnapshot`, `Network.enable`, `Accessibility.getFullAXTree`, and `CSS.getComputedStyleForNode`.
 
 - Add a Chrome DevTools Protocol (CDP) or WebDriver bridge to allow evaluating JavaScript, inspecting DOM nodes, and intercepting network requests for web applications.
 - Add Accessibility (a11y) tree validation tools tailored for web DOMs and embedded WebView2 containers.
@@ -197,9 +197,9 @@
 
 ## Phase 16: Dashboard and System Tray Enhancements
 
-**Status:** Complete for first-pass dashboard inspection and tray recorder shortcuts.
+**Status:** Partially complete.
 
-**Audit comments:** Added dashboard control/inspection surfaces, authenticated UIA snapshot and screenshot endpoints, capture-image viewing, and tray shortcuts for recorder access/recording toggle. Visual diff browsing, manifest quick-launch catalogs, and completion monitoring remain follow-up UX work.
+**Audit comments:** Added dashboard control/inspection surfaces, authenticated UIA snapshot and screenshot endpoints, capture-image viewing, and tray shortcuts for recorder access/recording toggle. Visual diff browsing, manifest quick-launch catalogs, native toast alerts, and test completion monitoring remain follow-up UX work.
 
 - Add a live view of the UI Automation tree and real-time screenshot feeds to the `/dashboard` for debugging active bindings.
 - Add visual diff viewers to the dashboard for inspecting `capture.compare_baseline` failures.

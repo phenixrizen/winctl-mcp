@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Return CDP DOM snapshot provider diagnostics for a debugger target.
+Description: Capture a CDP DOM snapshot for a debugger target.
 
 ## Inputs
 
@@ -15,4 +15,4 @@ Description: Return CDP DOM snapshot provider diagnostics for a debugger target.
 
 ## Notes
 
-The tool reports target metadata and a provider-unavailable diagnostic until the CDP WebSocket bridge is enabled.
+Connects to the target WebSocket and dispatches `DOMSnapshot.captureSnapshot` with DOM rect and paint-order data.

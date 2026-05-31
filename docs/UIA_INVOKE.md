@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Invoke a revalidated UI Automation element with safe fallback diagnostics.
+Description: Invoke a revalidated UI Automation element with `InvokePattern`.
 
 ## Inputs
 
@@ -16,4 +16,4 @@ Description: Invoke a revalidated UI Automation element with safe fallback diagn
 
 ## Notes
 
-The tool resolves the target in a fresh snapshot and uses center-click fallback when direct UIA pattern control is unavailable.
+The tool resolves the target in a fresh snapshot and uses UI Automation `InvokePattern.Invoke`. Coordinate fallback is reported as a hint only and is not dispatched silently.

@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Prepare a CDP JavaScript evaluation request and return target diagnostics.
+Description: Evaluate JavaScript in a loopback CDP target.
 
 ## Inputs
 
@@ -15,4 +15,4 @@ Description: Prepare a CDP JavaScript evaluation request and return target diagn
 
 ## Notes
 
-Target discovery is implemented; WebSocket command execution is reported as unavailable.
+Discovers the selected target, connects to its loopback `webSocketDebuggerUrl`, and dispatches `Runtime.evaluate` with `returnByValue` and `awaitPromise`.

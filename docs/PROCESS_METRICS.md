@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Return process metric diagnostics and platform availability for resource counters.
+Description: Return native Windows process resource counters.
 
 ## Inputs
 
@@ -12,4 +12,4 @@ Description: Return process metric diagnostics and platform availability for res
 
 ## Notes
 
-This first implementation returns process identity metadata and marks native CPU/memory/handle counters as unavailable when no provider is enabled.
+On Windows, the tool samples CPU time and returns working set, peak working set, pagefile usage, handle count, and GDI/USER object counts. On non-Windows runtimes it returns an unsupported-platform error.

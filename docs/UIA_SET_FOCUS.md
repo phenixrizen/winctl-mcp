@@ -15,4 +15,4 @@ Description: Focus a revalidated UI Automation element with strict target resolu
 
 ## Notes
 
-The first implementation uses center-click fallback after resolving exactly one enabled, onscreen element.
+Uses `IUIAutomationElement.SetFocus` after resolving exactly one enabled, onscreen element. Coordinate fallback is reported as a hint only and is not dispatched silently.

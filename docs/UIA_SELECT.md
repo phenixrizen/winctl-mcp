@@ -15,4 +15,4 @@ Description: Select a revalidated UI Automation element with strict target resol
 
 ## Notes
 
-The first implementation uses center-click fallback after resolving exactly one element.
+Uses UI Automation `SelectionItemPattern.Select` after resolving exactly one fresh target. Coordinate fallback is reported as a hint only and is not dispatched silently.

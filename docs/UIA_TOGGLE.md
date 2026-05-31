@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Toggle a revalidated UI Automation element when safe fallback semantics are available.
+Description: Toggle a revalidated UI Automation element with `TogglePattern`.
 
 ## Inputs
 
@@ -15,4 +15,4 @@ Description: Toggle a revalidated UI Automation element when safe fallback seman
 
 ## Notes
 
-The tool fails closed if the element cannot be resolved, is disabled, is offscreen, or has no usable bounds.
+Uses UI Automation `TogglePattern.Toggle` and returns pre/post toggle state when available. Unsupported, disabled, offscreen, or stale targets fail closed.

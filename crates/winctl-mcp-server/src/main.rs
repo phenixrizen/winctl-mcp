@@ -147,6 +147,8 @@ impl AppState {
         policy: SecurityPolicy,
     ) -> Self {
         let policy = policy.with_runtime_roots(&capture_dir);
+        let control_runtime = Arc::new(Mutex::new(tools::control::ControlRuntimeState::default()));
+        tools::control::start_emergency_hotkey(control_runtime.clone());
         Self {
             bound: Arc::new(Mutex::new(HashMap::new())),
             capture_lock: Arc::new(Mutex::new(())),
@@ -158,7 +160,7 @@ impl AppState {
             recorder_runtime: Arc::new(
                 Mutex::new(tools::recorder::RecorderRuntimeState::default()),
             ),
-            control_runtime: Arc::new(Mutex::new(tools::control::ControlRuntimeState::default())),
+            control_runtime,
             launch_counter: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -735,6 +737,7 @@ pub struct UiElementActionRequest {
     pub max_elements: Option<usize>,
     #[serde(default)]
     pub allow_offscreen: bool,
+    pub expand_collapse_action: Option<winctl::UiExpandCollapseAction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
@@ -1435,7 +1438,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.invoke",
-        description = "Invoke a revalidated UI Automation element, using a safe center-click fallback when a direct pattern provider is unavailable."
+        description = "Invoke a revalidated UI Automation element with InvokePattern; coordinate fallback is only returned as a hint."
     )]
     pub async fn uia_invoke(
         &self,
@@ -1459,7 +1462,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.set_value",
-        description = "Set text for a revalidated UI Automation element with focus/type fallback and before/after state diagnostics."
+        description = "Set text for a revalidated UI Automation element with ValuePattern.SetValue and before/after state diagnostics."
     )]
     pub async fn uia_set_value(
         &self,
@@ -1483,7 +1486,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.get_value",
-        description = "Read value-like UI Automation properties from a revalidated element snapshot."
+        description = "Read ValuePattern.CurrentValue from a revalidated UI Automation element."
     )]
     pub async fn uia_get_value(
         &self,
@@ -1737,7 +1740,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.ocr_region",
-        description = "Return OCR-region diagnostics for an image or bound window; reports provider availability when OCR is not configured."
+        description = "OCR an image region or freshly captured bound window region and return recognized text with word boxes."
     )]
     pub async fn capture_ocr_region(
         &self,
@@ -1798,7 +1801,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "process.metrics",
-        description = "Return process metric diagnostics and platform availability for CPU, memory, handles, GDI, and USER counters."
+        description = "Return native Windows CPU, memory, handle, GDI, and USER counters for a process."
     )]
     pub async fn process_metrics(
         &self,
@@ -2549,7 +2552,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.cdp.evaluate",
-        description = "Prepare a CDP JavaScript evaluation request and return target/WebSocket diagnostics when the WebSocket bridge is unavailable."
+        description = "Evaluate JavaScript in a loopback Chrome DevTools Protocol target over WebSocket."
     )]
     pub async fn web_cdp_evaluate(
         &self,
@@ -2561,7 +2564,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.dom.snapshot",
-        description = "Return CDP DOM snapshot provider diagnostics for a local debugger target."
+        description = "Capture a DOMSnapshot from a loopback Chrome DevTools Protocol target."
     )]
     pub async fn web_dom_snapshot(
         &self,
@@ -2573,7 +2576,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.network.events",
-        description = "Return CDP network-event provider diagnostics for a local debugger target."
+        description = "Enable CDP Network events and buffer loopback target network events for a timeout window."
     )]
     pub async fn web_network_events(
         &self,
@@ -2585,7 +2588,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.a11y.snapshot",
-        description = "Return accessibility-tree provider diagnostics for a local browser or WebView target."
+        description = "Capture the CDP accessibility tree for a local browser or WebView target."
     )]
     pub async fn web_a11y_snapshot(
         &self,
@@ -2597,7 +2600,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.style.inspect",
-        description = "Return style-inspection provider diagnostics for a local browser or WebView target."
+        description = "Inspect computed CSS style for a selector in a local browser or WebView CDP target."
     )]
     pub async fn web_style_inspect(
         &self,

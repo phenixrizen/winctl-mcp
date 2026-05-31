@@ -80,6 +80,22 @@ pub struct ProcessKillResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProcessMetrics {
+    pub pid: u32,
+    pub sample_interval_ms: u64,
+    pub cpu_percent: Option<f64>,
+    pub kernel_time_100ns: Option<u64>,
+    pub user_time_100ns: Option<u64>,
+    pub working_set_bytes: Option<u64>,
+    pub peak_working_set_bytes: Option<u64>,
+    pub pagefile_usage_bytes: Option<u64>,
+    pub handle_count: Option<u32>,
+    pub gdi_object_count: Option<u32>,
+    pub user_object_count: Option<u32>,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Error)]
 #[error("{message}")]
 pub struct ProcessError {
@@ -164,6 +180,24 @@ pub fn kill_process(pid: u32) -> Result<ProcessKillResult, ProcessError> {
     }
 }
 
+pub fn process_metrics(pid: u32) -> Result<ProcessMetrics, ProcessError> {
+    #[cfg(windows)]
+    {
+        windows_impl::process_metrics(pid)
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err(ProcessError {
+            code: "unsupported_platform".into(),
+            message: format!(
+                "process.metrics native counters require Windows runtime; refused pid {pid}"
+            ),
+            warnings: vec![],
+        })
+    }
+}
+
 pub fn is_terminal_process_name(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -242,16 +276,19 @@ mod windows_impl {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use windows::core::{PCWSTR, PWSTR};
-    use windows::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows::Win32::Foundation::{CloseHandle, FILETIME, WAIT_TIMEOUT};
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
+    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows::Win32::System::Threading::{
-        CreateProcessW, GetExitCodeProcess, GetProcessId, OpenProcess, QueryFullProcessImageNameW,
-        TerminateProcess, WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT, PROCESS_CREATION_FLAGS,
-        PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTUPINFOW,
+        CreateProcessW, GetExitCodeProcess, GetGuiResources, GetProcessHandleCount, GetProcessId,
+        GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
+        WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT, GR_GDIOBJECTS, GR_USEROBJECTS,
+        PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, PROCESS_VM_READ,
+        STARTUPINFOW,
     };
     use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -259,7 +296,7 @@ mod windows_impl {
     use super::{
         basename, is_terminal_process_name, windows_argv_command_line, AppLaunchMode,
         AppLaunchResult, AppLaunchSpec, ProcessError, ProcessInfo, ProcessKillResult,
-        ProcessLaunchResult, ProcessLaunchSpec,
+        ProcessLaunchResult, ProcessLaunchSpec, ProcessMetrics,
     };
 
     const STILL_ACTIVE_CODE: u32 = 259;
@@ -538,6 +575,82 @@ mod windows_impl {
         })
     }
 
+    pub(super) fn process_metrics(pid: u32) -> Result<ProcessMetrics, ProcessError> {
+        let process = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION
+                    | PROCESS_QUERY_INFORMATION
+                    | PROCESS_VM_READ
+                    | PROCESS_SYNCHRONIZE,
+                false,
+                pid,
+            )
+        }
+        .map_err(|error| ProcessError {
+            code: "open_process_failed".into(),
+            message: format!("failed to open process {pid} for metrics: {error}"),
+            warnings: vec![],
+        })?;
+
+        let mut warnings = Vec::new();
+        let first_times = match process_times(process) {
+            Ok(times) => Some(times),
+            Err(error) => {
+                warnings.push(error);
+                None
+            }
+        };
+        let started = Instant::now();
+        std::thread::sleep(Duration::from_millis(100));
+        let second_times = match process_times(process) {
+            Ok(times) => Some(times),
+            Err(error) => {
+                warnings.push(error);
+                None
+            }
+        };
+        let sample_interval_ms = started.elapsed().as_millis() as u64;
+        let cpu_percent = first_times
+            .zip(second_times)
+            .and_then(|(first, second)| cpu_percent(first, second, sample_interval_ms));
+        let latest_times = second_times.or(first_times);
+
+        let memory = match process_memory(process) {
+            Ok(memory) => Some(memory),
+            Err(error) => {
+                warnings.push(error);
+                None
+            }
+        };
+        let handle_count = match process_handle_count(process) {
+            Ok(count) => Some(count),
+            Err(error) => {
+                warnings.push(error);
+                None
+            }
+        };
+        let gdi_object_count = gui_resource_count(process, GR_GDIOBJECTS, "GDI", &mut warnings);
+        let user_object_count = gui_resource_count(process, GR_USEROBJECTS, "USER", &mut warnings);
+        let _ = unsafe { CloseHandle(process) };
+
+        Ok(ProcessMetrics {
+            pid,
+            sample_interval_ms,
+            cpu_percent,
+            kernel_time_100ns: latest_times.map(|times| times.kernel_100ns),
+            user_time_100ns: latest_times.map(|times| times.user_100ns),
+            working_set_bytes: memory.as_ref().map(|memory| memory.WorkingSetSize as u64),
+            peak_working_set_bytes: memory
+                .as_ref()
+                .map(|memory| memory.PeakWorkingSetSize as u64),
+            pagefile_usage_bytes: memory.as_ref().map(|memory| memory.PagefileUsage as u64),
+            handle_count,
+            gdi_object_count,
+            user_object_count,
+            warnings,
+        })
+    }
+
     fn process_info_from_entry(entry: &PROCESSENTRY32W) -> ProcessInfo {
         let pid = entry.th32ProcessID;
         let snapshot_name = wide_array_to_string(&entry.szExeFile);
@@ -594,6 +707,85 @@ mod windows_impl {
         result
             .map(|_| Some(String::from_utf16_lossy(&buffer[..size as usize])))
             .map_err(|error| format!("failed to query executable path for pid {pid}: {error}"))
+    }
+
+    #[derive(Clone, Copy)]
+    struct ProcessTimes {
+        kernel_100ns: u64,
+        user_100ns: u64,
+    }
+
+    fn process_times(process: windows::Win32::Foundation::HANDLE) -> Result<ProcessTimes, String> {
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        unsafe { GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) }
+            .map_err(|error| format!("failed to query process times: {error}"))?;
+        Ok(ProcessTimes {
+            kernel_100ns: filetime_to_u64(kernel),
+            user_100ns: filetime_to_u64(user),
+        })
+    }
+
+    fn cpu_percent(
+        first: ProcessTimes,
+        second: ProcessTimes,
+        sample_interval_ms: u64,
+    ) -> Option<f64> {
+        if sample_interval_ms == 0 {
+            return None;
+        }
+        let first_total = first.kernel_100ns.saturating_add(first.user_100ns);
+        let second_total = second.kernel_100ns.saturating_add(second.user_100ns);
+        let process_delta = second_total.saturating_sub(first_total) as f64;
+        let elapsed_100ns = sample_interval_ms as f64 * 10_000.0;
+        let processors = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1) as f64;
+        Some(((process_delta / elapsed_100ns) / processors * 100.0).clamp(0.0, 100.0))
+    }
+
+    fn filetime_to_u64(value: FILETIME) -> u64 {
+        ((value.dwHighDateTime as u64) << 32) | value.dwLowDateTime as u64
+    }
+
+    fn process_memory(
+        process: windows::Win32::Foundation::HANDLE,
+    ) -> Result<PROCESS_MEMORY_COUNTERS, String> {
+        let mut counters = PROCESS_MEMORY_COUNTERS::default();
+        counters.cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        unsafe {
+            GetProcessMemoryInfo(
+                process,
+                &mut counters,
+                size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            )
+        }
+        .map_err(|error| format!("failed to query process memory counters: {error}"))?;
+        Ok(counters)
+    }
+
+    fn process_handle_count(process: windows::Win32::Foundation::HANDLE) -> Result<u32, String> {
+        let mut count = 0u32;
+        unsafe { GetProcessHandleCount(process, &mut count) }
+            .map_err(|error| format!("failed to query process handle count: {error}"))?;
+        Ok(count)
+    }
+
+    fn gui_resource_count(
+        process: windows::Win32::Foundation::HANDLE,
+        flag: windows::Win32::System::Threading::GET_GUI_RESOURCES_FLAGS,
+        label: &str,
+        warnings: &mut Vec<String>,
+    ) -> Option<u32> {
+        let count = unsafe { GetGuiResources(process, flag) };
+        if count == 0 {
+            warnings.push(format!(
+                "{label} object count returned 0; the process may have no GUI resources or access may be limited"
+            ));
+        }
+        Some(count)
     }
 
     fn build_environment_block(overrides: &HashMap<String, String>) -> Vec<u16> {

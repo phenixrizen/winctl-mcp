@@ -55,8 +55,8 @@
 | `winctl-mcp` | [`uia.snapshot`](UIA_SNAPSHOT.md) | Capture a UI Automation tree for a bound window with element roles, names, automation IDs, bounds, state, hierarchy, and stable element references. |
 | `winctl-mcp` | [`uia.find`](UIA_FIND.md) | Find UI Automation elements in a fresh bound-window snapshot by semantic selector fields. |
 | `winctl-mcp` | [`uia.resolve`](UIA_RESOLVE.md) | Revalidate a UI Automation element reference path against the current bound window snapshot. |
-| `winctl-mcp` | [`uia.invoke`](UIA_INVOKE.md) | Invoke a revalidated UI Automation element with safe fallback diagnostics. |
-| `winctl-mcp` | [`uia.set_value`](UIA_SET_VALUE.md) | Set text for a revalidated UI Automation element with before/after state diagnostics. |
+| `winctl-mcp` | [`uia.invoke`](UIA_INVOKE.md) | Invoke a revalidated UI Automation element with `InvokePattern`. |
+| `winctl-mcp` | [`uia.set_value`](UIA_SET_VALUE.md) | Set text for a revalidated UI Automation element with `ValuePattern.SetValue`. |
 | `winctl-mcp` | [`uia.get_value`](UIA_GET_VALUE.md) | Read value-like UI Automation properties from a revalidated element snapshot. |
 | `winctl-mcp` | [`uia.toggle`](UIA_TOGGLE.md) | Toggle a revalidated UI Automation element when safe fallback semantics are available. |
 | `winctl-mcp` | [`uia.expand_collapse`](UIA_EXPAND_COLLAPSE.md) | Expand or collapse a revalidated UI Automation element when supported. |
@@ -66,11 +66,11 @@
 | `winctl-mcp` | [`uia.scroll_into_view`](UIA_SCROLL_INTO_VIEW.md) | Scroll a revalidated UI Automation element into view when supported. |
 | `winctl-mcp` | [`uia.wait_for_element`](UIA_WAIT_FOR_ELEMENT.md) | Wait for a UI Automation selector or element reference to resolve in fresh snapshots. |
 | `winctl-mcp` | [`web.cdp.list_targets`](WEB_CDP_LIST_TARGETS.md) | List local Chrome DevTools Protocol targets from a debugger HTTP endpoint. |
-| `winctl-mcp` | [`web.cdp.evaluate`](WEB_CDP_EVALUATE.md) | Prepare a CDP JavaScript evaluation request and return target diagnostics. |
-| `winctl-mcp` | [`web.dom.snapshot`](WEB_DOM_SNAPSHOT.md) | Return CDP DOM snapshot provider diagnostics for a debugger target. |
-| `winctl-mcp` | [`web.network.events`](WEB_NETWORK_EVENTS.md) | Return CDP network-event provider diagnostics for a debugger target. |
-| `winctl-mcp` | [`web.a11y.snapshot`](WEB_A11Y_SNAPSHOT.md) | Return accessibility-tree provider diagnostics for a browser or WebView target. |
-| `winctl-mcp` | [`web.style.inspect`](WEB_STYLE_INSPECT.md) | Return style-inspection provider diagnostics for a browser or WebView target. |
+| `winctl-mcp` | [`web.cdp.evaluate`](WEB_CDP_EVALUATE.md) | Evaluate JavaScript in a loopback CDP target. |
+| `winctl-mcp` | [`web.dom.snapshot`](WEB_DOM_SNAPSHOT.md) | Capture a CDP DOM snapshot for a debugger target. |
+| `winctl-mcp` | [`web.network.events`](WEB_NETWORK_EVENTS.md) | Collect CDP network events from a debugger target. |
+| `winctl-mcp` | [`web.a11y.snapshot`](WEB_A11Y_SNAPSHOT.md) | Capture a CDP accessibility tree for a browser or WebView target. |
+| `winctl-mcp` | [`web.style.inspect`](WEB_STYLE_INSPECT.md) | Inspect computed CSS style for a selector in a browser or WebView target. |
 | `winctl-mcp` | [`windows.list`](WINDOWS_LIST.md) | List visible and discoverable top-level Windows windows with HWND, PID, executable, class, title, and virtual desktop geometry. |
 | `winctl-mcp` | [`windows.find`](WINDOWS_FIND.md) | Find windows matching a selector and return scored diagnostics without binding or controlling them. |
 | `winctl-mcp` | [`windows.bind`](WINDOWS_BIND.md) | Bind one strict window target by stable identity before any control action. |
@@ -93,7 +93,7 @@
 | `winctl-mcp` | [`process.describe`](PROCESS_DESCRIBE.md) | Describe one process with executable metadata, tracked launch status, children, and top-level windows. |
 | `winctl-mcp` | [`process.diagnostics`](PROCESS_DIAGNOSTICS.md) | Return additional process diagnostics with optional windows and child-process metadata. |
 | `winctl-mcp` | [`process.kill`](PROCESS_KILL.md) | Terminate only a process launched and tracked by this MCP server session. |
-| `winctl-mcp` | [`process.metrics`](PROCESS_METRICS.md) | Return process metric diagnostics and platform availability for resource counters. |
+| `winctl-mcp` | [`process.metrics`](PROCESS_METRICS.md) | Return native Windows process resource counters. |
 | `winctl-mcp` | [`process.wait_for_exit`](PROCESS_WAIT_FOR_EXIT.md) | Wait for a process identified by PID or MCP launch ID to exit and return lifecycle timing metadata. |
 | `winctl-mcp` | [`recorder.start`](RECORDER_START.md) | Start a local recording session that can be exported as a macro manifest. |
 | `winctl-mcp` | [`recorder.record_step`](RECORDER_RECORD_STEP.md) | Append one recorded MCP tool step with optional target, note, and replay metadata. |
@@ -119,7 +119,7 @@
 | `winctl-mcp` | [`macro.get`](MACRO_GET.md) | Get a promoted macro manifest by session macro ID or memory item ID. |
 | `winctl-mcp` | [`macro.promote`](MACRO_PROMOTE.md) | Promote an approved macro manifest into the session registry and optionally explicit memory storage. |
 | `winctl-mcp` | [`macro.export_result`](MACRO_EXPORT_RESULT.md) | Export a structured macro run result and artifact metadata by run ID. |
-| `winctl-mcp` | [`capture.ocr_region`](CAPTURE_OCR_REGION.md) | Return OCR-region diagnostics for an image or bound window. |
+| `winctl-mcp` | [`capture.ocr_region`](CAPTURE_OCR_REGION.md) | OCR an image region or freshly captured bound window. |
 | `winctl-mcp` | [`capture.read_text`](CAPTURE_READ_TEXT.md) | Extract readable text from a bound window using UI Automation. |
 | `winctl-mcp` | [`capture.compare_baseline`](CAPTURE_COMPARE_BASELINE.md) | Compare an actual image against a baseline and write an optional diff artifact. |
 | `winctl-mcp` | [`capture.screenshot_window`](CAPTURE_SCREENSHOT_WINDOW.md) | Capture a screenshot of a bound window and return exact virtual desktop region metadata. |

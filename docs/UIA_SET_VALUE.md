@@ -11,10 +11,9 @@ Description: Set text for a revalidated UI Automation element with before/after 
 - `bound_id`: bound window ID.
 - `element_ref` or `selector`: target element.
 - `value`: text to type.
-- `replace_existing`: selects existing text first; defaults to true.
 - `max_depth`, `max_elements`: optional snapshot limits.
 - `allow_offscreen`: allow offscreen targets.
 
 ## Notes
 
-This first pass uses strict revalidation plus focus/type fallback and reports direct UIA pattern support as disabled.
+Uses UI Automation `ValuePattern.SetValue` and rejects read-only elements. The legacy `replace_existing` input is ignored by the direct pattern path because no keyboard fallback is dispatched silently.

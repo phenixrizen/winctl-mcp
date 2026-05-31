@@ -1,5 +1,8 @@
+use std::io::Read;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::{GenericImageView, ImageBuffer, Rgba};
 use winctl::{find_ui_elements, flatten_ui_elements, ui_automation_snapshot};
@@ -242,21 +245,86 @@ pub fn capture_ocr_region(state: &AppState, request: CaptureOcrRegionRequest) ->
         Ok(path) => path,
         Err(error) => return error,
     };
-    serde_json::json!({
-        "ok": false,
-        "provider_enabled": false,
-        "image_path": image_path,
-        "region": {
-            "x": request.x,
-            "y": request.y,
-            "width": request.width,
-            "height": request.height,
-        },
-        "error": {
-            "code": "ocr_provider_unavailable",
-            "message": "OCR provider integration is not enabled in this build"
+    let image = match image::open(&image_path) {
+        Ok(image) => image.to_rgba8(),
+        Err(error) => return fail("image_open_failed", &format!("{error}"), Some(image_path)),
+    };
+    let x = request.x.unwrap_or(0);
+    let y = request.y.unwrap_or(0);
+    if x >= image.width() || y >= image.height() {
+        return fail(
+            "ocr_region_out_of_bounds",
+            "OCR region origin is outside the image",
+            Some(image_path),
+        );
+    }
+    let width = request
+        .width
+        .unwrap_or_else(|| image.width().saturating_sub(x));
+    let height = request
+        .height
+        .unwrap_or_else(|| image.height().saturating_sub(y));
+    if width == 0
+        || height == 0
+        || x.saturating_add(width) > image.width()
+        || y.saturating_add(height) > image.height()
+    {
+        return fail(
+            "ocr_region_invalid",
+            "OCR region must fit inside the image and have non-zero size",
+            Some(image_path),
+        );
+    }
+    let crop = image::imageops::crop_imm(&image, x, y, width, height).to_image();
+    let crop_path = state
+        .capture_dir
+        .join(format!("ocr-region-{}.png", now_unix_ms()));
+    if let Err(error) = crop.save(&crop_path) {
+        return fail(
+            "ocr_region_save_failed",
+            &format!("{error}"),
+            Some(crop_path),
+        );
+    }
+    match run_tesseract_tsv(&crop_path) {
+        Ok(tsv) => {
+            let words = parse_tesseract_tsv(&tsv);
+            let text = words
+                .iter()
+                .filter_map(|word| word.get("text").and_then(|value| value.as_str()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            serde_json::json!({
+                "ok": true,
+                "provider_enabled": true,
+                "provider": "tesseract",
+                "image_path": image_path,
+                "crop_path": crop_path,
+                "region": {
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                },
+                "text": text,
+                "words": words,
+            })
         }
-    })
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "provider_enabled": false,
+            "provider": "tesseract",
+            "image_path": image_path,
+            "crop_path": crop_path,
+            "region": {
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+            },
+            "error": error,
+        }),
+    }
 }
 
 pub fn capture_read_text(state: &AppState, request: CaptureReadTextRequest) -> serde_json::Value {
@@ -462,6 +530,117 @@ fn contains_ci(actual: Option<&str>, expected: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn run_tesseract_tsv(image_path: &PathBuf) -> Result<String, serde_json::Value> {
+    let mut command = Command::new("tesseract");
+    command
+        .arg(image_path)
+        .arg("stdout")
+        .arg("--psm")
+        .arg("6")
+        .arg("tsv")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        serde_json::json!({
+            "code": "ocr_provider_unavailable",
+            "message": format!("failed to start tesseract OCR provider: {error}"),
+            "hint": "install Tesseract OCR or configure a future Windows.Media.Ocr provider",
+        })
+    })?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_reader = thread::spawn(move || read_pipe(stdout));
+    let stderr_reader = thread::spawn(move || read_pipe(stderr));
+    let started = Instant::now();
+    let timeout = Duration::from_secs(10);
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= timeout => {
+                timed_out = true;
+                let _ = child.kill();
+                match child.wait() {
+                    Ok(status) => break status,
+                    Err(error) => {
+                        return Err(serde_json::json!({
+                            "code": "ocr_provider_wait_failed",
+                            "message": format!("failed waiting for tesseract after timeout: {error}"),
+                        }));
+                    }
+                }
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(error) => {
+                return Err(serde_json::json!({
+                    "code": "ocr_provider_wait_failed",
+                    "message": format!("failed polling tesseract: {error}"),
+                }));
+            }
+        }
+    };
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    let stdout_text = String::from_utf8_lossy(&stdout).to_string();
+    let stderr_text = String::from_utf8_lossy(&stderr).to_string();
+    if timed_out {
+        return Err(serde_json::json!({
+            "code": "ocr_provider_timeout",
+            "message": "tesseract OCR timed out after 10 seconds",
+            "stderr": stderr_text,
+        }));
+    }
+    if !status.success() {
+        return Err(serde_json::json!({
+            "code": "ocr_provider_failed",
+            "message": format!("tesseract exited with status {:?}", status.code()),
+            "stderr": stderr_text,
+        }));
+    }
+    Ok(stdout_text)
+}
+
+fn read_pipe(pipe: Option<impl Read>) -> Vec<u8> {
+    let Some(mut pipe) = pipe else {
+        return Vec::new();
+    };
+    let mut buffer = Vec::new();
+    let _ = pipe.read_to_end(&mut buffer);
+    buffer
+}
+
+fn parse_tesseract_tsv(tsv: &str) -> Vec<serde_json::Value> {
+    tsv.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            if fields.len() < 12 {
+                return None;
+            }
+            let text = fields[11..].join("\t").trim().to_owned();
+            if text.is_empty() {
+                return None;
+            }
+            let confidence = fields[10].parse::<f64>().ok();
+            if confidence.map(|value| value < 0.0).unwrap_or(false) {
+                return None;
+            }
+            Some(serde_json::json!({
+                "text": text,
+                "confidence": confidence,
+                "bounds": {
+                    "x": fields[6].parse::<u32>().unwrap_or_default(),
+                    "y": fields[7].parse::<u32>().unwrap_or_default(),
+                    "width": fields[8].parse::<u32>().unwrap_or_default(),
+                    "height": fields[9].parse::<u32>().unwrap_or_default(),
+                },
+                "line": fields[4].parse::<u32>().ok(),
+                "word": fields[5].parse::<u32>().ok(),
+            }))
+        })
+        .collect()
+}
+
 fn fail(code: &str, message: &str, path: Option<PathBuf>) -> serde_json::Value {
     serde_json::json!({
         "ok": false,
@@ -478,4 +657,21 @@ fn now_unix_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_tesseract_tsv_words() {
+        let tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n5\t1\t1\t1\t1\t1\t10\t20\t30\t40\t96.5\tHello\n5\t1\t1\t1\t1\t2\t44\t20\t20\t40\t90\tworld\n";
+
+        let words = parse_tesseract_tsv(tsv);
+
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0]["text"], "Hello");
+        assert_eq!(words[0]["bounds"]["x"], 10);
+        assert_eq!(words[1]["text"], "world");
+    }
 }

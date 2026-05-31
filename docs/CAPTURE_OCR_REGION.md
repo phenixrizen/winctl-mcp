@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Return OCR-region diagnostics for an image or bound window.
+Description: OCR an image region or freshly captured bound window.
 
 ## Inputs
 
@@ -14,4 +14,4 @@ Description: Return OCR-region diagnostics for an image or bound window.
 
 ## Notes
 
-OCR provider integration is not enabled in this build; the tool returns provider diagnostics.
+The current provider runs Tesseract directly, saves the cropped region as an artifact, and returns recognized text with word bounding boxes. If Tesseract is not installed or not on `PATH`, the tool fails closed with provider diagnostics.

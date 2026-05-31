@@ -16,4 +16,4 @@ Description: Set a numeric value on a revalidated UI Automation range element wh
 
 ## Notes
 
-Direct RangeValuePattern support is not enabled in this build, so the tool returns a fail-closed diagnostic.
+Uses UI Automation `RangeValuePattern.SetValue` and rejects read-only or out-of-range values before dispatching. Responses include before/after element state and range metadata when available.

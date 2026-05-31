@@ -13,4 +13,4 @@ Description: Collect process, window, screenshot, and platform diagnostic contex
 
 ## Notes
 
-Windows Event Log and WER dump discovery are reported as provider-unavailable in this first implementation.
+On Windows, the tool queries recent Application error events through `wevtutil.exe` and scans standard WER crash-dump locations. It also keeps the existing process/window/screenshot context.

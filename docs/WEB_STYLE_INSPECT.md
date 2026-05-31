@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Return style-inspection provider diagnostics for a browser or WebView target.
+Description: Inspect computed CSS style for a selector in a browser or WebView target.
 
 ## Inputs
 
@@ -15,4 +15,4 @@ Description: Return style-inspection provider diagnostics for a browser or WebVi
 
 ## Notes
 
-Style inspection requires the future CDP WebSocket bridge.
+Connects to the target WebSocket, resolves the selector through the DOM domain, and dispatches `CSS.getComputedStyleForNode`.

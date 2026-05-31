@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Return accessibility-tree provider diagnostics for a browser or WebView target.
+Description: Capture a CDP accessibility tree for a browser or WebView target.
 
 ## Inputs
 
@@ -15,4 +15,4 @@ Description: Return accessibility-tree provider diagnostics for a browser or Web
 
 ## Notes
 
-Accessibility tree extraction requires the future CDP WebSocket bridge.
+Connects to the target WebSocket and dispatches `Accessibility.getFullAXTree`.

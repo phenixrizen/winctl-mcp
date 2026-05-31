@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Return CDP network-event provider diagnostics for a debugger target.
+Description: Collect CDP network events from a debugger target.
 
 ## Inputs
 
@@ -15,4 +15,4 @@ Description: Return CDP network-event provider diagnostics for a debugger target
 
 ## Notes
 
-Network interception requires the future CDP WebSocket bridge.
+Connects to the target WebSocket, enables the Network domain, and buffers matching `Network.*` events for the requested timeout window.

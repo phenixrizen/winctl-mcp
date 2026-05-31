@@ -6,8 +6,11 @@ use crate::{
     UiSetValueRequest, UiSnapshotRequest, UiWaitForElementRequest,
 };
 use winctl::{
-    find_ui_elements, resolve_ui_element_ref, ui_automation_snapshot, ClickRequest,
-    CoordinateSpace, ShortcutRequest, TypeTextRequest, UiAutomationSnapshot, UiElementInfo, UiRect,
+    find_ui_elements, resolve_ui_element_ref, ui_automation_snapshot, ui_expand_collapse_pattern,
+    ui_get_value_pattern, ui_invoke_pattern, ui_range_value_pattern, ui_scroll_into_view_pattern,
+    ui_select_pattern, ui_set_focus_pattern, ui_set_value_pattern, ui_toggle_pattern,
+    UiActionTarget, UiAutomationError, UiAutomationErrorCode, UiAutomationSnapshot, UiElementInfo,
+    UiExpandCollapseAction, UiRect,
 };
 
 pub fn uia_snapshot(state: &AppState, request: UiSnapshotRequest) -> serde_json::Value {
@@ -170,19 +173,27 @@ fn candidate_diagnostics(match_count: usize, snapshot_truncated: bool) -> Vec<St
 }
 
 pub fn uia_invoke(state: &AppState, request: UiElementActionRequest) -> serde_json::Value {
-    click_fallback_action(state, request, "uia.invoke", "invoke", true)
+    direct_pattern_action(state, request, "uia.invoke", |window, target| {
+        ui_invoke_pattern(window, target)
+    })
 }
 
 pub fn uia_set_focus(state: &AppState, request: UiElementActionRequest) -> serde_json::Value {
-    click_fallback_action(state, request, "uia.set_focus", "set_focus", true)
+    direct_pattern_action(state, request, "uia.set_focus", |window, target| {
+        ui_set_focus_pattern(window, target)
+    })
 }
 
 pub fn uia_select(state: &AppState, request: UiElementActionRequest) -> serde_json::Value {
-    click_fallback_action(state, request, "uia.select", "select", true)
+    direct_pattern_action(state, request, "uia.select", |window, target| {
+        ui_select_pattern(window, target)
+    })
 }
 
 pub fn uia_toggle(state: &AppState, request: UiElementActionRequest) -> serde_json::Value {
-    click_fallback_action(state, request, "uia.toggle", "toggle", true)
+    direct_pattern_action(state, request, "uia.toggle", |window, target| {
+        ui_toggle_pattern(window, target)
+    })
 }
 
 pub fn uia_set_value(state: &AppState, request: UiSetValueRequest) -> serde_json::Value {
@@ -194,76 +205,16 @@ pub fn uia_set_value(state: &AppState, request: UiSetValueRequest) -> serde_json
         replace_existing = request.replace_existing,
         "uia.set_value requested"
     );
-    let action_request = UiElementActionRequest {
-        bound_id: request.bound_id.clone(),
-        element_ref: request.element_ref.clone(),
-        selector: request.selector.clone(),
-        max_depth: request.max_depth,
-        max_elements: request.max_elements,
-        allow_offscreen: request.allow_offscreen,
+    let window = match state.revalidate_bound_window(&request.bound_id) {
+        Ok(window) => window,
+        Err(error) => return serde_json::json!({"ok": false, "error": error}),
     };
-    let resolved = match resolve_action_target(state, &action_request) {
-        Ok(resolved) => resolved,
-        Err(error) => return error,
-    };
-    let fallback = coordinate_fallback_hint(&resolved.element);
-    if let Err(error) = ensure_actionable(&resolved.element, request.allow_offscreen, true) {
-        return unsupported_action(
-            "uia.set_value",
-            "value_pattern_unavailable",
-            resolved,
-            error,
-        );
+    let action_request = set_value_action_request(&request);
+    let target = action_target(&action_request);
+    match ui_set_value_pattern(&window, &target, &request.value) {
+        Ok(outcome) => serde_json::json!({"ok": true, "outcome": outcome}),
+        Err(error) => uia_action_error(state, &action_request, "uia.set_value", error),
     }
-    let click = dispatch_center_click(state, &request.bound_id, &resolved.element);
-    if !json_ok(&click) {
-        return serde_json::json!({
-            "ok": false,
-            "error": {
-                "code": "uia_coordinate_fallback_failed",
-                "message": "element focus fallback failed before typing"
-            },
-            "before": resolved.element,
-            "coordinate_fallback_hint": fallback,
-            "focus_result": click,
-        });
-    }
-    let select_existing = if request.replace_existing {
-        Some(crate::tools::input::input_shortcut(
-            state,
-            ShortcutRequest {
-                bound_id: request.bound_id.clone(),
-                keys: vec!["ctrl".into(), "a".into()],
-                hold_ms: Some(30),
-            },
-        ))
-    } else {
-        None
-    };
-    let type_result = crate::tools::input::input_type_text(
-        state,
-        TypeTextRequest {
-            bound_id: request.bound_id.clone(),
-            text: request.value,
-        },
-    );
-    let after = resolve_action_target(state, &action_request)
-        .ok()
-        .map(|resolved| resolved.element);
-    serde_json::json!({
-        "ok": json_ok(&type_result),
-        "pattern_used": "coordinate_focus_type_fallback",
-        "direct_uia_pattern_used": false,
-        "before": resolved.element,
-        "after": after,
-        "coordinate_fallback_hint": fallback,
-        "focus_result": click,
-        "select_existing_result": select_existing,
-        "type_result": type_result,
-        "warnings": [
-            "direct UI Automation ValuePattern support is not enabled in this build; action used focus/type fallback after strict element revalidation"
-        ]
-    })
 }
 
 pub fn uia_get_value(state: &AppState, request: UiElementActionRequest) -> serde_json::Value {
@@ -273,35 +224,21 @@ pub fn uia_get_value(state: &AppState, request: UiElementActionRequest) -> serde
         selector = ?request.selector,
         "uia.get_value requested"
     );
-    match resolve_action_target(state, &request) {
-        Ok(resolved) => {
-            let element = resolved.element;
-            let value = serde_json::json!({
-                "name": element.name.clone(),
-                "automation_id": element.automation_id.clone(),
-                "class_name": element.class_name.clone(),
-                "role": element.role.clone(),
-                "focused": element.focused,
-                "enabled": element.enabled,
-            });
-            serde_json::json!({
-                "ok": true,
-                "pattern_used": "snapshot_properties",
-                "direct_uia_pattern_used": false,
-                "element": element,
-                "value": value,
-                "snapshot_summary": snapshot_summary(&resolved.snapshot),
-                "warnings": [
-                    "direct UI Automation ValuePattern read support is not enabled in this build; value-like snapshot properties were returned"
-                ]
-            })
-        }
-        Err(error) => error,
-    }
+    direct_pattern_action(state, request, "uia.get_value", |window, target| {
+        ui_get_value_pattern(window, target)
+    })
 }
 
 pub fn uia_expand_collapse(state: &AppState, request: UiElementActionRequest) -> serde_json::Value {
-    unsupported_pattern_action(state, request, "uia.expand_collapse", "expand_collapse")
+    let action = request
+        .expand_collapse_action
+        .unwrap_or(UiExpandCollapseAction::Toggle);
+    direct_pattern_action(
+        state,
+        request,
+        "uia.expand_collapse",
+        move |window, target| ui_expand_collapse_pattern(window, target, action),
+    )
 }
 
 pub fn uia_range_value(state: &AppState, request: UiRangeValueRequest) -> serde_json::Value {
@@ -312,22 +249,23 @@ pub fn uia_range_value(state: &AppState, request: UiRangeValueRequest) -> serde_
         value = request.value,
         "uia.range_value requested"
     );
-    let action_request = UiElementActionRequest {
-        bound_id: request.bound_id,
-        element_ref: request.element_ref,
-        selector: request.selector,
-        max_depth: request.max_depth,
-        max_elements: request.max_elements,
-        allow_offscreen: request.allow_offscreen,
-    };
-    unsupported_pattern_action(state, action_request, "uia.range_value", "range_value")
+    let value = request.value;
+    let action_request = range_value_action_request(request);
+    direct_pattern_action(
+        state,
+        action_request,
+        "uia.range_value",
+        move |window, target| ui_range_value_pattern(window, target, value),
+    )
 }
 
 pub fn uia_scroll_into_view(
     state: &AppState,
     request: UiElementActionRequest,
 ) -> serde_json::Value {
-    unsupported_pattern_action(state, request, "uia.scroll_into_view", "scroll_item")
+    direct_pattern_action(state, request, "uia.scroll_into_view", |window, target| {
+        ui_scroll_into_view_pattern(window, target)
+    })
 }
 
 pub fn uia_wait_for_element(
@@ -351,6 +289,7 @@ pub fn uia_wait_for_element(
         max_depth: request.max_depth,
         max_elements: request.max_elements,
         allow_offscreen: request.require_visible == Some(false),
+        expand_collapse_action: None,
     };
     let mut last_error = None;
     loop {
@@ -406,103 +345,101 @@ pub fn uia_wait_for_element(
 struct ResolvedActionTarget {
     snapshot: UiAutomationSnapshot,
     element: UiElementInfo,
-    match_count: usize,
 }
 
-fn click_fallback_action(
+fn direct_pattern_action<F>(
     state: &AppState,
     request: UiElementActionRequest,
     tool_name: &'static str,
-    pattern: &'static str,
-    require_bounds: bool,
-) -> serde_json::Value {
+    action: F,
+) -> serde_json::Value
+where
+    F: FnOnce(
+        &winctl::WindowInfo,
+        &UiActionTarget,
+    ) -> Result<winctl::UiActionOutcome, UiAutomationError>,
+{
     tracing::info!(
         bound_id = %request.bound_id,
         element_ref = ?request.element_ref,
         selector = ?request.selector,
         tool_name = tool_name,
-        "uia coordinate-fallback action requested"
+        "uia direct pattern action requested"
     );
-    let resolved = match resolve_action_target(state, &request) {
-        Ok(resolved) => resolved,
-        Err(error) => return error,
+    let window = match state.revalidate_bound_window(&request.bound_id) {
+        Ok(window) => window,
+        Err(error) => return serde_json::json!({"ok": false, "error": error}),
     };
-    let fallback = coordinate_fallback_hint(&resolved.element);
-    if let Err(error) =
-        ensure_actionable(&resolved.element, request.allow_offscreen, require_bounds)
-    {
-        return unsupported_action(tool_name, "element_not_actionable", resolved, error);
+    let target = action_target(&request);
+    match action(&window, &target) {
+        Ok(outcome) => serde_json::json!({"ok": true, "outcome": outcome}),
+        Err(error) => uia_action_error(state, &request, tool_name, error),
     }
-    let click = dispatch_center_click(state, &request.bound_id, &resolved.element);
-    let after = resolve_action_target(state, &request)
-        .ok()
-        .map(|resolved| resolved.element);
-    serde_json::json!({
-        "ok": json_ok(&click),
-        "pattern_used": format!("{pattern}_coordinate_fallback"),
-        "direct_uia_pattern_used": false,
-        "before": resolved.element,
-        "after": after,
-        "coordinate_fallback_hint": fallback,
-        "dispatch": click,
-        "warnings": [
-            format!("direct UI Automation {pattern} pattern support is not enabled in this build; action used strict element revalidation plus center-click fallback")
-        ]
-    })
 }
 
-fn unsupported_pattern_action(
+fn action_target(request: &UiElementActionRequest) -> UiActionTarget {
+    UiActionTarget {
+        element_ref: request.element_ref.clone(),
+        selector: request.selector.clone(),
+        max_depth: request.max_depth,
+        max_elements: request.max_elements,
+        allow_offscreen: request.allow_offscreen,
+    }
+}
+
+fn set_value_action_request(request: &UiSetValueRequest) -> UiElementActionRequest {
+    UiElementActionRequest {
+        bound_id: request.bound_id.clone(),
+        element_ref: request.element_ref.clone(),
+        selector: request.selector.clone(),
+        max_depth: request.max_depth,
+        max_elements: request.max_elements,
+        allow_offscreen: request.allow_offscreen,
+        expand_collapse_action: None,
+    }
+}
+
+fn range_value_action_request(request: UiRangeValueRequest) -> UiElementActionRequest {
+    UiElementActionRequest {
+        bound_id: request.bound_id,
+        element_ref: request.element_ref,
+        selector: request.selector,
+        max_depth: request.max_depth,
+        max_elements: request.max_elements,
+        allow_offscreen: request.allow_offscreen,
+        expand_collapse_action: None,
+    }
+}
+
+fn uia_action_error(
     state: &AppState,
-    request: UiElementActionRequest,
+    request: &UiElementActionRequest,
     tool_name: &'static str,
-    pattern: &'static str,
+    error: UiAutomationError,
 ) -> serde_json::Value {
-    tracing::info!(
-        bound_id = %request.bound_id,
-        element_ref = ?request.element_ref,
-        selector = ?request.selector,
-        tool_name = tool_name,
-        pattern = pattern,
-        "uia unsupported pattern action requested"
-    );
-    match resolve_action_target(state, &request) {
-        Ok(resolved) => unsupported_action(
-            tool_name,
-            "uia_pattern_not_available",
-            resolved,
-            format!(
-                "direct UI Automation {pattern} pattern support is not enabled and no safe fallback is available"
-            ),
-        ),
-        Err(error) => error,
-    }
-}
-
-fn unsupported_action(
-    tool_name: &'static str,
-    code: &'static str,
-    resolved: ResolvedActionTarget,
-    message: String,
-) -> serde_json::Value {
-    let fallback = coordinate_fallback_hint(&resolved.element);
+    let resolved = resolve_action_target(state, request).ok();
     tracing::warn!(
         tool_name = tool_name,
-        element_ref = %resolved.element.element_ref,
-        match_count = resolved.match_count,
-        code = code,
-        "uia action failed closed"
+        error_code = ?error.code,
+        "uia direct pattern action failed closed"
     );
+    let fallback_hint = resolved
+        .as_ref()
+        .map(|resolved| coordinate_fallback_hint(&resolved.element));
+    let warnings = if error.code == UiAutomationErrorCode::PatternUnavailable {
+        vec!["coordinate fallback was not dispatched; use explicit input tools if a coordinate fallback is intended"]
+    } else {
+        Vec::new()
+    };
     serde_json::json!({
         "ok": false,
-        "error": {
-            "code": code,
-            "message": message,
-        },
-        "before": resolved.element,
-        "snapshot_summary": snapshot_summary(&resolved.snapshot),
-        "coordinate_fallback_hint": fallback,
+        "error": error,
+        "before": resolved.as_ref().map(|resolved| resolved.element.clone()),
+        "snapshot_summary": resolved.as_ref().map(|resolved| snapshot_summary(&resolved.snapshot)),
+        "coordinate_fallback_hint": fallback_hint,
         "pattern_used": serde_json::Value::Null,
         "direct_uia_pattern_used": false,
+        "warnings": warnings,
     })
 }
 
@@ -570,60 +507,7 @@ fn resolve_action_target(
             "snapshot_summary": snapshot_summary(&snapshot),
         }));
     };
-    Ok(ResolvedActionTarget {
-        snapshot,
-        element,
-        match_count: 1,
-    })
-}
-
-fn ensure_actionable(
-    element: &UiElementInfo,
-    allow_offscreen: bool,
-    require_bounds: bool,
-) -> Result<(), String> {
-    if element.enabled == Some(false) {
-        return Err("element is disabled".into());
-    }
-    if element.offscreen == Some(true) && !allow_offscreen {
-        return Err("element is offscreen".into());
-    }
-    if require_bounds {
-        let Some(bounds) = &element.bounds else {
-            return Err("element bounds are unavailable".into());
-        };
-        if bounds.width <= 0 || bounds.height <= 0 {
-            return Err("element bounds are empty".into());
-        }
-    }
-    Ok(())
-}
-
-fn dispatch_center_click(
-    state: &AppState,
-    bound_id: &str,
-    element: &UiElementInfo,
-) -> serde_json::Value {
-    let Some((x, y)) = element_center(element.bounds.as_ref()) else {
-        return serde_json::json!({
-            "ok": false,
-            "error": {
-                "code": "uia_element_bounds_unavailable",
-                "message": "element has no usable bounds for coordinate fallback"
-            }
-        });
-    };
-    crate::tools::input::input_click(
-        state,
-        ClickRequest {
-            bound_id: bound_id.into(),
-            x,
-            y,
-            coordinate_space: CoordinateSpace::ScreenPixels,
-            button: Some("left".into()),
-            fail_if_outside_bound: Some(true),
-        },
-    )
+    Ok(ResolvedActionTarget { snapshot, element })
 }
 
 fn coordinate_fallback_hint(element: &UiElementInfo) -> serde_json::Value {
@@ -682,11 +566,4 @@ fn wait_conditions_match(element: &UiElementInfo, request: &UiWaitForElementRequ
         }
     }
     true
-}
-
-fn json_ok(value: &serde_json::Value) -> bool {
-    value
-        .get("ok")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
 }

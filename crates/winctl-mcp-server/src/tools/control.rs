@@ -1,4 +1,8 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+#[cfg(windows)]
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +13,7 @@ use crate::{
 
 const MAX_EVENTS: usize = 200;
 const DEFAULT_ARM_MS: u64 = 5 * 60 * 1000;
+static HOTKEY_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -70,6 +75,26 @@ impl Default for ControlRuntimeState {
             next_event_id: 1,
             events: VecDeque::new(),
         }
+    }
+}
+
+pub fn start_emergency_hotkey(runtime: Arc<Mutex<ControlRuntimeState>>) {
+    if HOTKEY_STARTED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+
+    #[cfg(windows)]
+    {
+        thread::spawn(move || windows_hotkey_loop(runtime));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = runtime;
+        HOTKEY_STARTED.store(false, Ordering::SeqCst);
     }
 }
 
@@ -542,6 +567,68 @@ fn push_event(
         runtime.events.pop_front();
     }
     event
+}
+
+#[cfg(windows)]
+fn apply_emergency_stop(runtime: &mut ControlRuntimeState, reason: &str) -> ControlEvent {
+    runtime.status = ControlStatus::Revoked;
+    runtime.armed_until_unix_ms = None;
+    runtime.last_decision = Some("emergency_stop".into());
+    runtime.emergency_stop_active = true;
+    runtime.active_tool = None;
+    runtime.active_action_kind = None;
+    let event_bound_id = runtime.bound_id.clone();
+    let event_session_id = runtime.session_id.clone();
+    push_event(
+        runtime,
+        "emergency_stop",
+        Some("global_hotkey".into()),
+        Some("control_revoke".into()),
+        event_bound_id,
+        event_session_id,
+        reason.into(),
+    )
+}
+
+#[cfg(windows)]
+fn windows_hotkey_loop(runtime: Arc<Mutex<ControlRuntimeState>>) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_ESCAPE,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
+
+    const HOTKEY_ID: i32 = 0x5743;
+    let modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+    if let Err(error) = unsafe { RegisterHotKey(None, HOTKEY_ID, modifiers, VK_ESCAPE.0 as u32) } {
+        HOTKEY_STARTED.store(false, Ordering::SeqCst);
+        tracing::warn!(
+            error = %error,
+            "failed to register Ctrl+Alt+Esc emergency stop hotkey"
+        );
+        return;
+    }
+    tracing::info!("registered Ctrl+Alt+Esc emergency stop hotkey");
+
+    let mut message = MSG::default();
+    loop {
+        let result = unsafe { GetMessageW(&mut message, None, 0, 0) };
+        if result.0 <= 0 {
+            break;
+        }
+        if message.message == WM_HOTKEY && message.wParam.0 as i32 == HOTKEY_ID {
+            let mut runtime = runtime.lock().expect("control mutex poisoned");
+            let event = apply_emergency_stop(
+                &mut runtime,
+                "global Ctrl+Alt+Esc emergency stop hotkey pressed",
+            );
+            tracing::warn!(
+                event_id = event.id,
+                "desktop control revoked by global emergency stop hotkey"
+            );
+        }
+    }
+    let _ = unsafe { UnregisterHotKey(None, HOTKEY_ID) };
+    HOTKEY_STARTED.store(false, Ordering::SeqCst);
 }
 
 fn bound_identity(state: &AppState, bound_id: &str) -> Option<serde_json::Value> {

@@ -15,4 +15,4 @@ Description: Scroll a revalidated UI Automation element into view when supported
 
 ## Notes
 
-Direct ScrollItemPattern support is not enabled in this build, so the tool returns a fail-closed diagnostic.
+Uses UI Automation `ScrollItemPattern.ScrollIntoView` on a freshly revalidated element reference. Unsupported patterns, stale references, disabled elements, and offscreen elements fail closed; responses include before/after element state and coordinate fallback hints.

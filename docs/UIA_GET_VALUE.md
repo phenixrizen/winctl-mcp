@@ -4,7 +4,7 @@
 
 Agent name: `winctl-mcp`
 
-Description: Read value-like UI Automation properties from a revalidated element snapshot.
+Description: Read a UI Automation `ValuePattern` value from a revalidated element.
 
 ## Inputs
 
@@ -15,4 +15,4 @@ Description: Read value-like UI Automation properties from a revalidated element
 
 ## Notes
 
-Returns snapshot properties such as name, automation ID, class, role, focused, and enabled state.
+Uses UI Automation `ValuePattern.CurrentValue` and returns read-only state. Unsupported patterns fail closed instead of returning unrelated snapshot fields as a fake value.

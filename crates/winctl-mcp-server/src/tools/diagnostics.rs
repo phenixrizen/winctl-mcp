@@ -1,7 +1,9 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::process::{Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{
     AppState, BuildRunRequest, CrashReportRequest, MacroExportResultRequest, ProcessMetricsRequest,
@@ -42,7 +44,7 @@ pub fn build_run(state: &AppState, request: BuildRunRequest) -> serde_json::Valu
     if let Some(cwd) = &cwd {
         command.current_dir(cwd);
     }
-    let output = match command.output() {
+    let output = match run_command_with_timeout(command, request.timeout_ms) {
         Ok(output) => output,
         Err(error) => {
             return serde_json::json!({
@@ -58,29 +60,31 @@ pub fn build_run(state: &AppState, request: BuildRunRequest) -> serde_json::Valu
     let stdout = bounded_utf8(output.stdout);
     let stderr = bounded_utf8(output.stderr);
     let diagnostics = parse_build_diagnostics(&stdout.text, &stderr.text);
-    let timeout_exceeded = request
-        .timeout_ms
-        .map(|timeout_ms| elapsed_ms > timeout_ms)
+    let success = output
+        .status
+        .map(|status| status.success())
         .unwrap_or(false);
     serde_json::json!({
-        "ok": output.status.success() && !timeout_exceeded,
+        "ok": success && !output.timed_out,
         "program": request.program,
         "args": request.args,
         "cwd": cwd,
         "status": {
-            "success": output.status.success(),
-            "code": output.status.code(),
+            "success": success,
+            "code": output.status.and_then(|status| status.code()),
+            "terminated_by_timeout": output.timed_out,
+            "kill_error": output.kill_error,
         },
         "timing": {
             "elapsed_ms": elapsed_ms,
             "timeout_ms": request.timeout_ms,
-            "timeout_exceeded": timeout_exceeded,
+            "timeout_exceeded": output.timed_out,
         },
         "stdout": stdout,
         "stderr": stderr,
         "diagnostics": diagnostics,
-        "warnings": if timeout_exceeded {
-            vec!["timeout was exceeded after the process completed; preemptive termination is not enabled in this first-pass runner"]
+        "warnings": if output.timed_out {
+            vec!["timeout was exceeded and the build process was terminated"]
         } else {
             Vec::<&str>::new()
         },
@@ -93,21 +97,23 @@ pub fn process_metrics(request: ProcessMetricsRequest) -> serde_json::Value {
         Ok(process) => process,
         Err(error) => return serde_json::json!({"ok": false, "error": error}),
     };
+    let metrics = match winctl::process_metrics(request.pid) {
+        Ok(metrics) => metrics,
+        Err(error) => {
+            return serde_json::json!({
+                "ok": false,
+                "pid": request.pid,
+                "process": process,
+                "error": error,
+            });
+        }
+    };
     serde_json::json!({
         "ok": process.is_some(),
         "pid": request.pid,
         "process": process,
-        "metrics": {
-            "cpu_percent": serde_json::Value::Null,
-            "working_set_bytes": serde_json::Value::Null,
-            "handle_count": serde_json::Value::Null,
-            "gdi_object_count": serde_json::Value::Null,
-            "user_object_count": serde_json::Value::Null,
-        },
-        "provider_enabled": false,
-        "warnings": [
-            "native per-process metric counters are not enabled in this build; process identity metadata was returned"
-        ],
+        "metrics": metrics,
+        "provider_enabled": true,
     })
 }
 
@@ -131,6 +137,11 @@ pub fn crash_report(state: &AppState, request: CrashReportRequest) -> serde_json
         .bound_id
         .clone()
         .map(|bound_id| crate::tools::capture::screenshot_window(state, bound_id));
+    let process_name = process
+        .as_ref()
+        .and_then(|process| process.process_name.clone());
+    let event_log = windows_event_log_entries(process_name.as_deref(), request.pid);
+    let wer = discover_wer_dumps(process_name.as_deref());
     serde_json::json!({
         "ok": true,
         "pid": request.pid,
@@ -138,17 +149,8 @@ pub fn crash_report(state: &AppState, request: CrashReportRequest) -> serde_json
         "process": process,
         "windows": windows,
         "screenshot": screenshot,
-        "event_log": {
-            "provider_enabled": false,
-            "entries": [],
-        },
-        "wer": {
-            "provider_enabled": false,
-            "dump_paths": [],
-        },
-        "warnings": [
-            "Windows Event Log and WER dump discovery are not enabled in this build"
-        ],
+        "event_log": event_log,
+        "wer": wer,
     })
 }
 
@@ -278,6 +280,232 @@ fn parse_build_diagnostics(stdout: &str, stderr: &str) -> serde_json::Value {
         "errors": errors,
         "warnings": warnings,
     })
+}
+
+struct CapturedCommandOutput {
+    status: Option<ExitStatus>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+    kill_error: Option<String>,
+}
+
+fn run_command_with_timeout(
+    mut command: Command,
+    timeout_ms: Option<u64>,
+) -> Result<CapturedCommandOutput, std::io::Error> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_reader = thread::spawn(move || read_pipe(stdout));
+    let stderr_reader = thread::spawn(move || read_pipe(stderr));
+    let timeout = timeout_ms.map(Duration::from_millis);
+    let started = Instant::now();
+    let mut timed_out = false;
+    let mut kill_error = None;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break Some(status);
+        }
+        if timeout
+            .map(|timeout| started.elapsed() >= timeout)
+            .unwrap_or(false)
+        {
+            timed_out = true;
+            if let Err(error) = child.kill() {
+                kill_error = Some(error.to_string());
+            }
+            break Some(child.wait()?);
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    Ok(CapturedCommandOutput {
+        status,
+        stdout,
+        stderr,
+        timed_out,
+        kill_error,
+    })
+}
+
+fn read_pipe(pipe: Option<impl Read>) -> Vec<u8> {
+    let Some(mut pipe) = pipe else {
+        return Vec::new();
+    };
+    let mut buffer = Vec::new();
+    let _ = pipe.read_to_end(&mut buffer);
+    buffer
+}
+
+#[cfg(windows)]
+fn windows_event_log_entries(process_name: Option<&str>, pid: Option<u32>) -> serde_json::Value {
+    let mut command = Command::new("wevtutil.exe");
+    command.args([
+        "qe",
+        "Application",
+        "/q:*[System[(Level=2)]]",
+        "/c:40",
+        "/rd:true",
+        "/f:Text",
+    ]);
+    match run_command_with_timeout(command, Some(5_000)) {
+        Ok(output) => {
+            let text = bounded_utf8(output.stdout);
+            let stderr = bounded_utf8(output.stderr);
+            let entries = event_log_blocks(&text.text, process_name, pid);
+            serde_json::json!({
+                "provider_enabled": true,
+                "source": "wevtutil",
+                "entries": entries,
+                "stderr": stderr,
+                "timed_out": output.timed_out,
+            })
+        }
+        Err(error) => serde_json::json!({
+            "provider_enabled": false,
+            "source": "wevtutil",
+            "entries": [],
+            "error": {
+                "code": "event_log_query_failed",
+                "message": format!("failed to run wevtutil.exe: {error}"),
+            }
+        }),
+    }
+}
+
+#[cfg(not(windows))]
+fn windows_event_log_entries(process_name: Option<&str>, pid: Option<u32>) -> serde_json::Value {
+    let _ = (process_name, pid);
+    serde_json::json!({
+        "provider_enabled": false,
+        "entries": [],
+        "error": {
+            "code": "unsupported_platform",
+            "message": "Windows Event Log discovery requires Windows runtime",
+        }
+    })
+}
+
+#[cfg(windows)]
+fn event_log_blocks(
+    raw: &str,
+    process_name: Option<&str>,
+    pid: Option<u32>,
+) -> Vec<serde_json::Value> {
+    let process_name = process_name.map(|value| value.to_ascii_lowercase());
+    let pid_text = pid.map(|pid| pid.to_string());
+    raw.split("\r\n\r\n")
+        .chain(raw.split("\n\n"))
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+        .filter(|block| {
+            let lower = block.to_ascii_lowercase();
+            process_name
+                .as_ref()
+                .map(|name| lower.contains(name))
+                .unwrap_or(true)
+                || pid_text
+                    .as_ref()
+                    .map(|pid| lower.contains(pid))
+                    .unwrap_or(false)
+        })
+        .take(10)
+        .map(|block| serde_json::json!({"text": block}))
+        .collect()
+}
+
+#[cfg(windows)]
+fn discover_wer_dumps(process_name: Option<&str>) -> serde_json::Value {
+    let mut roots = Vec::new();
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(PathBuf::from(local_app_data).join("CrashDumps"));
+    }
+    if let Some(program_data) = std::env::var_os("PROGRAMDATA") {
+        roots.push(
+            PathBuf::from(program_data.clone())
+                .join("Microsoft")
+                .join("Windows")
+                .join("WER")
+                .join("ReportQueue"),
+        );
+        roots.push(
+            PathBuf::from(program_data)
+                .join("Microsoft")
+                .join("Windows")
+                .join("WER")
+                .join("ReportArchive"),
+        );
+    }
+    let mut warnings = Vec::new();
+    let mut dump_paths = Vec::new();
+    for root in roots {
+        collect_wer_paths(&root, process_name, &mut dump_paths, &mut warnings);
+    }
+    dump_paths.sort();
+    dump_paths.dedup();
+    serde_json::json!({
+        "provider_enabled": true,
+        "dump_paths": dump_paths,
+        "warnings": warnings,
+    })
+}
+
+#[cfg(not(windows))]
+fn discover_wer_dumps(process_name: Option<&str>) -> serde_json::Value {
+    let _ = process_name;
+    serde_json::json!({
+        "provider_enabled": false,
+        "dump_paths": [],
+        "error": {
+            "code": "unsupported_platform",
+            "message": "WER dump discovery requires Windows runtime",
+        }
+    })
+}
+
+#[cfg(windows)]
+fn collect_wer_paths(
+    root: &Path,
+    process_name: Option<&str>,
+    output: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let process_name = process_name.map(|value| value.to_ascii_lowercase());
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let matches_process = process_name
+            .as_ref()
+            .map(|name| file_name.contains(name))
+            .unwrap_or(true);
+        if path.is_dir() {
+            collect_wer_paths(&path, process_name.as_deref(), output, warnings);
+        } else if matches_process
+            && matches!(
+                path.extension()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("dmp" | "mdmp" | "wer")
+            )
+        {
+            output.push(path.to_string_lossy().to_string());
+        }
+    }
+    if output.len() > 100 {
+        output.truncate(100);
+        warnings.push("WER discovery truncated at 100 paths".into());
+    }
 }
 
 fn build_tool_basename(program: &str) -> String {

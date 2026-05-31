@@ -10,9 +10,10 @@ Description: Expand or collapse a revalidated UI Automation element when support
 
 - `bound_id`: bound window ID.
 - `element_ref` or `selector`: target element.
+- `expand_collapse_action`: optional `expand`, `collapse`, or `toggle`; defaults to `toggle`.
 - `max_depth`, `max_elements`: optional snapshot limits.
 - `allow_offscreen`: allow offscreen targets.
 
 ## Notes
 
-Direct ExpandCollapsePattern support is not enabled in this build, so the tool returns a fail-closed diagnostic with fallback coordinates.
+Uses UI Automation `ExpandCollapsePattern` against a freshly revalidated element. Unsupported patterns, stale references, disabled elements, and offscreen elements fail closed; responses include before/after state and coordinate fallback hints.
