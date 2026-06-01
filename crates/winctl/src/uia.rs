@@ -65,14 +65,23 @@ pub struct UiElementInfo {
     pub children: Vec<UiElementInfo>,
 }
 
+/// Criteria for matching a UI Automation element within a window snapshot.
+/// Combine fields to narrow the match; `automation_id` is the most stable.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct UiElementSelector {
+    /// Stable `element_ref` from a prior `uia.snapshot`/`uia.find` to re-select the same element.
     pub element_ref: Option<String>,
+    /// Case-insensitive substring the element's accessible name must contain.
     pub name: Option<String>,
+    /// Control type/role, e.g. `button`, `edit`, `checkbox`, `list_item`.
     pub role: Option<String>,
+    /// Exact UI Automation AutomationId (the most stable selector when present).
     pub automation_id: Option<String>,
+    /// Case-insensitive substring the element's class name must contain.
     pub class_name: Option<String>,
+    /// Case-insensitive substring to match against the element's text/value.
     pub text_contains: Option<String>,
+    /// If true, also match elements currently offscreen (default false).
     pub include_offscreen: Option<bool>,
 }
 
