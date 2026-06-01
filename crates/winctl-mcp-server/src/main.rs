@@ -360,680 +360,1070 @@ impl AppState {
     }
 }
 
+/// Identify a single bound window by its stable bound id.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct BoundIdRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
 }
 
+/// Identify the top-level window located at a screen coordinate.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct WindowFromPointRequest {
+    /// X screen-pixel coordinate of the point to hit-test.
     pub x: i32,
+    /// Y screen-pixel coordinate of the point to hit-test.
     pub y: i32,
+    /// Optional stable bound-window id returned by `windows.bind`; when set, the point is interpreted relative to that window rather than the screen.
     pub bound_id: Option<String>,
 }
 
+/// Capture a full-display screenshot.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct DisplayScreenshotRequest {
+    /// Zero-based index of the display/monitor to capture, as enumerated by the display tools.
     pub display_index: usize,
 }
 
+/// Launch a process directly from an executable path.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ProcessLaunchRequest {
+    /// Path to the executable to launch.
     pub exe: String,
+    /// Command-line arguments passed to the executable. Defaults to an empty list.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Working directory for the new process. Defaults to the server's current directory when omitted.
     pub cwd: Option<String>,
+    /// Environment variables to set for the new process, merged over the inherited environment.
     pub env: Option<HashMap<String, String>>,
+    /// If true, block until a visible top-level window owned by the launched PID appears (or `timeout_ms` elapses).
     #[serde(default)]
     pub wait_for_window: bool,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Also consider windows owned by child processes of the target, not just the launched PID.
     #[serde(default)]
     pub allow_child_process_windows: bool,
 }
 
+/// Launch an application by URI, app id, or other resolved target.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct AppLaunchRequest {
+    /// How to interpret `target`, e.g. an executable path, shell/URI target, or registered app id.
     pub mode: winctl::AppLaunchMode,
+    /// The launch target, interpreted according to `mode`.
     pub target: String,
+    /// Command-line arguments passed to the launched application. Defaults to an empty list.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Working directory for the launched application. Defaults to the server's current directory when omitted.
     pub cwd: Option<String>,
+    /// If true, block until a visible top-level window owned by the launched PID appears (or `timeout_ms` elapses).
     #[serde(default)]
     pub wait_for_window: bool,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Also consider windows owned by child processes of the target, not just the launched PID.
     #[serde(default)]
     pub allow_child_process_windows: bool,
 }
 
+/// List running processes, optionally filtered.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ProcessListRequest {
+    /// Case-insensitive substring the process name must contain to be included.
     pub name_contains: Option<String>,
+    /// Case-insensitive substring the process executable path must contain to be included.
     pub exe_path_contains: Option<String>,
+    /// If true, include the list of top-level windows owned by each process.
     #[serde(default)]
     pub include_windows: bool,
+    /// If true, restrict results to processes this server launched (those with an MCP launch id).
     #[serde(default)]
     pub only_mcp_launched: bool,
 }
 
+/// Describe a single process by PID.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ProcessDescribeRequest {
+    /// Target process id (PID).
     pub pid: u32,
 }
 
+/// Terminate a process by PID or launch id.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ProcessKillRequest {
+    /// Target process id (PID). Provide either `pid` or `launch_id`.
     pub pid: Option<u32>,
+    /// MCP launch id returned by `process.launch`/`app.launch` for a process this server started. Provide either `pid` or `launch_id`.
     pub launch_id: Option<String>,
+    /// If true, force-terminate the process instead of requesting a graceful close. Defaults to true.
     #[serde(default = "default_force")]
     pub force: bool,
+    /// If true, also terminate the target's descendant processes (the whole process tree). Defaults to false.
     #[serde(default)]
     pub kill_tree: bool,
 }
 
+/// Wait for a process to exit.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ProcessWaitForExitRequest {
+    /// Target process id (PID). Provide either `pid` or `launch_id`.
     pub pid: Option<u32>,
+    /// MCP launch id returned by `process.launch`/`app.launch` for a process this server started. Provide either `pid` or `launch_id`.
     pub launch_id: Option<String>,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Polling interval between checks, in milliseconds.
     pub poll_interval_ms: Option<u64>,
 }
 
+/// Wait for a top-level window owned by a process to appear.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct WaitForWindowRequest {
+    /// Target process id (PID). Provide either `pid` or `launch_id`.
     pub pid: Option<u32>,
+    /// MCP launch id returned by `process.launch`/`app.launch` for a process this server started. Provide either `pid` or `launch_id`.
     pub launch_id: Option<String>,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Case-insensitive substring the window title must contain.
     pub title_contains: Option<String>,
+    /// Case-insensitive substring the window class must contain.
     pub class_name_contains: Option<String>,
+    /// Also consider windows owned by child processes of the target, not just the launched PID.
     #[serde(default)]
     pub allow_child_process_windows: bool,
 }
 
+/// Wait until a bound window reaches a desired state.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct WaitForStateRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Polling interval between checks, in milliseconds.
     pub poll_interval_ms: Option<u64>,
+    /// If set, wait until the window's visible state matches this value.
     pub visible: Option<bool>,
+    /// If set, wait until the window's foreground state matches this value.
     pub foreground: Option<bool>,
+    /// If set, wait until the window's minimized state matches this value.
     pub minimized: Option<bool>,
+    /// If set, wait until the window's DWM-cloaked state matches this value.
     pub cloaked: Option<bool>,
+    /// Case-insensitive substring the window title must contain before the wait succeeds.
     pub title_contains: Option<String>,
+    /// Case-insensitive substring the window class must contain before the wait succeeds.
     pub class_name_contains: Option<String>,
 }
 
+/// Move a bound window to a new screen position.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct WindowMoveRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// New X position of the window's top-left corner, in screen pixels.
     pub x: i32,
+    /// New Y position of the window's top-left corner, in screen pixels.
     pub y: i32,
 }
 
+/// Resize a bound window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct WindowResizeRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// New window width, in pixels.
     pub width: i32,
+    /// New window height, in pixels.
     pub height: i32,
 }
 
+/// List the top-level windows owned by a process.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct WindowsForProcessRequest {
+    /// Target process id (PID). Provide either `pid` or `launch_id`.
     pub pid: Option<u32>,
+    /// MCP launch id returned by `process.launch`/`app.launch` for a process this server started. Provide either `pid` or `launch_id`.
     pub launch_id: Option<String>,
+    /// Also consider windows owned by child processes of the target, not just the launched PID.
     #[serde(default)]
     pub include_child_process_windows: bool,
 }
 
+/// List detected browser processes/windows.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct BrowserListRequest {
+    /// If set, restrict results to this browser kind (e.g. Chrome, Edge, Firefox).
     pub browser: Option<winctl::BrowserKind>,
+    /// If set, restrict results to the browser instance with this process id (PID).
     pub pid: Option<u32>,
+    /// If true, include the list of top-level windows for each browser process.
     #[serde(default)]
     pub include_windows: bool,
+    /// If true, restrict results to browsers this server launched (those with an MCP launch id).
     #[serde(default)]
     pub only_mcp_launched: bool,
 }
 
+/// Describe a browser window/instance.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct BrowserDescribeRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: Option<String>,
+    /// Target process id (PID) of the browser to describe.
     pub pid: Option<u32>,
+    /// Raw window handle (HWND), as a string, of the browser window to describe.
     pub hwnd: Option<String>,
 }
 
+/// Wait for a browser window's title to change, indicating navigation.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct BrowserWaitForNavigationRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Case-insensitive substring the window title must contain for the wait to succeed.
     pub title_contains: Option<String>,
+    /// Case-insensitive substring the window title must NOT contain for the wait to succeed.
     pub title_not_contains: Option<String>,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Polling interval between checks, in milliseconds.
     pub poll_interval_ms: Option<u64>,
 }
 
+/// Assert properties of a browser window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct BrowserAssertRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// If set, assert the window belongs to this browser kind (e.g. Chrome, Edge, Firefox).
     pub browser: Option<winctl::BrowserKind>,
+    /// Case-insensitive substring the window title must contain for the assertion to pass.
     pub title_contains: Option<String>,
+    /// Case-insensitive substring the window class must contain for the assertion to pass.
     pub class_name_contains: Option<String>,
 }
 
+/// Extract readable content from a browser window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct BrowserExtractContentRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
 }
 
+/// Read the current text contents of the clipboard.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ClipboardReadRequest {
+    /// Upper bound on the amount returned; results are truncated beyond it.
     pub max_chars: Option<usize>,
 }
 
+/// Write text to the clipboard.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ClipboardWriteRequest {
+    /// Text to place on the clipboard.
     pub text: String,
 }
 
+/// Read the contents of a file.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct FilesystemReadRequest {
+    /// Absolute path of the file to read.
     pub path: String,
+    /// Upper bound on the amount returned; results are truncated beyond it.
     pub max_bytes: Option<usize>,
 }
 
+/// List the entries of a directory.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct FilesystemListRequest {
+    /// Absolute path of the directory to list.
     pub path: String,
+    /// If true, descend into subdirectories recursively. Defaults to false.
     #[serde(default)]
     pub recursive: bool,
+    /// Upper bound on the amount returned; results are truncated beyond it.
     pub max_entries: Option<usize>,
 }
 
+/// Search files under a root for a pattern.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct FilesystemSearchRequest {
+    /// Absolute path of the directory to search under.
     pub root: String,
+    /// Pattern to match (file glob and/or content pattern as supported by the tool).
     pub pattern: String,
+    /// Upper bound on the amount returned; results are truncated beyond it.
     pub max_results: Option<usize>,
+    /// Maximum size, in bytes, of an individual file that will be opened and scanned; larger files are skipped.
     pub max_file_bytes: Option<usize>,
 }
 
+/// Copy a file or directory.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct FilesystemCopyRequest {
+    /// Absolute source path to copy from.
     pub from: String,
+    /// Absolute destination path to copy to.
     pub to: String,
+    /// If true, overwrite the destination if it already exists. Defaults to false.
     #[serde(default)]
     pub overwrite: bool,
 }
 
+/// Move or rename a file or directory.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct FilesystemMoveRequest {
+    /// Absolute source path to move from.
     pub from: String,
+    /// Absolute destination path to move to.
     pub to: String,
+    /// If true, overwrite the destination if it already exists. Defaults to false.
     #[serde(default)]
     pub overwrite: bool,
 }
 
+/// Delete a file or directory.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct FilesystemDeleteRequest {
+    /// Absolute path of the file or directory to delete.
     pub path: String,
+    /// If true, delete directories recursively along with their contents. Defaults to false.
     #[serde(default)]
     pub recursive: bool,
 }
 
+/// Export an artifact file to a destination.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ArtifactExportRequest {
+    /// Absolute path of the artifact file to export.
     pub source_path: String,
+    /// Absolute destination path to export to. Defaults to a server-chosen export location when omitted.
     pub destination_path: Option<String>,
 }
 
+/// List registry subkeys (and optionally values) under a key.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct RegistryListRequest {
+    /// Registry hive, e.g. HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER.
     pub hive: winctl::RegistryHive,
+    /// Registry key path within the hive.
     pub path: String,
+    /// If true, also return the values stored directly under the key, not just subkey names. Defaults to false.
     #[serde(default)]
     pub include_values: bool,
 }
 
+/// Read a registry value.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct RegistryReadRequest {
+    /// Registry hive, e.g. HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER.
     pub hive: winctl::RegistryHive,
+    /// Registry key path within the hive.
     pub path: String,
+    /// Value name to read. Omit or null to read the key's default (unnamed) value.
     pub name: Option<String>,
 }
 
+/// Write a registry value.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct RegistryWriteRequest {
+    /// Registry hive, e.g. HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER.
     pub hive: winctl::RegistryHive,
+    /// Registry key path within the hive.
     pub path: String,
+    /// Value name to write. Omit or null to write the key's default (unnamed) value.
     pub name: Option<String>,
+    /// Registry value type, e.g. REG_SZ, REG_DWORD, REG_BINARY.
     pub kind: winctl::RegistryValueKind,
+    /// The value data to write, interpreted according to `kind`.
     pub data: serde_json::Value,
 }
 
+/// Delete a registry value.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct RegistryDeleteRequest {
+    /// Registry hive, e.g. HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER.
     pub hive: winctl::RegistryHive,
+    /// Registry key path within the hive.
     pub path: String,
+    /// Value name to delete. Omit or null to delete the key's default (unnamed) value.
     pub name: Option<String>,
 }
 
+/// List recent system notifications/toasts.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct NotificationsListRequest {
+    /// Upper bound on the amount returned; results are truncated beyond it.
     pub max_items: Option<usize>,
 }
 
+/// Collect diagnostic information about a process.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ProcessDiagnosticsRequest {
+    /// Target process id (PID).
     pub pid: u32,
+    /// If true, include the process's top-level windows in the diagnostics. Defaults to false.
     #[serde(default)]
     pub include_windows: bool,
+    /// If true, include child processes in the diagnostics. Defaults to false.
     #[serde(default)]
     pub include_children: bool,
 }
 
+/// Perform an HTTP request and return the response.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct NetworkFetchRequest {
+    /// URL to request.
     pub url: String,
+    /// HTTP method, e.g. GET, POST, PUT, DELETE. Defaults to GET when omitted.
     pub method: Option<String>,
+    /// HTTP request headers to send.
     pub headers: Option<HashMap<String, String>>,
+    /// Request body to send (for methods that accept one).
     pub body: Option<String>,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Upper bound on the amount returned; results are truncated beyond it.
     pub max_bytes: Option<usize>,
+    /// If true, automatically follow HTTP redirects. Defaults to false.
     #[serde(default)]
     pub follow_redirects: bool,
 }
 
+/// Fetch a URL and extract its text and/or links.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct NetworkScrapeRequest {
+    /// URL to scrape.
     pub url: String,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Upper bound on the amount returned; results are truncated beyond it.
     pub max_bytes: Option<usize>,
+    /// If true, automatically follow HTTP redirects. Defaults to false.
     #[serde(default)]
     pub follow_redirects: bool,
+    /// If true, include extracted hyperlinks in the result. Defaults to true.
     #[serde(default = "default_true")]
     pub include_links: bool,
+    /// If true, include extracted page text in the result. Defaults to true.
     #[serde(default = "default_true")]
     pub include_text: bool,
 }
 
+/// Start a new macro recording session.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct RecorderStartRequest {
+    /// Human-readable title for the recorded macro.
     pub title: String,
+    /// Optional longer description of the macro being recorded.
     pub description: Option<String>,
+    /// Tags to associate with the recorded macro for later lookup. Defaults to an empty list.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Optional app identity to associate the recording with a specific application.
     pub app_identity: Option<winctl_macro::AppIdentity>,
 }
 
+/// Append a step to the active recording session.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct RecorderRecordStepRequest {
+    /// Optional explicit step id; auto-generated when omitted.
     pub id: Option<String>,
+    /// Name of the tool this step invokes.
     pub tool: String,
+    /// Arguments passed to the tool for this step.
     pub args: Option<serde_json::Value>,
+    /// Optional macro target describing the window/element the step acts on.
     pub target: Option<winctl_macro::MacroTarget>,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// If true, failure of this step fails the macro run. Defaults to true.
     #[serde(default = "default_true")]
     pub required: bool,
+    /// If true, continue running subsequent steps even if this step fails. Defaults to false.
     #[serde(default)]
     pub continue_on_failure: bool,
+    /// Optional metadata describing a coordinate-based fallback if the primary target cannot be resolved.
     pub coordinate_fallback: Option<winctl_macro::CoordinateFallbackMetadata>,
+    /// Optional audit metadata recorded for the step.
     pub audit: Option<winctl_macro::StepAudit>,
+    /// Optional free-form note attached to the step.
     pub note: Option<String>,
 }
 
+/// Stop the active recording session.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct RecorderStopRequest {
+    /// If true, persist the recorded macro to memory for later reuse. Defaults to false.
     #[serde(default)]
     pub save_to_memory: bool,
 }
 
+/// Export a recorded session's manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct RecorderExportRequest {
+    /// Id of the recording session to export. Defaults to the most recent/active session when omitted.
     pub session_id: Option<String>,
 }
 
+/// Validate a test manifest without running it.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct TestManifestRequest {
+    /// A winctl macro/test manifest object (see docs/MACRO_MANIFEST.md / docs/TEST_MANIFEST.md).
     pub manifest: winctl_macro::TestManifest,
 }
 
+/// Run a test manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct TestRunRequest {
+    /// A winctl macro/test manifest object (see docs/MACRO_MANIFEST.md / docs/TEST_MANIFEST.md).
     pub manifest: winctl_macro::TestManifest,
+    /// Maximum number of steps to execute before stopping.
     pub max_steps: Option<usize>,
+    /// Optional video-capture configuration to record while the test runs.
     pub video: Option<VideoStartRequest>,
 }
 
+/// Wait until a bound window's rendered image changes.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct WindowImageChangeWaitRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Polling interval between checks, in milliseconds.
     pub poll_interval_ms: Option<u64>,
 }
 
+/// Start capturing a video recording of a window or display.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct VideoStartRequest {
+    /// Stable bound-window id returned by `windows.bind` to record. Provide either `bound_id` or `display_index`.
     pub bound_id: Option<String>,
+    /// Zero-based display/monitor index to record. Provide either `bound_id` or `display_index`.
     pub display_index: Option<usize>,
+    /// Interval between captured frames, in milliseconds.
     pub frame_interval_ms: Option<u64>,
+    /// Maximum total recording duration, in milliseconds.
     pub max_duration_ms: Option<u64>,
+    /// Maximum frame width, in pixels; frames are downscaled to fit.
     pub max_frame_width: Option<u32>,
+    /// Maximum frame height, in pixels; frames are downscaled to fit.
     pub max_frame_height: Option<u32>,
+    /// Optional name for the output recording file/artifact.
     pub output_name: Option<String>,
 }
 
+/// Stop an active video recording.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct VideoStopRequest {
+    /// Id of the recording to stop, as returned by the video start tool. Defaults to the active recording when omitted.
     pub recording_id: Option<String>,
 }
 
+/// Capture a UI Automation tree snapshot of a bound window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct UiSnapshotRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Maximum depth of the UI Automation tree to traverse; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements returned; results are truncated beyond it.
     pub max_elements: Option<usize>,
 }
 
+/// Find UI elements in a bound window matching a selector.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct UiFindRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Selector describing which UI element(s) to match (by name, automation id, control type, etc.).
     pub selector: winctl::UiElementSelector,
+    /// Maximum depth of the UI Automation tree to traverse; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements returned; results are truncated beyond it.
     pub max_elements: Option<usize>,
 }
 
+/// Resolve a previously returned element reference to its current element.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct UiResolveRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Opaque element reference returned by a prior `ui.find`/`ui.snapshot` call.
     pub element_ref: String,
+    /// Maximum depth of the UI Automation tree to traverse; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements returned; results are truncated beyond it.
     pub max_elements: Option<usize>,
 }
 
+/// Invoke an action (click, expand/collapse, toggle, select) on a UI element.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct UiElementActionRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Opaque element reference returned by a prior `ui.find`/`ui.snapshot` call. Provide either `element_ref` or `selector`.
     pub element_ref: Option<String>,
+    /// Selector describing which UI element to act on. Provide either `element_ref` or `selector`.
     pub selector: Option<winctl::UiElementSelector>,
+    /// Maximum depth of the UI Automation tree to traverse when resolving the selector; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements scanned while resolving the selector.
     pub max_elements: Option<usize>,
+    /// If true, allow acting on elements that are off-screen rather than failing. Defaults to false.
     #[serde(default)]
     pub allow_offscreen: bool,
+    /// For expand/collapse-capable elements, whether to expand or collapse.
     pub expand_collapse_action: Option<winctl::UiExpandCollapseAction>,
+    /// For toggle-capable elements, the desired toggle state to set.
     pub desired_state: Option<winctl::UiToggleDesiredState>,
+    /// For selectable elements, the selection mode to apply (e.g. select, add, remove).
     pub mode: Option<winctl::UiSelectionMode>,
 }
 
+/// Set the text value of a UI element.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct UiSetValueRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Opaque element reference returned by a prior `ui.find`/`ui.snapshot` call. Provide either `element_ref` or `selector`.
     pub element_ref: Option<String>,
+    /// Selector describing which UI element to set. Provide either `element_ref` or `selector`.
     pub selector: Option<winctl::UiElementSelector>,
+    /// The text value to set on the element.
     pub value: String,
+    /// Maximum depth of the UI Automation tree to traverse when resolving the selector; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements scanned while resolving the selector.
     pub max_elements: Option<usize>,
+    /// If true, allow setting elements that are off-screen rather than failing. Defaults to false.
     #[serde(default)]
     pub allow_offscreen: bool,
+    /// If true, replace the existing value; if false, append/insert. Defaults to true.
     #[serde(default = "default_true")]
     pub replace_existing: bool,
 }
 
+/// Set the numeric (range) value of a UI element such as a slider.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct UiRangeValueRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Opaque element reference returned by a prior `ui.find`/`ui.snapshot` call. Provide either `element_ref` or `selector`.
     pub element_ref: Option<String>,
+    /// Selector describing which UI element to set. Provide either `element_ref` or `selector`.
     pub selector: Option<winctl::UiElementSelector>,
+    /// The numeric value to set, within the element's supported range.
     pub value: f64,
+    /// Maximum depth of the UI Automation tree to traverse when resolving the selector; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements scanned while resolving the selector.
     pub max_elements: Option<usize>,
+    /// If true, allow setting elements that are off-screen rather than failing. Defaults to false.
     #[serde(default)]
     pub allow_offscreen: bool,
 }
 
+/// Wait until a UI element matching the criteria appears/becomes ready.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct UiWaitForElementRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Opaque element reference returned by a prior `ui.find`/`ui.snapshot` call. Provide either `element_ref` or `selector`.
     pub element_ref: Option<String>,
+    /// Selector describing which UI element to wait for. Provide either `element_ref` or `selector`.
     pub selector: Option<winctl::UiElementSelector>,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Polling interval between checks, in milliseconds.
     pub poll_interval_ms: Option<u64>,
+    /// Maximum depth of the UI Automation tree to traverse when resolving the selector; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements scanned while resolving the selector.
     pub max_elements: Option<usize>,
+    /// If set, only succeed once the matched element's enabled state matches this value.
     pub require_enabled: Option<bool>,
+    /// If set, only succeed once the matched element's visible state matches this value.
     pub require_visible: Option<bool>,
+    /// Case-insensitive substring the matched element's name must contain.
     pub name_contains: Option<String>,
 }
 
+/// List currently open dialog windows.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct DialogListRequest {
+    /// Maximum depth of the UI Automation tree to traverse per dialog; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements returned; results are truncated beyond it.
     pub max_elements: Option<usize>,
+    /// If true, include dialogs that are not in the foreground. Defaults to false.
     #[serde(default)]
     pub include_non_foreground: bool,
+    /// If true, also include the foreground window even when it is not recognized as a dialog. Defaults to false.
     #[serde(default)]
     pub include_non_dialog_foreground: bool,
 }
 
+/// Invoke a button within a dialog window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct DialogInvokeButtonRequest {
+    /// Raw window handle (HWND) of the dialog, as a string.
     pub hwnd: String,
+    /// Target process id (PID) that owns the dialog.
     pub pid: u32,
+    /// Name/caption of the button to invoke (e.g. "OK", "Cancel"). Provide one of `button_name`, `element_ref`, or `selector`.
     pub button_name: Option<String>,
+    /// Opaque element reference for the button, returned by a prior `ui.find`/`ui.snapshot` call.
     pub element_ref: Option<String>,
+    /// Selector describing which button element to invoke.
     pub selector: Option<winctl::UiElementSelector>,
+    /// Maximum depth of the UI Automation tree to traverse when resolving the button; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements scanned while resolving the button.
     pub max_elements: Option<usize>,
+    /// If true, allow invoking buttons that are off-screen rather than failing. Defaults to false.
     #[serde(default)]
     pub allow_offscreen: bool,
+    /// If true, allow invoking even when the target window is not recognized as a dialog. Defaults to false.
     #[serde(default)]
     pub allow_non_dialog: bool,
 }
 
+/// Assert properties of a UI element.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct AssertElementRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Opaque element reference returned by a prior `ui.find`/`ui.snapshot` call. Provide either `element_ref` or `selector`.
     pub element_ref: Option<String>,
+    /// Selector describing which UI element to assert on. Provide either `element_ref` or `selector`.
     pub selector: Option<winctl::UiElementSelector>,
+    /// Maximum depth of the UI Automation tree to traverse when resolving the selector; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements scanned while resolving the selector.
     pub max_elements: Option<usize>,
+    /// If set, assert the element exists (true) or does not exist (false).
     pub exists: Option<bool>,
+    /// If set, assert the element's enabled state matches this value.
     pub enabled: Option<bool>,
+    /// If set, assert the element's name equals this value exactly.
     pub name: Option<String>,
+    /// Case-insensitive substring the element's name must contain for the assertion to pass.
     pub name_contains: Option<String>,
 }
 
+/// Assert that text is visible somewhere in a bound window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct AssertTextVisibleRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// The text that must be visible within the window for the assertion to pass.
     pub text: String,
+    /// Maximum depth of the UI Automation tree to traverse; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements scanned; results are truncated beyond it.
     pub max_elements: Option<usize>,
 }
 
+/// Assert the color of a pixel in an image or bound window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct AssertPixelColorRequest {
+    /// Path to an image file to sample. Provide either `image_path` or `bound_id`.
     pub image_path: Option<String>,
+    /// Stable bound-window id returned by `windows.bind` to capture and sample. Provide either `image_path` or `bound_id`.
     pub bound_id: Option<String>,
+    /// X coordinate of the pixel to sample, in pixels within the image/window.
     pub x: u32,
+    /// Y coordinate of the pixel to sample, in pixels within the image/window.
     pub y: u32,
+    /// Expected pixel color as [R, G, B] (0-255 each).
     pub expected_rgb: Option<[u8; 3]>,
+    /// Per-channel tolerance (0-255) allowed when comparing to `expected_rgb`.
     pub tolerance: Option<u8>,
 }
 
+/// Assert how many windows match a selector.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct AssertWindowCountRequest {
+    /// Window selector describing which windows to count (by title, class, PID, etc.).
     pub selector: WindowSelector,
+    /// If set, assert the matching window count equals this value exactly.
     pub expected: Option<usize>,
+    /// If set, assert the matching window count is at least this value.
     pub min: Option<usize>,
+    /// If set, assert the matching window count is at most this value.
     pub max: Option<usize>,
 }
 
+/// Assert the clipboard's current text contents.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct AssertClipboardRequest {
+    /// If set, assert the clipboard text equals this value exactly.
     pub expected: Option<String>,
+    /// If set, assert the clipboard text contains this substring.
     pub contains: Option<String>,
+    /// Upper bound on the number of clipboard characters read; comparison is performed against the truncated text.
     pub max_chars: Option<usize>,
 }
 
+/// Run OCR over a region of an image or bound window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct CaptureOcrRegionRequest {
+    /// Path to an image file to OCR. Provide either `image_path` or `bound_id`.
     pub image_path: Option<String>,
+    /// Stable bound-window id returned by `windows.bind` to capture and OCR. Provide either `image_path` or `bound_id`.
     pub bound_id: Option<String>,
+    /// X coordinate of the region's top-left corner, in pixels. Defaults to 0 (full width) when omitted.
     pub x: Option<u32>,
+    /// Y coordinate of the region's top-left corner, in pixels. Defaults to 0 (full height) when omitted.
     pub y: Option<u32>,
+    /// Width of the region, in pixels. Defaults to the remaining width when omitted.
     pub width: Option<u32>,
+    /// Height of the region, in pixels. Defaults to the remaining height when omitted.
     pub height: Option<u32>,
 }
 
+/// Read text from a bound window's accessibility tree.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct CaptureReadTextRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
+    /// Maximum depth of the UI Automation tree to traverse; deeper elements are omitted.
     pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements read; results are truncated beyond it.
     pub max_elements: Option<usize>,
 }
 
+/// Compare a captured image against a baseline image.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct CaptureCompareBaselineRequest {
+    /// Path to the actual/captured image to compare.
     pub actual_path: String,
+    /// Path to the baseline/reference image to compare against.
     pub baseline_path: String,
+    /// Per-channel tolerance (0-255) allowed when comparing pixels.
     pub tolerance: Option<u8>,
+    /// Maximum number of differing pixels permitted before the comparison fails.
     pub max_different_pixels: Option<u64>,
+    /// Optional path to write a visual diff image to.
     pub diff_path: Option<String>,
 }
 
+/// Run a build/program command and capture its output.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct BuildRunRequest {
+    /// Path or name of the program/command to run.
     pub program: String,
+    /// Command-line arguments passed to the program. Defaults to an empty list.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Working directory for the command. Defaults to the server's current directory when omitted.
     pub cwd: Option<String>,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
 }
 
+/// Collect performance metrics for a process.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ProcessMetricsRequest {
+    /// Target process id (PID).
     pub pid: u32,
 }
 
+/// Generate a crash/diagnostic report for a process or window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct CrashReportRequest {
+    /// Target process id (PID). Provide either `pid` or `bound_id`.
     pub pid: Option<u32>,
+    /// Stable bound-window id returned by `windows.bind` whose owning process to report on. Provide either `pid` or `bound_id`.
     pub bound_id: Option<String>,
 }
 
+/// Export a stored test report.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct TestReportExportRequest {
+    /// Id of the test run whose report to export.
     pub run_id: String,
+    /// Output format for the report, e.g. json or html. Defaults to a server-chosen format when omitted.
     pub format: Option<String>,
+    /// Absolute path to write the exported report to. Defaults to a server-chosen location when omitted.
     pub output_path: Option<String>,
 }
 
+/// Probe a Chrome DevTools Protocol debugger endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct CdpEndpointRequest {
+    /// URL of the Chrome DevTools Protocol debugger endpoint (e.g. http://127.0.0.1:9222).
     pub debugger_url: String,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
 }
 
+/// Evaluate a JavaScript expression in a CDP target.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct CdpEvaluateRequest {
+    /// URL of the Chrome DevTools Protocol debugger endpoint (e.g. http://127.0.0.1:9222).
     pub debugger_url: String,
+    /// Id of the specific CDP target (tab) to evaluate in. Defaults to the active target when omitted.
     pub target_id: Option<String>,
+    /// JavaScript expression to evaluate in the target.
     pub expression: String,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
 }
 
+/// Introspect a web page's DOM via CDP.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct WebIntrospectionRequest {
+    /// URL of the Chrome DevTools Protocol debugger endpoint (e.g. http://127.0.0.1:9222).
     pub debugger_url: String,
+    /// Id of the specific CDP target (tab) to introspect. Defaults to the active target when omitted.
     pub target_id: Option<String>,
+    /// Optional CSS selector to scope introspection to matching DOM elements.
     pub selector: Option<String>,
+    /// Maximum time to wait, in milliseconds.
     pub timeout_ms: Option<u64>,
 }
 
+/// Arm the control consent gate, allowing gated actions for a window.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ControlArmRequest {
+    /// Consent-gate session id to arm. Defaults to a new/global session when omitted.
     pub session_id: Option<String>,
+    /// Stable bound-window id returned by `windows.bind` to scope the consent grant to. Identity is revalidated before gated actions.
     pub bound_id: Option<String>,
+    /// Time-to-live of the consent grant, in milliseconds; gated actions are permitted until this elapses.
     pub allow_for_ms: Option<u64>,
+    /// Human-readable reason for arming the gate, recorded in the consent audit trail.
     pub reason: Option<String>,
 }
 
+/// Record a consent decision for the control gate.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ControlConsentRequest {
+    /// Consent decision, e.g. `allow` or `deny`, controlling whether gated actions may proceed.
     pub decision: String,
+    /// Consent-gate session id the decision applies to. Defaults to the active/global session when omitted.
     pub session_id: Option<String>,
+    /// Stable bound-window id returned by `windows.bind` the consent decision is scoped to.
     pub bound_id: Option<String>,
+    /// Time-to-live of the consent grant, in milliseconds, when the decision allows gated actions.
     pub allow_for_ms: Option<u64>,
 }
 
+/// Revoke an active control consent grant.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct ControlRevokeRequest {
+    /// Consent-gate session id to revoke. Defaults to the active/global session when omitted.
     pub session_id: Option<String>,
+    /// Human-readable reason for revoking, recorded in the consent audit trail.
     pub reason: Option<String>,
 }
 
+/// Notify the user before a gated control action runs.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ControlNotifyRequest {
+    /// Name of the tool whose gated action is about to run.
     pub tool_name: String,
+    /// Stable bound-window id returned by `windows.bind` the pending action targets.
     pub bound_id: Option<String>,
+    /// Category of the pending action (e.g. click, type), shown in the consent notification.
     pub action_kind: Option<String>,
+    /// Consent-gate session id this notification is associated with. Defaults to the active/global session when omitted.
     pub session_id: Option<String>,
+    /// Countdown before the action proceeds, in milliseconds, during which the user can intervene.
     pub countdown_ms: Option<u64>,
 }
 
+/// Validate a macro manifest without running it.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroManifestRequest {
+    /// A winctl macro/test manifest object (see docs/MACRO_MANIFEST.md / docs/TEST_MANIFEST.md).
     pub manifest: winctl_macro::MacroManifest,
 }
 
+/// Dry-run a macro to preview its steps without performing actions.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroDryRunRequest {
+    /// A winctl macro/test manifest object (see docs/MACRO_MANIFEST.md / docs/TEST_MANIFEST.md). Provide either `manifest` or `memory_id`.
     pub manifest: Option<winctl_macro::MacroManifest>,
+    /// Id of a macro stored in memory to load. Provide either `manifest` or `memory_id`.
     pub memory_id: Option<String>,
 }
 
+/// Run a macro.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroRunRequest {
+    /// A winctl macro/test manifest object (see docs/MACRO_MANIFEST.md / docs/TEST_MANIFEST.md). Provide either `manifest` or `memory_id`.
     pub manifest: Option<winctl_macro::MacroManifest>,
+    /// Id of a macro stored in memory to load. Provide either `manifest` or `memory_id`.
     pub memory_id: Option<String>,
+    /// Maximum number of steps to execute before stopping.
     pub max_steps: Option<usize>,
+    /// Optional video-capture configuration to record while the macro runs.
     pub video: Option<VideoStartRequest>,
 }
 
+/// Run a single step of a macro.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroRunStepRequest {
+    /// A winctl macro/test manifest object (see docs/MACRO_MANIFEST.md / docs/TEST_MANIFEST.md). Provide either `manifest` or `memory_id`.
     pub manifest: Option<winctl_macro::MacroManifest>,
+    /// Id of a macro stored in memory to load. Provide either `manifest` or `memory_id`.
     pub memory_id: Option<String>,
+    /// Id of the step within the macro to execute.
     pub step_id: String,
+    /// Optional JSON context passed to the step for variable substitution. Defaults to none.
     #[serde(default)]
     pub context_json: Option<serde_json::Value>,
 }
 
+/// Abort an in-progress macro run.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroAbortRequest {
+    /// Id of the macro run to abort, as returned by `macro.run`.
     pub run_id: String,
 }
 
+/// Retrieve a stored macro by id.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroGetRequest {
+    /// Id of the stored macro to retrieve.
     pub id: String,
 }
 
+/// List stored macros, optionally filtered.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct MacroListRequest {
+    /// If set, restrict results to macros of this kind/category.
     pub kind: Option<String>,
+    /// If set, restrict results to macros tagged with all of these tags. Defaults to an empty list (no tag filter).
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Upper bound on the number of macros returned; results are truncated beyond it.
     pub limit: Option<usize>,
 }
 
+/// Promote a macro manifest (e.g. from a recording) into the stored library.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroPromoteRequest {
+    /// A winctl macro/test manifest object (see docs/MACRO_MANIFEST.md / docs/TEST_MANIFEST.md).
     pub manifest: winctl_macro::MacroManifest,
+    /// If true, persist the promoted macro to memory. Defaults to true.
     #[serde(default = "default_true")]
     pub remember: bool,
 }
 
+/// Export the result of a macro run.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroExportResultRequest {
+    /// Id of the macro run whose result to export, as returned by `macro.run`.
     pub run_id: String,
 }
 
