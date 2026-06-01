@@ -2,6 +2,26 @@ import { createApp } from 'vue/dist/vue.esm-bundler.js';
 import './styles.css';
 import logoUrl from '../../../../assets/brand/winctl-logo.svg';
 
+// Mermaid is heavy and only needed when a doc actually renders a diagram, so it is
+// lazy-loaded (code-split) on first use rather than bundled into the main entry.
+let mermaidSeq = 0;
+let mermaidPromise = null;
+function getMermaid() {
+  if (!mermaidPromise) {
+    mermaidPromise = import('mermaid').then(({ default: mermaid }) => {
+      const prefersDark =
+        window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: prefersDark ? 'dark' : 'default',
+      });
+      return mermaid;
+    });
+  }
+  return mermaidPromise;
+}
+
 const params = new URLSearchParams(window.location.search);
 const urlToken = params.get('token');
 if (urlToken) {
@@ -51,6 +71,12 @@ createApp({
       autoRefresh: true,
       lastUpdated: null,
       intervalId: null,
+      docs: [],
+      activeDocSlug: null,
+      docsLoaded: false,
+      docsLoading: false,
+      docsError: null,
+      docsSearch: '',
       tabs: [
         { id: 'overview', label: 'Overview' },
         { id: 'control', label: 'Control' },
@@ -60,6 +86,7 @@ createApp({
         { id: 'windows', label: 'Windows' },
         { id: 'processes', label: 'Processes' },
         { id: 'memory', label: 'Memory' },
+        { id: 'docs', label: 'Docs' },
         { id: 'raw', label: 'Raw' },
       ],
     };
@@ -185,6 +212,23 @@ createApp({
       if (status === 'armed') return 'badge-success';
       return 'badge-ghost';
     },
+    filteredDocs() {
+      const query = this.docsSearch.trim().toLowerCase();
+      if (!query) return this.docs;
+      return this.docs.filter(
+        (doc) =>
+          doc.title.toLowerCase().includes(query) ||
+          doc.slug.toLowerCase().includes(query),
+      );
+    },
+    activeDoc() {
+      return this.docs.find((doc) => doc.slug === this.activeDocSlug) ?? null;
+    },
+  },
+  watch: {
+    selectedTab(tab) {
+      if (tab === 'docs') this.loadDocs();
+    },
   },
   mounted() {
     this.loadState();
@@ -270,6 +314,53 @@ createApp({
         this.screenshotResult = await response.json();
       } catch (error) {
         this.inspectError = String(error);
+      }
+    },
+    async loadDocs() {
+      if (this.docsLoaded || this.docsLoading) return;
+      this.docsLoading = true;
+      this.docsError = null;
+      try {
+        const response = await fetch('/dashboard/docs', {
+          cache: 'no-store',
+          headers: authHeaders(),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        this.docs = payload.docs ?? [];
+        this.docsLoaded = true;
+        if (this.docs.length) {
+          this.selectDoc(this.activeDocSlug ?? this.docs[0].slug);
+        }
+      } catch (error) {
+        this.docsError = String(error);
+      } finally {
+        this.docsLoading = false;
+      }
+    },
+    selectDoc(slug) {
+      this.activeDocSlug = slug;
+      this.renderMermaid();
+    },
+    async renderMermaid() {
+      await this.$nextTick();
+      const host = this.$el?.querySelector?.('.winctl-markdown');
+      if (!host) return;
+      const blocks = host.querySelectorAll('code.language-mermaid');
+      if (!blocks.length) return;
+      const mermaid = await getMermaid();
+      for (const code of blocks) {
+        const target = code.closest('pre') ?? code;
+        const definition = code.textContent ?? '';
+        try {
+          const { svg } = await mermaid.render(`winctl-mermaid-${mermaidSeq++}`, definition);
+          const wrapper = document.createElement('div');
+          wrapper.className = 'winctl-mermaid';
+          wrapper.innerHTML = svg;
+          target.replaceWith(wrapper);
+        } catch (error) {
+          // Leave the original code block in place if the diagram fails to parse.
+        }
       }
     },
   },
@@ -711,6 +802,42 @@ createApp({
               <span class="badge badge-info badge-outline">{{ macroItems.length }}</span>
             </div>
             <pre class="m-0 max-h-[560px] overflow-auto p-4 text-xs">{{ pretty(data?.macros ?? {}) }}</pre>
+          </section>
+        </section>
+
+        <section v-if="selectedTab === 'docs'" class="grid gap-5 lg:grid-cols-[260px_1fr]">
+          <section class="winctl-card overflow-hidden">
+            <div class="winctl-card-header px-4 py-3">
+              <h2 class="text-sm font-semibold">Tool docs</h2>
+            </div>
+            <div class="p-3 space-y-3">
+              <input
+                v-model="docsSearch"
+                type="search"
+                placeholder="Search docs"
+                class="input input-sm input-bordered w-full"
+              />
+              <div v-if="docsLoading" class="px-1 text-sm opacity-70">Loading docs…</div>
+              <div v-else-if="docsError" class="px-1 text-sm text-error">{{ docsError }}</div>
+              <ul v-else class="menu menu-sm w-full p-0 max-h-[70vh] flex-nowrap overflow-y-auto">
+                <li v-for="doc in filteredDocs" :key="doc.slug">
+                  <a
+                    :class="{ active: doc.slug === activeDocSlug }"
+                    @click="selectDoc(doc.slug)"
+                  >{{ doc.title }}</a>
+                </li>
+                <li v-if="!filteredDocs.length" class="px-2 py-1 text-sm opacity-60">No matches</li>
+              </ul>
+            </div>
+          </section>
+          <section class="winctl-card overflow-hidden">
+            <div class="winctl-card-header px-4 py-3">
+              <h2 class="text-sm font-semibold">{{ activeDoc?.title ?? 'Select a document' }}</h2>
+            </div>
+            <div
+              class="winctl-markdown max-h-[80vh] overflow-y-auto p-5"
+              v-html="activeDoc?.html ?? '<p class=&quot;opacity-60&quot;>Choose a tool doc from the list.</p>'"
+            ></div>
           </section>
         </section>
 

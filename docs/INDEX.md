@@ -1,5 +1,19 @@
 # Winctl MCP Tool Index
 
+The typical driving loop: discover a window, bind it by stable identity, arm the
+consent gate, act through UI Automation, then verify — re-binding if a target
+goes stale.
+
+```mermaid
+flowchart LR
+    find["windows.find"] --> bind["windows.bind (bound_id)"]
+    bind --> arm["control.arm"]
+    arm --> act["act: uia.find then uia.invoke / input.* / macro.run"]
+    act --> verify["verify: uia.get_value / assert.*"]
+    verify -->|stale target| bind
+    arm -.->|control.revoke or Ctrl+Alt+Esc| stop["revoked (fail closed)"]
+```
+
 | Agent name | Tool name | Description |
 | --- | --- | --- |
 | `winctl-mcp` | [`app.launch`](APP_LAUNCH.md) | Launch an executable, protocol handler, packaged app, or Start Menu app target without shell command concatenation. |

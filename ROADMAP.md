@@ -221,6 +221,21 @@
 - Add desktop notifications and tray alerts for test suite completions or failures.
 - Add a quick-toggle in the tray app to enter/exit recording mode.
 
+## Phase 17: Dashboard Docs and Live Observability
+
+**Status:** In progress — docs tab shipped.
+
+**Audit comments:** Added a Docs tab serving every `docs/*.md` page, rendered to HTML at build time with comrak and served from `/dashboard/docs`; ```mermaid blocks render as live diagrams via a vendored, lazy-loaded Mermaid.js, with markdown styled to match the dashboard. Added orientation diagrams (driving loop, control-gate state machine, macro lifecycle). Live activity feed, active-control banner, auto-refresh feeds, run timeline, and visual-diff viewer remain follow-up work.
+
+- Add a top-menu Docs/Tools tab serving every tool doc from `docs/*.md`, rendered to HTML at build time with comrak (GFM tables, code fences; raw HTML disabled).
+- Render ```mermaid blocks as live diagrams: convert `code.language-mermaid` into Mermaid nodes and run a vendored (embedded, not CDN) Mermaid.js, lazy-loaded on first use.
+- Style rendered markdown to match the dashboard (slate theme, `winctl-table` overrides); add doc search and deep-links from tool names.
+- Add a live activity/audit feed of tool calls and control events (tool, target, args summary, ok/fail, consent decisions) sourced from the control event model.
+- Add an active-control banner with a Stop button wired to `control.revoke`/`control.emergency_stop` (the in-UI kill switch).
+- Add auto-refreshing screenshot + UI Automation feeds for the active bound target, with element-bounds overlay and an interactive UIA tree explorer.
+- Add a macro/test run timeline (per-step pass/fail + artifacts), a visual-diff viewer for `capture.compare_baseline` failures, and live `process.metrics` gauges.
+- Keep the dashboard loopback-first and read-only except for the explicit Stop action.
+
 ## Not Planned Without Further Design
 
 - Unguarded arbitrary shell execution.

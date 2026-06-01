@@ -4,6 +4,17 @@
 
 `winctl.macro.v1` is the versioned JSON manifest format for replayable Windows UI automation.
 
+A manifest moves from authoring to verified replay through these tools:
+
+```mermaid
+flowchart LR
+    author["author or recorder.stop"] --> validate["macro.validate"]
+    validate --> dry["macro.dry_run"]
+    dry --> promote["macro.promote (save_to_memory)"]
+    promote --> run["macro.run (needs control.arm)"]
+    run --> export["macro.export_result"]
+```
+
 ## Required Shape
 
 - `version`: must be `winctl.macro.v1`.
