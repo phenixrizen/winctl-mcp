@@ -604,6 +604,8 @@ async fn windows_video_capture_records_display_artifact() {
                 "display_index": 0,
                 "frame_interval_ms": 200,
                 "max_duration_ms": 5000,
+                "max_frame_width": 640,
+                "max_frame_height": 360,
                 "output_name": "windows-runtime-video"
             }),
         )
@@ -613,7 +615,7 @@ async fn windows_video_capture_records_display_artifact() {
         .as_str()
         .expect("video_start should return recording_id")
         .to_owned();
-    tokio::time::sleep(Duration::from_millis(850)).await;
+    tokio::time::sleep(Duration::from_millis(3000)).await;
     let stop = harness
         .call_tool(
             "capture.video_stop",
@@ -638,6 +640,20 @@ async fn windows_video_capture_records_display_artifact() {
         "video recording should capture multiple frames: {stop:#}"
     );
     assert_eq!(stop["recording"]["format"], "gif");
+    assert!(
+        stop["recording"]["encoded_width"]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            <= 640,
+        "video GIF width should respect max_frame_width: {stop:#}"
+    );
+    assert!(
+        stop["recording"]["encoded_height"]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            <= 360,
+        "video GIF height should respect max_frame_height: {stop:#}"
+    );
 }
 
 struct McpHarness {

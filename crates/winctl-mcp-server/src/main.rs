@@ -715,6 +715,8 @@ pub struct VideoStartRequest {
     pub display_index: Option<usize>,
     pub frame_interval_ms: Option<u64>,
     pub max_duration_ms: Option<u64>,
+    pub max_frame_width: Option<u32>,
+    pub max_frame_height: Option<u32>,
     pub output_name: Option<String>,
 }
 

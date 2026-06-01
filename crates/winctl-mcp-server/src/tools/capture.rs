@@ -32,6 +32,10 @@ static CAPTURE_HELPER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const MAX_COMPLETED_VIDEO_RECORDINGS: usize = 50;
 const DEFAULT_VIDEO_FRAME_INTERVAL_MS: u64 = 250;
 const DEFAULT_VIDEO_MAX_DURATION_MS: u64 = 5 * 60 * 1000;
+const DEFAULT_VIDEO_MAX_FRAME_WIDTH: u32 = 1280;
+const DEFAULT_VIDEO_MAX_FRAME_HEIGHT: u32 = 720;
+const MIN_VIDEO_FRAME_DIMENSION: u32 = 64;
+const MAX_VIDEO_FRAME_DIMENSION: u32 = 7680;
 
 #[derive(Default)]
 pub struct VideoRuntimeState {
@@ -46,6 +50,8 @@ struct ActiveVideoRecording {
     target: VideoTarget,
     frame_interval_ms: u64,
     max_duration_ms: u64,
+    max_frame_width: u32,
+    max_frame_height: u32,
     output_path: PathBuf,
     frames_dir: PathBuf,
     stop: Arc<AtomicBool>,
@@ -76,9 +82,19 @@ pub struct VideoRecordingSummary {
     pub frames_dir: String,
     pub frame_count: usize,
     pub frame_interval_ms: u64,
+    pub max_frame_width: u32,
+    pub max_frame_height: u32,
+    pub encoded_width: Option<u32>,
+    pub encoded_height: Option<u32>,
     pub elapsed_ms: u64,
     pub format: String,
     pub warnings: Vec<String>,
+}
+
+struct EncodedGifInfo {
+    width: u32,
+    height: u32,
+    resized: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -323,6 +339,14 @@ pub fn video_start(state: &AppState, request: VideoStartRequest) -> serde_json::
         .max_duration_ms
         .unwrap_or(DEFAULT_VIDEO_MAX_DURATION_MS)
         .clamp(500, 30 * 60 * 1000);
+    let max_frame_width = request
+        .max_frame_width
+        .unwrap_or(DEFAULT_VIDEO_MAX_FRAME_WIDTH)
+        .clamp(MIN_VIDEO_FRAME_DIMENSION, MAX_VIDEO_FRAME_DIMENSION);
+    let max_frame_height = request
+        .max_frame_height
+        .unwrap_or(DEFAULT_VIDEO_MAX_FRAME_HEIGHT)
+        .clamp(MIN_VIDEO_FRAME_DIMENSION, MAX_VIDEO_FRAME_DIMENSION);
     let mut runtime = state.video_runtime.lock().expect("video mutex poisoned");
     if let Some(active) = &runtime.active {
         return serde_json::json!({
@@ -369,6 +393,8 @@ pub fn video_start(state: &AppState, request: VideoStartRequest) -> serde_json::
             target_for_thread,
             frame_interval_ms,
             max_duration_ms,
+            max_frame_width,
+            max_frame_height,
             frames_dir_for_thread,
             output_path_for_thread,
             stop_for_thread,
@@ -381,6 +407,8 @@ pub fn video_start(state: &AppState, request: VideoStartRequest) -> serde_json::
         target,
         frame_interval_ms,
         max_duration_ms,
+        max_frame_width,
+        max_frame_height,
         output_path: output_path.clone(),
         frames_dir: frames_dir.clone(),
         stop,
@@ -439,6 +467,10 @@ pub fn video_stop(state: &AppState, request: VideoStopRequest) -> serde_json::Va
             frames_dir: active.frames_dir.to_string_lossy().into_owned(),
             frame_count: 0,
             frame_interval_ms: active.frame_interval_ms,
+            max_frame_width: active.max_frame_width,
+            max_frame_height: active.max_frame_height,
+            encoded_width: None,
+            encoded_height: None,
             elapsed_ms: 0,
             format: "gif".into(),
             warnings: vec![format!(
@@ -510,6 +542,8 @@ fn active_summary(active: &ActiveVideoRecording) -> serde_json::Value {
         "target": target_json(&active.target),
         "frame_interval_ms": active.frame_interval_ms,
         "max_duration_ms": active.max_duration_ms,
+        "max_frame_width": active.max_frame_width,
+        "max_frame_height": active.max_frame_height,
         "output_path": active.output_path,
         "frames_dir": active.frames_dir,
         "format": "gif",
@@ -522,6 +556,8 @@ fn run_video_recording(
     target: VideoTarget,
     frame_interval_ms: u64,
     max_duration_ms: u64,
+    max_frame_width: u32,
+    max_frame_height: u32,
     frames_dir: PathBuf,
     output_path: PathBuf,
     stop: Arc<AtomicBool>,
@@ -553,18 +589,34 @@ fn run_video_recording(
         thread::sleep(Duration::from_millis(frame_interval_ms));
     }
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    let output = if frame_paths.is_empty() {
+    let encoded = if frame_paths.is_empty() {
         warnings.push("recording stopped before any frames were captured".into());
         None
     } else {
-        match encode_gif(&frame_paths, &output_path, frame_interval_ms) {
-            Ok(()) => Some(output_path.to_string_lossy().into_owned()),
+        match encode_gif(
+            &frame_paths,
+            &output_path,
+            frame_interval_ms,
+            max_frame_width,
+            max_frame_height,
+        ) {
+            Ok(info) => {
+                if info.resized {
+                    warnings.push(format!(
+                        "encoded GIF frames were scaled to fit within {max_frame_width}x{max_frame_height}"
+                    ));
+                }
+                Some(info)
+            }
             Err(error) => {
                 warnings.push(error);
                 None
             }
         }
     };
+    let output = encoded
+        .as_ref()
+        .map(|_| output_path.to_string_lossy().into_owned());
     let status = if output.is_some() {
         "completed"
     } else {
@@ -580,6 +632,10 @@ fn run_video_recording(
         frames_dir: frames_dir.to_string_lossy().into_owned(),
         frame_count: frame_paths.len(),
         frame_interval_ms,
+        max_frame_width,
+        max_frame_height,
+        encoded_width: encoded.as_ref().map(|info| info.width),
+        encoded_height: encoded.as_ref().map(|info| info.height),
         elapsed_ms,
         format: "gif".into(),
         warnings,
@@ -621,7 +677,9 @@ fn encode_gif(
     frame_paths: &[PathBuf],
     output_path: &Path,
     frame_interval_ms: u64,
-) -> Result<(), String> {
+    max_frame_width: u32,
+    max_frame_height: u32,
+) -> Result<EncodedGifInfo, String> {
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
@@ -636,11 +694,11 @@ fn encode_gif(
             output_path.display()
         )
     })?;
-    let mut encoder = image::codecs::gif::GifEncoder::new(file);
-    encoder
-        .set_repeat(image::codecs::gif::Repeat::Infinite)
-        .map_err(|error| format!("failed to configure gif encoder: {error}"))?;
-    let delay = image::Delay::from_numer_denom_ms(frame_interval_ms as u32, 1);
+    let mut writer = Some(std::io::BufWriter::new(file));
+    let mut encoder = None;
+    let delay_cs = ((frame_interval_ms + 9) / 10).clamp(1, u16::MAX as u64) as u16;
+    let mut encoded = None;
+    let mut resized_any = false;
     for frame_path in frame_paths {
         let frame = image::open(frame_path)
             .map_err(|error| {
@@ -650,11 +708,92 @@ fn encode_gif(
                 )
             })?
             .into_rgba8();
+        let (original_width, original_height) = frame.dimensions();
+        let (frame, resized) = resize_frame_for_gif(frame, max_frame_width, max_frame_height);
+        let (encoded_width, encoded_height) = frame.dimensions();
+        let encoder = match &mut encoder {
+            Some(encoder) => encoder,
+            None => {
+                let writer = writer
+                    .take()
+                    .ok_or_else(|| "video GIF writer was already consumed".to_string())?;
+                let mut new_encoder =
+                    gif::Encoder::new(writer, encoded_width as u16, encoded_height as u16, &[])
+                        .map_err(|error| format!("failed to create gif encoder: {error}"))?;
+                new_encoder
+                    .set_repeat(gif::Repeat::Infinite)
+                    .map_err(|error| format!("failed to configure gif encoder: {error}"))?;
+                encoder.insert(new_encoder)
+            }
+        };
+        resized_any |= resized;
+        if encoded.is_none() {
+            encoded = Some(EncodedGifInfo {
+                width: encoded_width,
+                height: encoded_height,
+                resized: false,
+            });
+        }
+        tracing::debug!(
+            frame_path = %frame_path.display(),
+            original_width,
+            original_height,
+            encoded_width,
+            encoded_height,
+            resized,
+            "encoding video frame"
+        );
+        let mut pixels = frame.into_raw();
+        let mut gif_frame = gif::Frame::from_rgba_speed(
+            encoded_width as u16,
+            encoded_height as u16,
+            &mut pixels,
+            30,
+        );
+        gif_frame.delay = delay_cs;
         encoder
-            .encode_frame(image::Frame::from_parts(frame, 0, 0, delay))
+            .write_frame(&gif_frame)
             .map_err(|error| format!("failed to encode video gif: {error}"))?;
     }
-    Ok(())
+    if let Some(encoder) = encoder {
+        let mut writer = encoder
+            .into_inner()
+            .map_err(|error| format!("failed to finish video gif: {error}"))?;
+        writer.flush().map_err(|error| {
+            format!(
+                "failed to flush video artifact {}: {error}",
+                output_path.display()
+            )
+        })?;
+    }
+    let mut info = encoded.ok_or_else(|| "no video frames were available to encode".to_string())?;
+    info.resized = resized_any;
+    Ok(info)
+}
+
+fn resize_frame_for_gif(
+    frame: image::RgbaImage,
+    max_frame_width: u32,
+    max_frame_height: u32,
+) -> (image::RgbaImage, bool) {
+    let (width, height) = frame.dimensions();
+    if width <= max_frame_width && height <= max_frame_height {
+        return (frame, false);
+    }
+    let width_scale = max_frame_width as f64 / width.max(1) as f64;
+    let height_scale = max_frame_height as f64 / height.max(1) as f64;
+    let scale = width_scale.min(height_scale).min(1.0);
+    let resized_width = ((width as f64 * scale).round() as u32).max(1);
+    let resized_height = ((height as f64 * scale).round() as u32).max(1);
+    (
+        image::imageops::resize(
+            &frame,
+            resized_width,
+            resized_height,
+            image::imageops::FilterType::Triangle,
+        ),
+        true,
+    )
 }
 
 fn target_json(target: &VideoTarget) -> serde_json::Value {

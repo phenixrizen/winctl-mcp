@@ -67,6 +67,7 @@ regex = "1"
 roxmltree = "0.20"
 base64 = "0.22"
 image = "0.25"
+gif = "0.14"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sqlite-vec = "=0.1.9"
 uuid = { version = "1", features = ["v4", "serde"] }
