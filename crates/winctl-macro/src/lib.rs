@@ -116,6 +116,10 @@ pub struct MacroStep {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MacroTarget {
+    Current,
+    Alias {
+        name: String,
+    },
     BoundWindow {
         bound_id: Option<String>,
     },
@@ -438,12 +442,14 @@ pub fn validate_manifest(manifest: &MacroManifest) -> MacroValidationReport {
     }
 
     let mut ids = HashSet::new();
+    let mut target_aliases = HashSet::new();
     validate_steps(
         manifest,
         &manifest.preconditions,
         MacroSection::Precondition,
         "/preconditions",
         &mut ids,
+        &mut target_aliases,
         &mut issues,
     );
     validate_steps(
@@ -452,6 +458,7 @@ pub fn validate_manifest(manifest: &MacroManifest) -> MacroValidationReport {
         MacroSection::Step,
         "/steps",
         &mut ids,
+        &mut target_aliases,
         &mut issues,
     );
     validate_steps(
@@ -460,6 +467,7 @@ pub fn validate_manifest(manifest: &MacroManifest) -> MacroValidationReport {
         MacroSection::Wait,
         "/waits",
         &mut ids,
+        &mut target_aliases,
         &mut issues,
     );
     validate_steps(
@@ -468,6 +476,7 @@ pub fn validate_manifest(manifest: &MacroManifest) -> MacroValidationReport {
         MacroSection::Assertion,
         "/assertions",
         &mut ids,
+        &mut target_aliases,
         &mut issues,
     );
     validate_steps(
@@ -476,6 +485,7 @@ pub fn validate_manifest(manifest: &MacroManifest) -> MacroValidationReport {
         MacroSection::Cleanup,
         "/cleanup",
         &mut ids,
+        &mut target_aliases,
         &mut issues,
     );
 
@@ -589,6 +599,7 @@ fn validate_steps(
     section: MacroSection,
     path: &str,
     ids: &mut HashSet<String>,
+    target_aliases: &mut HashSet<String>,
     issues: &mut Vec<MacroValidationIssue>,
 ) {
     for (index, step) in steps.iter().enumerate() {
@@ -614,7 +625,10 @@ fn validate_steps(
             ));
             continue;
         };
-        if descriptor.requires_bound_window && !manifest_has_bound_identity(manifest) {
+        validate_target(step, &step_path, target_aliases, issues);
+        let needs_bound_window =
+            descriptor.requires_bound_window && tool_args_need_bound_window(&step.tool, &step.args);
+        if needs_bound_window && !manifest_has_bound_identity(manifest) {
             issues.push(error(
                 "target_identity_required",
                 format!(
@@ -622,6 +636,16 @@ fn validate_steps(
                     step.id, step.tool
                 ),
                 step_path.clone(),
+            ));
+        }
+        if needs_bound_window && step.target.is_none() && !args_has_bound_id(&step.args) {
+            issues.push(warning(
+                "implicit_current_target",
+                format!(
+                    "step {} uses {} without an explicit target; replay will resolve the current bound window at dispatch time",
+                    step.id, step.tool
+                ),
+                format!("{step_path}/target"),
             ));
         }
         if matches!(step.target, Some(MacroTarget::Coordinates { .. }))
@@ -639,6 +663,11 @@ fn validate_steps(
                 "assertion steps must not mutate the UI",
                 step_path,
             ));
+        }
+        if step.tool == "windows.bind" {
+            if let Some(alias) = target_alias(step.target.as_ref()) {
+                target_aliases.insert(alias.to_owned());
+            }
         }
     }
 }
@@ -711,6 +740,8 @@ fn plan_tool_call(
 
 fn target_strategy(target: Option<&MacroTarget>) -> String {
     match target {
+        Some(MacroTarget::Current) => "current".into(),
+        Some(MacroTarget::Alias { .. }) => "alias".into(),
         Some(MacroTarget::BoundWindow { .. }) => "bound_window".into(),
         Some(MacroTarget::LaunchedProcessWindow { .. }) => "launched_process_window".into(),
         Some(MacroTarget::UiElement(_)) => "uia_element".into(),
@@ -736,6 +767,76 @@ fn manifest_has_bound_identity(manifest: &MacroManifest) -> bool {
         .map(|bind| bind.required_executable.is_some() || bind.expected_identity_json.is_some())
         .unwrap_or(false);
     app_identity_required && bind_identity
+}
+
+fn validate_target(
+    step: &MacroStep,
+    step_path: &str,
+    target_aliases: &HashSet<String>,
+    issues: &mut Vec<MacroValidationIssue>,
+) {
+    let Some(target) = &step.target else {
+        return;
+    };
+    match target {
+        MacroTarget::Alias { name } => {
+            if name.trim().is_empty() {
+                issues.push(error(
+                    "target_alias_required",
+                    "target alias name is required",
+                    format!("{step_path}/target/name"),
+                ));
+            } else if step.tool != "windows.bind" && !target_aliases.contains(name) {
+                issues.push(error(
+                    "target_alias_not_bound",
+                    format!(
+                        "target alias {name} is used before a windows.bind step establishes it"
+                    ),
+                    format!("{step_path}/target/name"),
+                ));
+            }
+        }
+        MacroTarget::BoundWindow {
+            bound_id: Some(bound_id),
+        } if bound_id.trim().is_empty() => issues.push(error(
+            "bound_id_required",
+            "bound window target bound_id cannot be empty",
+            format!("{step_path}/target/bound_id"),
+        )),
+        _ => {}
+    }
+}
+
+fn target_alias(target: Option<&MacroTarget>) -> Option<&str> {
+    match target {
+        Some(MacroTarget::Alias { name }) if !name.trim().is_empty() => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn args_has_bound_id(args: &Value) -> bool {
+    args.get("bound_id")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn tool_args_need_bound_window(tool: &str, args: &Value) -> bool {
+    match tool {
+        "capture.ocr_region" => !args_has_string(args, "image_path"),
+        "macro.assert_image_checkpoint" => !args_has_string(args, "actual_path"),
+        "macro.assert_text_checkpoint" => {
+            !args_has_string(args, "actual_text") && !args_has_string(args, "image_path")
+        }
+        _ => true,
+    }
+}
+
+fn args_has_string(args: &Value, key: &str) -> bool {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn error(
@@ -956,6 +1057,27 @@ const SUPPORTED_TOOLS: &[ToolDescriptor] = &[
         produces_artifact: true,
     },
     ToolDescriptor {
+        name: "capture.ocr_region",
+        category: "capture",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: true,
+    },
+    ToolDescriptor {
+        name: "capture.read_text",
+        category: "capture",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "capture.compare_baseline",
+        category: "capture",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: true,
+    },
+    ToolDescriptor {
         name: "capture.video_start",
         category: "capture",
         mutates_ui: false,
@@ -971,6 +1093,13 @@ const SUPPORTED_TOOLS: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: "input.click",
+        category: "input",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "input.mouse_move",
         category: "input",
         mutates_ui: true,
         requires_bound_window: true,
@@ -1054,6 +1183,90 @@ const SUPPORTED_TOOLS: &[ToolDescriptor] = &[
         produces_artifact: false,
     },
     ToolDescriptor {
+        name: "uia.invoke",
+        category: "uia",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "uia.set_value",
+        category: "uia",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "uia.get_value",
+        category: "uia",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "uia.toggle",
+        category: "uia",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "uia.expand_collapse",
+        category: "uia",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "uia.select",
+        category: "uia",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "uia.set_focus",
+        category: "uia",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "uia.range_value",
+        category: "uia",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "uia.scroll_into_view",
+        category: "uia",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "uia.wait_for_element",
+        category: "uia",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "dialogs.list",
+        category: "dialog",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "dialogs.invoke_button",
+        category: "dialog",
+        mutates_ui: true,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
         name: "macro.assert_uia_element",
         category: "assertion",
         mutates_ui: false,
@@ -1087,6 +1300,21 @@ mod tests {
         let decoded: MacroManifest = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, manifest);
         assert_eq!(decoded.version, MACRO_MANIFEST_VERSION);
+    }
+
+    #[test]
+    fn macro_targets_round_trip_current_and_alias() {
+        let targets = vec![
+            MacroTarget::Current,
+            MacroTarget::Alias {
+                name: "app_main".into(),
+            },
+        ];
+        let encoded = serde_json::to_string(&targets).unwrap();
+        let decoded: Vec<MacroTarget> = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, targets);
+        assert!(encoded.contains("\"type\":\"current\""));
+        assert!(encoded.contains("\"type\":\"alias\""));
     }
 
     #[test]
@@ -1162,6 +1390,73 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "coordinate_fallback_metadata_required"));
+    }
+
+    #[test]
+    fn validator_warns_for_implicit_current_target() {
+        let mut manifest = betty_manifest();
+        manifest.steps[1].args = serde_json::json!({
+            "x": 0.5,
+            "y": 0.5,
+            "coordinate_space": "normalized_window"
+        });
+        manifest.steps[1].target = None;
+
+        let report = validate_manifest(&manifest);
+        assert!(report.valid, "expected warning-only report: {report:?}");
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "implicit_current_target"
+                && issue.severity == MacroValidationSeverity::Warning));
+    }
+
+    #[test]
+    fn validator_rejects_alias_before_bind() {
+        let mut manifest = betty_manifest();
+        manifest.steps[0].args = Value::Null;
+        manifest.steps[0].target = Some(MacroTarget::Alias {
+            name: "app_main".into(),
+        });
+
+        let report = validate_manifest(&manifest);
+        assert!(!report.valid);
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "target_alias_not_bound"));
+    }
+
+    #[test]
+    fn validator_accepts_alias_established_by_bind_step() {
+        let mut manifest = betty_manifest();
+        manifest.preconditions.insert(
+            0,
+            MacroStep {
+                id: "bind-main-alias".into(),
+                tool: "windows.bind".into(),
+                args: serde_json::json!({"pid": 1234, "must_be_visible": true}),
+                target: Some(MacroTarget::Alias {
+                    name: "app_main".into(),
+                }),
+                timeout_ms: None,
+                required: true,
+                continue_on_failure: false,
+                coordinate_fallback: None,
+                audit: StepAudit::default(),
+            },
+        );
+        manifest.steps[0].args = Value::Null;
+        manifest.steps[0].target = Some(MacroTarget::Alias {
+            name: "app_main".into(),
+        });
+
+        let report = validate_manifest(&manifest);
+        assert!(
+            report.valid,
+            "expected alias to validate after bind step, got {:?}",
+            report.issues
+        );
     }
 
     #[test]

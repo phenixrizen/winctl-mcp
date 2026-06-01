@@ -4,7 +4,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use winctl_macro::{
-    validate_manifest, AppIdentity, MacroManifest, MacroStep, MACRO_MANIFEST_VERSION,
+    tool_descriptor, validate_manifest, AppIdentity, MacroManifest, MacroStep, MacroTarget,
+    MACRO_MANIFEST_VERSION,
 };
 use winctl_memory::RememberRequest;
 
@@ -76,11 +77,15 @@ pub fn recorder_record_step(
         return recorder_error("recording_not_active", "no active recording session");
     };
     let step_index = session.steps.len() + 1;
+    let args = request.args.unwrap_or(Value::Null);
+    let target = request
+        .target
+        .or_else(|| default_recorded_target(&request.tool, &args));
     let step = MacroStep {
         id: request.id.unwrap_or_else(|| format!("step-{step_index}")),
         tool: request.tool,
-        args: request.args.unwrap_or(Value::Null),
-        target: request.target,
+        args,
+        target,
         timeout_ms: request.timeout_ms,
         required: request.required,
         continue_on_failure: request.continue_on_failure,
@@ -211,6 +216,43 @@ fn manifest_from_session(session: &RecordingSession) -> MacroManifest {
         artifacts: Default::default(),
         replay: Default::default(),
     }
+}
+
+fn default_recorded_target(tool: &str, args: &Value) -> Option<MacroTarget> {
+    let descriptor = tool_descriptor(tool)?;
+    if descriptor.requires_bound_window
+        && recorded_tool_needs_bound(tool, args)
+        && !args_has_bound_id(args)
+    {
+        Some(MacroTarget::Current)
+    } else {
+        None
+    }
+}
+
+fn recorded_tool_needs_bound(tool: &str, args: &Value) -> bool {
+    match tool {
+        "capture.ocr_region" => !args_has_string(args, "image_path"),
+        "macro.assert_image_checkpoint" => !args_has_string(args, "actual_path"),
+        "macro.assert_text_checkpoint" => {
+            !args_has_string(args, "actual_text") && !args_has_string(args, "image_path")
+        }
+        _ => true,
+    }
+}
+
+fn args_has_bound_id(args: &Value) -> bool {
+    args.get("bound_id")
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn args_has_string(args: &Value, key: &str) -> bool {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn recorder_error(code: &str, message: &str) -> serde_json::Value {

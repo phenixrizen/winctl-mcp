@@ -3865,9 +3865,9 @@ async fn dashboard_html() -> impl IntoResponse {
 async fn dashboard_docs_json() -> impl IntoResponse {
     let docs: Vec<_> = DASHBOARD_DOCS
         .iter()
-        .map(|(slug, title, html)| {
-            serde_json::json!({ "slug": slug, "title": title, "html": html })
-        })
+        .map(
+            |(slug, title, html)| serde_json::json!({ "slug": slug, "title": title, "html": html }),
+        )
         .collect();
     AxumJson(serde_json::json!({ "ok": true, "docs": docs }))
 }
@@ -5187,6 +5187,47 @@ mod tests {
         assert_eq!(stopped["ok"], true);
         assert_eq!(stopped["manifest"]["steps"][0]["tool"], "input.delay");
         assert_eq!(stopped["validation"]["valid"], true);
+    }
+
+    #[test]
+    fn recorder_defaults_target_bound_steps_to_current_target() {
+        let state = AppState::with_capture_dir_and_memory(
+            std::env::temp_dir().join("winctl-mcp-test-captures"),
+            winctl_memory::MemoryStore::open_in_memory().unwrap(),
+        );
+        let started = tools::recorder::recorder_start(
+            &state,
+            RecorderStartRequest {
+                title: "Recorded click".into(),
+                description: None,
+                tags: Vec::new(),
+                app_identity: None,
+            },
+        );
+        assert_eq!(started["ok"], true);
+
+        let recorded = tools::recorder::recorder_record_step(
+            &state,
+            RecorderRecordStepRequest {
+                id: Some("click".into()),
+                tool: "input.click".into(),
+                args: Some(serde_json::json!({
+                    "x": 0.5,
+                    "y": 0.5,
+                    "coordinate_space": "normalized_window"
+                })),
+                target: None,
+                timeout_ms: None,
+                required: true,
+                continue_on_failure: false,
+                coordinate_fallback: None,
+                audit: None,
+                note: None,
+            },
+        );
+
+        assert_eq!(recorded["ok"], true);
+        assert_eq!(recorded["step"]["target"]["type"], "current");
     }
 
     #[test]

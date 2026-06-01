@@ -236,6 +236,25 @@
 - Add a macro/test run timeline (per-step pass/fail + artifacts), a visual-diff viewer for `capture.compare_baseline` failures, and live `process.metrics` gauges.
 - Keep the dashboard loopback-first and read-only except for the explicit Stop action.
 
+## Phase 18: Macro Replay Target Resolution
+
+**Status:** Implemented for the replay/runtime path; runtime preflight remains future work.
+
+**Audit comments:** A replay failure exposed a model gap: the macro runtime can launch an app, bind the fresh window, and store `context.bound_id`, but target-bound steps are inconsistent. Some tools use the macro context through helper logic, while `input.*` and most `uia.*` steps deserialize raw args and therefore require `bound_id` to already be present. The fix should not be blanket injection of whatever `context.bound_id` happens to hold. The safer design is a first-class target resolver that converts explicit step target intent into a freshly revalidated `bound_id` immediately before dispatch.
+
+**Claude review summary:** Keep targeting explicit and centrally resolved. Do not silently inject a current target into every target-bound tool. Recorded manifests should use target aliases or a declared current target instead of persisting runtime `bound_id` values. Resolution must fail closed when the target is missing, stale, ambiguous, or not yet established.
+
+**Implementation notes:** Added `target: current` and `target: alias` manifest targets, alias-before-bind validation, a central macro pre-dispatch resolver that injects `bound_id` only after `AppState::revalidate_bound_window`, and runtime diagnostics for legacy `args.bound_id` or implicit-current fallback. The resolver now covers `windows.*`, `input.*` including `input.mouse_move`, UIA read/action/wait tools, bound capture tools, macro checkpoint assertions, and dialog tools in the macro tool table. Recorder output now defaults target-bound recorded steps to `target: current` when no explicit target is provided.
+
+- Add a typed macro target model for replay intent: current target, named target alias, launched-process window, and explicit legacy bound-window target.
+- Add a single pre-dispatch target resolver for all target-bound tools (`input.*`, `uia.*`, `windows.*`, `capture.*`, assertions, and dialogs). The resolver lowers `step.target` into `args.bound_id` only after revalidating HWND, PID, executable, and expected identity.
+- Keep explicit `args.bound_id` and `${bound_id}` substitutions backward compatible, but route them through the same resolver/revalidation path and emit deprecation diagnostics when a manifest persists runtime-specific handles.
+- Update recorder output to establish named target aliases during launch/bind and then record later steps against `target: current` or `target: alias`, not raw runtime `bound_id`.
+- Add static validation that catches target-bound steps with no declared target, alias-before-bind, multiple current-target candidates, missing launch/bind prerequisites, and target-bound request schemas that would still fail after lowering.
+- Add a read-only dry-run/preflight mode that launches/binds/revalidates/resolves targets but skips mutating input/UIA actions, returning a per-step target-resolution report before desktop control is armed.
+- Preserve fail-closed behavior: no title-only target resolution, no implicit fallback to a stale previous binding, no guessing when multiple windows match, and no coordinate or pixel fallback unless explicitly requested and reported.
+- Add integration coverage for launch -> bind -> target alias/current -> `input.*`/`uia.*` replay without manually editing `bound_id` into each step, plus negative tests for missing current target, stale HWND, PID recycle, and multi-window ambiguity.
+
 ## Not Planned Without Further Design
 
 - Unguarded arbitrary shell execution.
