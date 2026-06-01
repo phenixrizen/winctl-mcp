@@ -1456,7 +1456,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "server.ping",
-        description = "Return a minimal health response without touching Win32 APIs."
+        description = "Return a minimal health response without touching Win32 APIs. Read-only; no bound target or armed session needed. Returns `{ok, pong}` to confirm the server is reachable; use it as a liveness probe before other calls."
     )]
     pub async fn server_ping(&self) -> Json<serde_json::Value> {
         tracing::info!("server.ping requested");
@@ -1465,7 +1465,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "server.config",
-        description = "Return effective runtime configuration and security policy diagnostics."
+        description = "Return effective runtime configuration and security-policy diagnostics: capture paths, filesystem roots, mutation policy, network policy, memory settings, macro execution policy, and embedding metadata. Read-only; no bound target or armed session needed. Call after startup to confirm which mutation gates (clipboard/filesystem/registry) and roots are enabled before attempting gated operations."
     )]
     pub async fn server_config(&self) -> Json<serde_json::Value> {
         tracing::info!("server.config requested");
@@ -1483,7 +1483,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "control.state",
-        description = "Return desktop-control gate state, active target identity, consent decision, and recent control events."
+        description = "Return the desktop-control gate state (idle, armed, active, blocked, or revoked), active target identity, consent decision, recent in-memory control events, and durable audit-log entries. Read-only; no bound target or armed session needed. Use it to check whether control is armed before calling gated input/window/mutation tools."
     )]
     pub async fn control_state(&self) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -1495,7 +1495,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "control.arm",
-        description = "Arm desktop control for a session or bound target before sensitive focus, input, close, kill, mutation, macro, test, or UIA actions."
+        description = "Arm the desktop-control gate for a session or bound target so subsequent control-gated tools (input.*, uia action tools, windows.focus/close, process.kill, registry/filesystem/clipboard mutation, macro.run, test.run) are permitted; pass an optional `bound_id`, `allow_for_ms`, and audit `reason`. This is the precondition every gated tool checks; arming clears emergency-stop state and records an auditable event. Itself not gated."
     )]
     pub async fn control_arm(
         &self,
@@ -1511,7 +1511,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "control.consent",
-        description = "Record an allow_once, allow_session, deny, or revoke_session decision for desktop-control actions."
+        description = "Record an `allow_once`, `allow_session`, `deny`, or `revoke_session` consent decision for desktop-control actions, optionally scoped to a `session_id` or `bound_id`. Decisions are logged and surfaced through `control.state` for dashboard/tray display; use alongside `control.arm` to grant or withdraw control. Itself not gated."
     )]
     pub async fn control_consent(
         &self,
@@ -1527,7 +1527,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "control.notify",
-        description = "Record a pending desktop-control notification event for tray or dashboard display."
+        description = "Record a pending desktop-control notification event (tool name, optional `bound_id`, `action_kind`, cancelable `countdown_ms`) for tray or dashboard display before a control action runs. The event is recorded even when no native toast provider is enabled. Read-only side effect; not gated."
     )]
     pub async fn control_notify(
         &self,
@@ -1543,7 +1543,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "control.revoke",
-        description = "Emergency-stop desktop control and reject future sensitive actions until rearmed."
+        description = "Emergency-stop desktop control: fail-closed all sensitive control tools until rearmed. After this, gated tools return `control_consent_required` until `control.arm`/`control.consent` is called again. Itself not gated; use as the abort path."
     )]
     pub async fn control_revoke(
         &self,
@@ -1559,7 +1559,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "control.emergency_stop",
-        description = "Alias for control.revoke; immediately stops desktop control and requires a new arm/consent decision."
+        description = "Alias for `control.revoke`: immediately fail-closes desktop control and requires a new arm/consent decision before any gated tool runs. Intended as the tray/dashboard stop action; on Windows the `Ctrl+Alt+Esc` global hotkey triggers the same revoked state. Itself not gated."
     )]
     pub async fn control_emergency_stop(
         &self,
@@ -1575,7 +1575,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "memory.remember",
-        description = "Explicitly store a structured memory item with searchable text, tags, app/target identity, and sqlite-vec embedding metadata."
+        description = "Explicitly store a structured memory item (`kind`, `title`, searchable `text`, optional `manifest_json`, `tags`, app/target identity) with sqlite-vec embedding and FTS5 indexing. Memory is opt-in: the server never remembers procedures without this call. Returns the new item ID for later `memory.get`/`memory.update`. Read-only with respect to the desktop; not gated."
     )]
     pub async fn memory_remember(
         &self,
@@ -1591,7 +1591,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "memory.search",
-        description = "Search remembered procedures, observations, macros, and recipes using hybrid sqlite-vec, FTS5, tag, identity, recency, and usefulness ranking."
+        description = "Search remembered procedures, observations, macros, and recipes via hybrid sqlite-vec + FTS5 + tag + identity + recency + usefulness ranking; filter by `query`, `tags`, `kind`, or app/target identity. Read-only; not gated. Returns ranked items with per-signal score components; fetch full content with `memory.get`."
     )]
     pub async fn memory_search(
         &self,
@@ -1607,7 +1607,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "memory.get",
-        description = "Fetch one memory item by ID and update its explicit use metadata."
+        description = "Fetch one memory item by `id` (typically from `memory.search`/`memory.list`) and return its full content and manifest. Side effect: increments `use_count` and updates `last_used_at`. Read-only with respect to the desktop; not gated."
     )]
     pub async fn memory_get(
         &self,
@@ -1623,7 +1623,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "memory.update",
-        description = "Explicitly update a remembered item and rebuild its FTS5 and sqlite-vec indexes."
+        description = "Update a remembered item by `id`, replacing only the fields supplied (`kind`, `title`, `text`, `manifest_json`, `tags`, identity) and rebuilding its FTS5 and sqlite-vec indexes. Requires an existing item ID. Not gated; fails if the ID does not exist."
     )]
     pub async fn memory_update(
         &self,
@@ -1639,7 +1639,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "memory.delete",
-        description = "Explicitly delete one remembered item by ID and remove it from memory indexes."
+        description = "Delete one remembered item by `id`, removing it from the SQLite table, FTS5 index, and sqlite-vec vector index. Requires an existing item ID. Not gated; irreversible."
     )]
     pub async fn memory_delete(
         &self,
@@ -1655,7 +1655,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "memory.list",
-        description = "List remembered items with optional kind and tag filtering."
+        description = "List remembered items newest-updated first, with optional `kind` and `tags` filters and a `limit`. Read-only; not gated. Use to browse stored procedures/macros when you do not have a search query."
     )]
     pub async fn memory_list(
         &self,
@@ -1671,7 +1671,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "memory.reindex",
-        description = "Rebuild memory FTS5 and sqlite-vec indexes for the local memory database."
+        description = "Rebuild the FTS5 and sqlite-vec indexes for the local memory database. No inputs. Use after manual database inspection or migration recovery; not gated."
     )]
     pub async fn memory_reindex(&self) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -1683,7 +1683,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "macro.validate",
-        description = "Validate a winctl macro manifest version, tool names, target identity requirements, and coordinate fallback metadata."
+        description = "Validate a `winctl.macro.v1` manifest: schema version, tool names, target identity requirements, and coordinate-fallback metadata, without running anything. Read-only; not gated. Returns structured validation errors; run before `macro.dry_run`/`macro.run` to catch problems early."
     )]
     pub async fn macro_validate(
         &self,
@@ -1698,7 +1698,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "macro.dry_run",
-        description = "Build a dry-run plan for a macro manifest without performing mutating UI actions."
+        description = "Build a dry-run execution plan for a macro manifest (passed inline as `manifest` or loaded from a `memory_id`) without performing any mutating UI action. Read-only; not gated. Returns the resolved per-step plan so you can preview ordering and targets before `macro.run`."
     )]
     pub async fn macro_dry_run(
         &self,
@@ -1714,7 +1714,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "macro.run",
-        description = "Execute a macro manifest through the existing MCP tool implementations with target revalidation before control actions."
+        description = "Execute a macro manifest (inline `manifest` or `memory_id`) through the underlying MCP tools, revalidating each target identity before every control action; optional `max_steps` and run `video` capture. Requires an armed control session (`control.arm`); fails closed otherwise. Returns a `run_id` — fetch the structured result and artifacts with `macro.export_result`."
     )]
     pub async fn macro_run(&self, request: Parameters<MacroRunRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -1734,7 +1734,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "macro.run_step",
-        description = "Execute one macro step by ID for stepwise debugging."
+        description = "Execute a single macro step by `step_id` for stepwise debugging, with optional `context_json` carrying values such as `launch_id`, `pid`, and `bound_id`. Requires an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated before any control action."
     )]
     pub async fn macro_run_step(
         &self,
@@ -1757,7 +1757,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "macro.abort",
-        description = "Request a safe abort for an active macro run."
+        description = "Request a safe abort of an active macro run identified by `run_id` (from `macro.run`). Read-only control signal; not itself gated. The run stops at the next safe step boundary; partial results remain retrievable via `macro.export_result`."
     )]
     pub async fn macro_abort(
         &self,
@@ -1773,7 +1773,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "macro.list",
-        description = "List session-promoted macros and memory-backed macro items."
+        description = "List session-promoted macros and memory-backed macro items, with optional `kind`, `tags`, and `limit` filters. Read-only; not gated. Returns IDs usable with `macro.get`."
     )]
     pub async fn macro_list(
         &self,
@@ -1789,7 +1789,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "macro.get",
-        description = "Get a promoted macro manifest by session macro ID or memory item ID."
+        description = "Get a promoted macro manifest by `id` (session macro ID or memory item ID, e.g. from `macro.list`). Read-only; not gated. Returns the full `winctl.macro.v1` manifest, ready to pass to `macro.dry_run`/`macro.run`."
     )]
     pub async fn macro_get(&self, request: Parameters<MacroGetRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -1802,7 +1802,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "macro.promote",
-        description = "Promote an approved macro manifest into the session registry and optionally explicit memory storage."
+        description = "Promote a valid `winctl.macro.v1` manifest into the session registry and, when `remember` is true (default), into the local memory store. Not gated. Returns the promoted macro ID for later `macro.get`/`macro.run`."
     )]
     pub async fn macro_promote(
         &self,
@@ -1818,7 +1818,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "macro.export_result",
-        description = "Export a structured macro run result and artifact metadata by run ID."
+        description = "Export the structured result and artifact metadata for a completed macro run by `run_id` (returned by `macro.run`). Read-only; not gated. This is the standard way to read per-step outcomes, captures, and timing after a run."
     )]
     pub async fn macro_export_result(
         &self,
@@ -1834,7 +1834,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.snapshot",
-        description = "Capture a UI Automation tree for a bound window with element roles, names, automation IDs, bounds, state, hierarchy, and stable element references."
+        description = "Capture the UI Automation tree of a window previously bound with `windows.bind`, with element roles, names, automation IDs, bounds, state, hierarchy, and stable `element_ref` values; tune with `max_depth` (default 8) and `max_elements` (default 2000). Requires `bound_id`. Read-only (no armed session needed). The returned `element_ref`s are the inputs to `uia.find`/`uia.resolve` and the uia action tools."
     )]
     pub async fn uia_snapshot(
         &self,
@@ -1850,7 +1850,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.find",
-        description = "Find UI Automation elements in a fresh bound-window snapshot by semantic selector fields."
+        description = "Find UI Automation elements in a fresh snapshot of a bound window by semantic `selector` (name, role, automation_id, class_name, text_contains, include_offscreen). Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns matching elements with stable `element_ref`s for the uia action tools; prefer this over coordinate clicks."
     )]
     pub async fn uia_find(&self, request: Parameters<UiFindRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -1860,7 +1860,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.resolve",
-        description = "Revalidate a UI Automation element reference path against the current bound window snapshot."
+        description = "Revalidate an `element_ref` (from `uia.snapshot`/`uia.find`) against a current snapshot of the bound window. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Use to confirm an element still exists/resolves before acting; fails if the reference no longer matches."
     )]
     pub async fn uia_resolve(
         &self,
@@ -1876,7 +1876,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.invoke",
-        description = "Invoke a revalidated UI Automation element with InvokePattern; coordinate fallback is only returned as a hint."
+        description = "Invoke a UI Automation element (by `element_ref` or `selector`) via `InvokePattern` on a bound window, after revalidating its identity; coordinate fallback is returned only as a hint, not auto-clicked. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
     pub async fn uia_invoke(
         &self,
@@ -1900,7 +1900,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.set_value",
-        description = "Set text for a revalidated UI Automation element with ValuePattern.SetValue and before/after state diagnostics."
+        description = "Set text on a UI Automation element (by `element_ref` or `selector`) via `ValuePattern.SetValue`, returning before/after state diagnostics. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated before the write."
     )]
     pub async fn uia_set_value(
         &self,
@@ -1924,7 +1924,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.get_value",
-        description = "Read ValuePattern.CurrentValue from a revalidated UI Automation element."
+        description = "Read `ValuePattern.CurrentValue` from a UI Automation element (by `element_ref` or `selector`) after revalidating it. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns the current text/value of the element."
     )]
     pub async fn uia_get_value(
         &self,
@@ -1940,7 +1940,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.toggle",
-        description = "Toggle a revalidated UI Automation element when safe fallback semantics are available; otherwise fail closed."
+        description = "Toggle a UI Automation element (by `element_ref` or `selector`) via `TogglePattern`, optionally to a `desired_state` (off/on/indeterminate). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated first; if no safe action path exists it fails closed rather than guessing."
     )]
     pub async fn uia_toggle(
         &self,
@@ -1964,7 +1964,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.expand_collapse",
-        description = "Expand or collapse a revalidated UI Automation element when a supported action path exists; otherwise fail closed."
+        description = "Expand or collapse a UI Automation element (by `element_ref` or `selector`) via `ExpandCollapsePattern`, with `expand_collapse_action` of expand/collapse/toggle (default toggle). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated first; fails closed if no supported action path exists."
     )]
     pub async fn uia_expand_collapse(
         &self,
@@ -1988,7 +1988,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.select",
-        description = "Select a revalidated UI Automation element with strict target resolution and safe fallback diagnostics."
+        description = "Select a UI Automation element (by `element_ref` or `selector`) via `SelectionItemPattern`, with `mode` replace/add/remove (default replace). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Strict target resolution with identity revalidation; fails closed if no supported action path exists."
     )]
     pub async fn uia_select(
         &self,
@@ -2012,7 +2012,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.set_focus",
-        description = "Focus a revalidated UI Automation element using strict target resolution and center-click fallback."
+        description = "Set keyboard focus on a UI Automation element (by `element_ref` or `selector`) via strict target resolution, with center-click fallback. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated before focusing."
     )]
     pub async fn uia_set_focus(
         &self,
@@ -2036,7 +2036,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.range_value",
-        description = "Set a numeric value on a revalidated UI Automation range element when a supported action path exists; otherwise fail closed."
+        description = "Set a numeric `value` on a UI Automation range element (by `element_ref` or `selector`) via `RangeValuePattern` (sliders, progress, spinners). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated first; fails closed if no supported action path exists."
     )]
     pub async fn uia_range_value(
         &self,
@@ -2060,7 +2060,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.scroll_into_view",
-        description = "Scroll a revalidated UI Automation element into view when a supported action path exists; otherwise fail closed."
+        description = "Scroll a UI Automation element (by `element_ref` or `selector`) into view via `ScrollItemPattern`. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated first; fails closed if no supported action path exists. Useful to make an offscreen element actionable before invoking it."
     )]
     pub async fn uia_scroll_into_view(
         &self,
@@ -2084,7 +2084,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.wait_for_element",
-        description = "Wait for a UI Automation selector or element reference to resolve in fresh bound-window snapshots."
+        description = "Poll fresh snapshots of a bound window until a UI Automation `selector` or `element_ref` resolves (optionally requiring enabled/visible/name conditions), bounded by `timeout_ms`/`poll_interval_ms`. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Use to wait for UI to appear before acting; returns the resolved element or times out."
     )]
     pub async fn uia_wait_for_element(
         &self,
@@ -2100,7 +2100,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "dialogs.list",
-        description = "Enumerate the foreground native dialog, UI Automation button candidates, and secure-desktop/UAC status."
+        description = "Enumerate the foreground native dialog, its UI Automation button candidates, and secure-desktop/UAC status; optional flags include non-foreground or non-dialog windows. Read-only; no bound target or armed session needed. Returns each button's `hwnd`, `pid`, name, and `element_ref` for `dialogs.invoke_button`."
     )]
     pub async fn dialogs_list(
         &self,
@@ -2116,7 +2116,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "dialogs.invoke_button",
-        description = "Invoke an explicit foreground dialog Button/SplitButton via UI Automation patterns; UAC secure-desktop prompts are reported, not automated."
+        description = "Invoke an explicit foreground dialog Button/SplitButton via `InvokePattern`, targeted by required `hwnd`+`pid` (from `dialogs.list`) plus `button_name`, `element_ref`, or `selector`. Requires an armed control session (`control.arm`); fails closed otherwise. UAC secure-desktop prompts are reported, never automated."
     )]
     pub async fn dialogs_invoke_button(
         &self,
@@ -2139,7 +2139,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.element",
-        description = "Assert UI Automation element existence, enabled state, and name conditions with structured pass/fail output."
+        description = "Assert UI Automation element conditions (`exists`, `enabled`, `name`, `name_contains`) for an element (by `element_ref` or `selector`) on a bound window. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns structured pass/fail for test assertions."
     )]
     pub async fn assert_element(
         &self,
@@ -2155,7 +2155,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.text_visible",
-        description = "Assert that text is visible through the bound window title/class or UI Automation tree."
+        description = "Assert that `text` is visible via the bound window's title/class or UI Automation tree. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns structured pass/fail for test assertions."
     )]
     pub async fn assert_text_visible(
         &self,
@@ -2171,7 +2171,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.pixel_color",
-        description = "Sample an image or bound-window screenshot pixel and optionally assert expected RGB within tolerance."
+        description = "Sample a pixel at (`x`,`y`) from an `image_path` or a freshly captured `bound_id` screenshot and optionally assert `expected_rgb` within per-channel `tolerance`. If `bound_id` is given the target must first be bound via `windows.bind`. Read-only (no armed session needed). Returns the sampled RGB and pass/fail."
     )]
     pub async fn assert_pixel_color(
         &self,
@@ -2187,7 +2187,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.window_count",
-        description = "Assert the number of current windows matching a selector."
+        description = "Assert the count of current windows matching a `WindowSelector` against `expected`, `min`, and/or `max`. Read-only; no bound target or armed session needed. Returns the actual count and pass/fail for test assertions."
     )]
     pub async fn assert_window_count(
         &self,
@@ -2202,7 +2202,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.clipboard",
-        description = "Assert current clipboard text equals or contains expected text."
+        description = "Assert the current clipboard text equals `expected` or contains `contains` (optionally truncated to `max_chars`). Read-only clipboard read; no armed session needed (does not write). Returns the assertion result for tests."
     )]
     pub async fn assert_clipboard(
         &self,
@@ -2217,7 +2217,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.ocr_region",
-        description = "OCR an image region or freshly captured bound window region and return recognized text with word boxes."
+        description = "Run OCR over an `image_path` region or a freshly captured `bound_id` window region (`x`,`y`,`width`,`height`), returning recognized text with per-word boxes. If `bound_id` is given the target must first be bound via `windows.bind`. Read-only (no armed session needed). Prefer `capture.read_text`/UIA when the text is in the accessibility tree."
     )]
     pub async fn capture_ocr_region(
         &self,
@@ -2233,7 +2233,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.read_text",
-        description = "Extract readable text from a bound window using the UI Automation snapshot text surface."
+        description = "Extract readable text from a bound window via its UI Automation snapshot text surface (no OCR). Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Faster and more reliable than `capture.ocr_region` when text is exposed through accessibility."
     )]
     pub async fn capture_read_text(
         &self,
@@ -2249,7 +2249,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.compare_baseline",
-        description = "Compare an actual image against a baseline with RGB tolerance and write an optional diff artifact."
+        description = "Compare `actual_path` against `baseline_path` with per-channel RGB `tolerance` and `max_different_pixels`, optionally writing a `diff_path` artifact. Read-only; no bound target or armed session needed. Returns the differing-pixel count and pass/fail for visual regression."
     )]
     pub async fn capture_compare_baseline(
         &self,
@@ -2265,7 +2265,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "build.run",
-        description = "Run an allowlisted build tool directly without cmd.exe or PowerShell and return structured output diagnostics."
+        description = "Run an allowlisted build tool (`cargo`, `dotnet`, `msbuild`, `cmake`, `ctest`) directly via `program`+`args` without cmd.exe/PowerShell, in optional `cwd`, bounded by `timeout_ms`. Not gated, but only allowlisted programs are accepted (arbitrary shell is rejected). Returns exit code, stdout/stderr, and timing diagnostics."
     )]
     pub async fn build_run(&self, request: Parameters<BuildRunRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -2278,7 +2278,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "process.metrics",
-        description = "Return native Windows CPU, memory, handle, GDI, and USER counters for a process."
+        description = "Return native Windows resource counters (CPU, memory, handles, GDI, USER) for the process identified by `pid`. Read-only; no bound target or armed session needed. Fails if the PID does not exist or is inaccessible."
     )]
     pub async fn process_metrics(
         &self,
@@ -2293,7 +2293,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "diagnostics.crash_report",
-        description = "Collect process, window, screenshot, and platform diagnostic context for a crash or hang investigation."
+        description = "Collect a crash/hang investigation bundle: process metadata for an optional `pid`, window state, a screenshot of an optional `bound_id`, and platform context. If `bound_id` is given the target must first be bound via `windows.bind`. Read-only (no armed session needed). Returns the aggregated diagnostics and any capture artifact id."
     )]
     pub async fn diagnostics_crash_report(
         &self,
@@ -2309,7 +2309,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "test.report_export",
-        description = "Export a test or macro run result as JSON, JUnit XML, or HTML into an artifact path."
+        description = "Export a completed test or macro run (`run_id` from `test.run`/`macro.run`) as `json`, `junit` XML, or `html` to an optional `output_path`. Read-only; not gated. Returns the written artifact path; fails if the run ID is unknown."
     )]
     pub async fn test_report_export(
         &self,
@@ -2325,7 +2325,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.list",
-        description = "List visible and discoverable top-level Windows windows with HWND, PID, executable, class, title, and virtual desktop geometry."
+        description = "List visible, discoverable top-level windows with HWND, PID, executable, class, title, and virtual-desktop geometry. No inputs. Read-only; no bound target or armed session needed. Use as the starting point to identify a target, then narrow with `windows.find` and bind it with `windows.bind`."
     )]
     pub async fn windows_list(&self) -> Json<serde_json::Value> {
         run_blocking_tool("windows.list", tools::windows::windows_list).await
@@ -2333,7 +2333,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.find",
-        description = "Find windows matching a selector and return scored diagnostics without binding or controlling them."
+        description = "Find windows matching a `WindowSelector` (id, hwnd, pid, process_name, exe-path/title/class filters, visibility/minimized/cloaked constraints) and return scored match diagnostics, without binding or controlling. Read-only; no armed session needed. Pick the best match and pass the same selector to `windows.bind` to obtain a `bound_id`."
     )]
     pub async fn windows_find(
         &self,
@@ -2348,7 +2348,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.bind",
-        description = "Bind one strict window target by stable identity before any control action."
+        description = "Bind one window by stable identity (HWND+PID+executable) so later control/capture calls can revalidate it; pass a `WindowSelector` (ideally a strong one like hwnd/pid/process_name from `windows.find`). Read-only. Returns a `bound_id` required by nearly all window, input, uia, capture, and browser tools."
     )]
     pub async fn windows_bind(
         &self,
@@ -2364,7 +2364,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.describe",
-        description = "Describe an existing bound window record by bound_id."
+        description = "Describe an existing bound window record by `bound_id` (from `windows.bind`): its identity, current geometry, and state. Read-only (no armed session needed). Fails if the `bound_id` is unknown."
     )]
     pub async fn windows_describe(
         &self,
@@ -2380,7 +2380,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.focus",
-        description = "Focus a previously bound window after revalidating HWND, PID, and executable identity."
+        description = "Bring a bound window to the foreground after revalidating its HWND+PID+executable identity. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Fails closed if the window changed process or closed."
     )]
     pub async fn windows_focus(
         &self,
@@ -2403,7 +2403,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.window_from_point",
-        description = "Resolve a screen point to top-level and child window diagnostics, optionally relative to a bound target."
+        description = "Resolve a virtual-desktop screen point (`x`,`y`) to the top-level and child window under it, optionally reporting whether it belongs to a given `bound_id`. Read-only; no armed session needed. Use to preflight that a coordinate lands on your intended target before `input.click`."
     )]
     pub async fn windows_window_from_point(
         &self,
@@ -2424,7 +2424,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.monitors",
-        description = "List monitor geometry, DPI scale, primary monitor flag, and total virtual desktop bounds."
+        description = "List each monitor's geometry, DPI scale, primary flag, and the total virtual-desktop bounds. No inputs. Read-only; no armed session needed. Use to map `display_index` for `capture.screenshot_display` and to interpret virtual-desktop coordinates."
     )]
     pub async fn windows_monitors(&self) -> Json<serde_json::Value> {
         run_blocking_tool("windows.monitors", tools::windows::windows_monitors).await
@@ -2432,7 +2432,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.wait_for_window",
-        description = "Wait for visible top-level window candidates owned by a PID or MCP launch ID without title-only selection."
+        description = "Wait (up to `timeout_ms`) for a visible top-level window owned by a `pid` or `launch_id` (from `process.launch`), with optional post-match title/class filters. Read-only; no armed session needed. Use right after launching an app, then bind a returned candidate with `windows.bind`."
     )]
     pub async fn windows_wait_for_window(
         &self,
@@ -2448,7 +2448,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.wait_for_state",
-        description = "Wait for a bound window to satisfy state, foreground, title, or class conditions after identity revalidation."
+        description = "Poll a bound window (revalidating identity each time) until it satisfies the given visible/foreground/minimized/cloaked/title/class conditions, bounded by `timeout_ms`/`poll_interval_ms`. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns the final state or times out."
     )]
     pub async fn windows_wait_for_state(
         &self,
@@ -2464,7 +2464,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.move",
-        description = "Move a bound window after revalidating HWND, PID, and executable identity."
+        description = "Move a bound window to virtual-desktop (`x`,`y`) after revalidating its HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Window-mutation tool: fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
     pub async fn windows_move(
         &self,
@@ -2480,7 +2480,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.resize",
-        description = "Resize a bound window after revalidating HWND, PID, and executable identity."
+        description = "Resize a bound window to `width`x`height` after revalidating its HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Window-mutation tool: fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
     pub async fn windows_resize(
         &self,
@@ -2496,7 +2496,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.minimize",
-        description = "Minimize a bound window after revalidating stable identity."
+        description = "Minimize a bound window after revalidating its stable HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
     pub async fn windows_minimize(
         &self,
@@ -2512,7 +2512,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.maximize",
-        description = "Maximize a bound window after revalidating stable identity."
+        description = "Maximize a bound window after revalidating its stable HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
     pub async fn windows_maximize(
         &self,
@@ -2528,7 +2528,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.restore",
-        description = "Restore a bound window after revalidating stable identity."
+        description = "Restore a bound window from minimized/maximized to its normal state after revalidating its stable HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
     pub async fn windows_restore(
         &self,
@@ -2544,7 +2544,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.close",
-        description = "Post WM_CLOSE to a bound window after revalidating stable identity."
+        description = "Post `WM_CLOSE` to a bound window (a graceful close request, not a process kill) after revalidating its stable HWND+PID+executable identity. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Fails closed if the window changed process or closed."
     )]
     pub async fn windows_close(
         &self,
@@ -2567,7 +2567,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.foreground_diagnostics",
-        description = "Return foreground and replay diagnostics for a bound window after identity revalidation."
+        description = "Return foreground and replay diagnostics for a bound window (foreground state, focusability, replay hints) after revalidating identity. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Useful to debug why focus/input may not be reaching the target."
     )]
     pub async fn windows_foreground_diagnostics(
         &self,
@@ -2583,7 +2583,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "windows.for_process",
-        description = "List visible top-level windows for a PID or MCP launch ID, with explicit child-process policy."
+        description = "List visible top-level windows owned by a `pid` or `launch_id`, with `include_child_process_windows` controlling whether child-process windows are returned. Read-only; no armed session needed. Use to enumerate an app's windows, then bind one with `windows.bind`."
     )]
     pub async fn windows_for_process(
         &self,
@@ -2599,7 +2599,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "app.launch",
-        description = "Launch an executable, protocol handler, packaged app, or Start Menu app target without shell command concatenation."
+        description = "Launch a target by `mode` (`executable`, `protocol`, `packaged_app`, or `start_menu`) plus `target`/`args`/`cwd`, with no shell concatenation; optionally `wait_for_window`. Not gated. Returns process/launch identifiers and any window candidates; for raw exe control prefer `process.launch` (which returns a tracked `pid`+`launch_id`)."
     )]
     pub async fn app_launch(
         &self,
@@ -2615,7 +2615,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "browser.list",
-        description = "List Chrome, Edge, and Firefox process/window state with explicit PID/HWND identity metadata."
+        description = "List Chrome/Edge/Firefox processes and windows with explicit PID/HWND identity, filterable by `browser`, `pid`, `include_windows`, and `only_mcp_launched`. Read-only; no armed session needed. Use to locate a browser window, then `windows.bind` it for browser.* control/capture."
     )]
     pub async fn browser_list(
         &self,
@@ -2631,7 +2631,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "browser.describe",
-        description = "Describe one browser target by bound window, PID, or HWND without tab-title selection."
+        description = "Describe one browser target identified by `bound_id`, `pid`, or `hwnd` (no tab-title matching), returning kind and identity metadata. Read-only; no armed session needed. If using `bound_id`, the window must first be bound via `windows.bind`."
     )]
     pub async fn browser_describe(
         &self,
@@ -2647,7 +2647,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "browser.wait_for_navigation",
-        description = "Wait for a bound browser window title transition while revalidating browser PID/HWND/executable identity."
+        description = "Wait (up to `timeout_ms`) for a bound browser window's title to gain `title_contains` and/or lose `title_not_contains`, revalidating browser PID/HWND/executable identity each poll. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Approximates navigation completion via title transitions."
     )]
     pub async fn browser_wait_for_navigation(
         &self,
@@ -2663,7 +2663,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "browser.assert",
-        description = "Assert browser kind and window title/class conditions against a revalidated bound browser window."
+        description = "Assert expected `browser` kind and window `title_contains`/`class_name_contains` against a bound browser window, revalidating identity first. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns structured pass/fail for tests."
     )]
     pub async fn browser_assert(
         &self,
@@ -2679,7 +2679,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "browser.extract_content",
-        description = "Return safe browser window content hints and identity metadata for a revalidated bound browser window."
+        description = "Return safe content hints and identity metadata (not full page DOM) for a bound browser window, revalidating identity first. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). For real page DOM/JS use the loopback `web.cdp.*` tools instead."
     )]
     pub async fn browser_extract_content(
         &self,
@@ -2695,7 +2695,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "browser.screenshot_checkpoint",
-        description = "Capture a screenshot checkpoint for a revalidated bound browser window."
+        description = "Capture a screenshot checkpoint of a bound browser window, revalidating identity first. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns the capture artifact id; equivalent to `capture.screenshot_window` scoped to browser flows."
     )]
     pub async fn browser_screenshot_checkpoint(
         &self,
@@ -2711,7 +2711,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "clipboard.read",
-        description = "Read Unicode clipboard text with optional truncation."
+        description = "Read the current Unicode clipboard text, optionally truncated to `max_chars`. Read-only; no bound target or armed session needed. Returns the text; pair with `clipboard.write` (which is mutation-gated) for round-trips."
     )]
     pub async fn clipboard_read(
         &self,
@@ -2727,7 +2727,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "clipboard.write",
-        description = "Write Unicode clipboard text only when clipboard mutation is explicitly enabled."
+        description = "Write Unicode `text` to the clipboard. Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_CLIPBOARD_WRITE=1` is set in policy. Not included in macro replay."
     )]
     pub async fn clipboard_write(
         &self,
@@ -2750,7 +2750,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "filesystem.read",
-        description = "Read a UTF-8 file from an allowlisted filesystem root with bounded size."
+        description = "Read a UTF-8 file at `path` (under an allowlisted root: `WINCTL_FS_ROOTS`, capture dir, or temp), up to `max_bytes`. Read-only; no armed session needed. Binary files return `utf8: false` and omit text. Fails if the path is outside allowlisted roots."
     )]
     pub async fn filesystem_read(
         &self,
@@ -2766,7 +2766,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "filesystem.list",
-        description = "List files and directories beneath an allowlisted filesystem root."
+        description = "List files and directories under `path`, optionally `recursive`, up to `max_entries`. Read-only; no armed session needed. `path` must be under an allowlisted root (configure with `WINCTL_FS_ROOTS`); fails closed otherwise."
     )]
     pub async fn filesystem_list(
         &self,
@@ -2782,7 +2782,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "filesystem.search",
-        description = "Search file names and bounded UTF-8 file content beneath an allowlisted filesystem root."
+        description = "Literal-search file names and bounded UTF-8 file content under `root` for `pattern`, up to `max_results`/`max_file_bytes`. Read-only; no armed session needed. `root` must be allowlisted; non-UTF-8 or oversized files are skipped."
     )]
     pub async fn filesystem_search(
         &self,
@@ -2798,7 +2798,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "filesystem.copy",
-        description = "Copy a file within allowlisted roots only when filesystem mutation is explicitly enabled."
+        description = "Copy a file `from`→`to` (optionally `overwrite`). Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_FILESYSTEM_MUTATION=1` and both paths are under allowlisted roots."
     )]
     pub async fn filesystem_copy(
         &self,
@@ -2821,7 +2821,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "filesystem.move",
-        description = "Move a file within allowlisted roots only when filesystem mutation is explicitly enabled."
+        description = "Move/rename a file `from`→`to` (optionally `overwrite`). Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_FILESYSTEM_MUTATION=1` and both paths are under allowlisted roots."
     )]
     pub async fn filesystem_move(
         &self,
@@ -2844,7 +2844,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "filesystem.delete",
-        description = "Delete an allowlisted filesystem path only when filesystem mutation is explicitly enabled."
+        description = "Delete `path` (optionally `recursive` for directories). Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_FILESYSTEM_MUTATION=1` and the path is under an allowlisted root. Irreversible."
     )]
     pub async fn filesystem_delete(
         &self,
@@ -2867,7 +2867,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "artifact.export",
-        description = "Export a captured artifact to the capture export directory or an allowlisted destination."
+        description = "Export a captured artifact from `source_path` to `destination_path`, or to the capture dir's `exports` folder when destination is omitted. Not gated, but an explicit destination must be under an allowlisted filesystem root. Returns the written path."
     )]
     pub async fn artifact_export(
         &self,
@@ -2883,7 +2883,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "registry.list",
-        description = "List Windows registry subkeys and optional values from a selected hive."
+        description = "List registry subkeys (and optional value metadata when `include_values`) under `path` in `hive` (current_user/local_machine/classes_root/users/current_config). Read-only; no armed session needed. Registry mutation tools are separate and gated."
     )]
     pub async fn registry_list(
         &self,
@@ -2899,7 +2899,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "registry.read",
-        description = "Read a Windows registry value from a selected hive."
+        description = "Read one registry value `name` (empty/omitted for the default value) under `path` in `hive`. Read-only; no armed session needed. Returns the decoded value and kind; fails if the key/value is missing."
     )]
     pub async fn registry_read(
         &self,
@@ -2915,7 +2915,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "registry.write",
-        description = "Write a Windows registry value only when registry mutation is explicitly enabled."
+        description = "Write a registry value (`hive`, `path`, `name`, typed `kind`+`data`). Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_REGISTRY_MUTATION=1`. Not included in macro replay."
     )]
     pub async fn registry_write(
         &self,
@@ -2938,7 +2938,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "registry.delete",
-        description = "Delete a Windows registry value only when registry mutation is explicitly enabled."
+        description = "Delete a single registry value `name` under `path` in `hive` (values only, never keys or trees). Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_REGISTRY_MUTATION=1`."
     )]
     pub async fn registry_delete(
         &self,
@@ -2961,7 +2961,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "notifications.list",
-        description = "Return Windows notification inspection status and any available provider-backed notifications."
+        description = "Return Windows notification inspection status and any provider-backed notifications, up to `max_items`. Read-only; no bound target or armed session needed. May report that no provider is available."
     )]
     pub async fn notifications_list(
         &self,
@@ -2977,7 +2977,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "process.diagnostics",
-        description = "Return additional process diagnostics with optional windows and child-process metadata."
+        description = "Return diagnostics for process `pid`, optionally with `include_windows` (owned top-level windows) and `include_children` (child-process metadata). Read-only; no armed session needed. Fails if the PID does not exist."
     )]
     pub async fn process_diagnostics(
         &self,
@@ -2993,7 +2993,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "network.fetch",
-        description = "Fetch an HTTP/HTTPS URL with timeout, response-size, redirect, and private-network guards."
+        description = "Fetch an HTTP/HTTPS `url` (`method` GET/HEAD/POST, optional `headers`/`body`), bounded by server-capped `timeout_ms`/`max_bytes` and optional `follow_redirects`. Read-only; not gated. Private/loopback/link-local hosts are blocked unless `WINCTL_ALLOW_PRIVATE_NETWORK=1`; URLs with credentials are rejected."
     )]
     pub async fn network_fetch(
         &self,
@@ -3005,7 +3005,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "network.scrape",
-        description = "Fetch and extract basic title, link, and text content from an HTTP/HTTPS page under network policy."
+        description = "Fetch an HTTP/HTTPS `url` and extract its title, optional `include_links` hrefs, and optional `include_text` (tag-stripped text), under the same network policy as `network.fetch` (private hosts blocked unless `WINCTL_ALLOW_PRIVATE_NETWORK=1`). Read-only; not gated. Bounded by server-capped `timeout_ms`/`max_bytes`."
     )]
     pub async fn network_scrape(
         &self,
@@ -3017,7 +3017,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.cdp.list_targets",
-        description = "List local Chrome DevTools Protocol targets from a debugger HTTP endpoint."
+        description = "List Chrome DevTools Protocol targets (tabs/pages) from a loopback `debugger_url` such as `http://127.0.0.1:9222`. Read-only; no armed session needed. Requires the browser to be running with remote debugging on loopback. Returns `target_id`s for the other `web.*` CDP tools."
     )]
     pub async fn web_cdp_list_targets(
         &self,
@@ -3029,7 +3029,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.cdp.evaluate",
-        description = "Evaluate JavaScript in a loopback Chrome DevTools Protocol target over WebSocket."
+        description = "Evaluate a JavaScript `expression` in a loopback CDP `target_id` (from `web.cdp.list_targets`) over WebSocket at `debugger_url`. Read-only side of the gate (not consent-gated), but loopback-only. Returns the evaluation result; fails if the debugger endpoint is unreachable or non-loopback."
     )]
     pub async fn web_cdp_evaluate(
         &self,
@@ -3041,7 +3041,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.dom.snapshot",
-        description = "Capture a DOMSnapshot from a loopback Chrome DevTools Protocol target."
+        description = "Capture a DOM snapshot from a loopback CDP `target_id` (from `web.cdp.list_targets`) at `debugger_url`, optionally scoped by `selector`. Read-only; not gated, loopback-only. Returns the DOM tree; fails if the endpoint is unreachable or non-loopback."
     )]
     pub async fn web_dom_snapshot(
         &self,
@@ -3053,7 +3053,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.network.events",
-        description = "Enable CDP Network events and buffer loopback target network events for a timeout window."
+        description = "Enable CDP Network domain on a loopback `target_id` (from `web.cdp.list_targets`) and buffer network events for the `timeout_ms` window at `debugger_url`. Read-only; not gated, loopback-only. Returns the captured events; fails if the endpoint is unreachable or non-loopback."
     )]
     pub async fn web_network_events(
         &self,
@@ -3065,7 +3065,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.a11y.snapshot",
-        description = "Capture the CDP accessibility tree for a local browser or WebView target."
+        description = "Capture the CDP accessibility tree from a loopback `target_id` (from `web.cdp.list_targets`) at `debugger_url`, optionally scoped by `selector`. Read-only; not gated, loopback-only. Returns the a11y tree; fails if the endpoint is unreachable or non-loopback."
     )]
     pub async fn web_a11y_snapshot(
         &self,
@@ -3077,7 +3077,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "web.style.inspect",
-        description = "Inspect computed CSS style for a selector in a local browser or WebView CDP target."
+        description = "Inspect computed CSS style for a `selector` in a loopback CDP `target_id` (from `web.cdp.list_targets`) at `debugger_url`. Read-only; not gated, loopback-only. Returns computed style properties; fails if the endpoint is unreachable or non-loopback."
     )]
     pub async fn web_style_inspect(
         &self,
@@ -3089,7 +3089,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "recorder.start",
-        description = "Start a local recording session that can be exported as a macro manifest."
+        description = "Start a local recording session (`title`, optional `description`/`tags`/`app_identity`) that accumulates steps for export as a macro manifest. Not gated. Returns a session ID; append steps with `recorder.record_step`, then finish with `recorder.stop`/`recorder.export_manifest`."
     )]
     pub async fn recorder_start(
         &self,
@@ -3105,7 +3105,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "recorder.record_step",
-        description = "Append one recorded MCP tool step with optional target, note, and replay metadata."
+        description = "Append one step to the active recording: an MCP `tool` name plus JSON `args`, optional semantic `target`, `timeout_ms`, `required`/`continue_on_failure`, coordinate fallback, and notes. Requires an active session from `recorder.start`. Not gated; records intent only (does not execute the tool)."
     )]
     pub async fn recorder_record_step(
         &self,
@@ -3121,7 +3121,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "recorder.stop",
-        description = "Stop the active recording session and return its macro manifest."
+        description = "Stop the active recording session and return the generated `winctl.macro.v1` manifest; with `save_to_memory` true it is also stored if memory policy allows. Requires an active session from `recorder.start`. The returned manifest can be passed to `macro.validate`/`macro.run`."
     )]
     pub async fn recorder_stop(
         &self,
@@ -3137,7 +3137,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "recorder.export_manifest",
-        description = "Export the active or completed recording session as a macro manifest."
+        description = "Export a recording session as a `winctl.macro.v1` manifest by `session_id`, or the active session when omitted, without stopping it. Read-only; not gated. Use `recorder.state` to find session IDs."
     )]
     pub async fn recorder_export_manifest(
         &self,
@@ -3153,7 +3153,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "recorder.state",
-        description = "Return active and completed local recording sessions."
+        description = "Return active and completed local recording sessions and their step counts. No inputs. Read-only; not gated. Use to obtain `session_id`s for `recorder.export_manifest`."
     )]
     pub async fn recorder_state(&self) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -3165,7 +3165,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "test.validate",
-        description = "Validate a winctl test manifest and its aligned macro manifest."
+        description = "Validate a `winctl.test.v1` manifest and its aligned macro manifest (schema, tool names, identity/coordinate metadata) without running anything. Read-only; not gated. Returns structured validation errors; run before `test.dry_run`/`test.run`."
     )]
     pub async fn test_validate(
         &self,
@@ -3180,7 +3180,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "test.dry_run",
-        description = "Build a dry-run plan for a winctl test manifest without mutating UI state."
+        description = "Build a dry-run plan for a `winctl.test.v1` manifest without mutating UI state. Read-only; not gated. Returns the resolved per-step plan so you can preview ordering and targets before `test.run`."
     )]
     pub async fn test_dry_run(
         &self,
@@ -3192,7 +3192,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "test.run",
-        description = "Run a winctl test manifest through the macro execution engine."
+        description = "Run a `winctl.test.v1` manifest through the macro execution engine, revalidating targets before control actions; optional `max_steps` and run `video`. Requires an armed control session (`control.arm`); fails closed otherwise. Returns a `run_id`; fetch results with `test.export_result` (or `test.report_export`)."
     )]
     pub async fn test_run(&self, request: Parameters<TestRunRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -3207,7 +3207,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "test.export_result",
-        description = "Export a test run result by run ID."
+        description = "Export the structured result of a completed test run by `run_id` (from `test.run`). Read-only; not gated. Returns per-step outcomes, assertions, and artifacts; fails if the run ID is unknown."
     )]
     pub async fn test_export_result(
         &self,
@@ -3223,7 +3223,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "process.launch",
-        description = "Launch a Windows executable via CreateProcessW and optionally wait for visible PID-owned window candidates."
+        description = "Launch a Windows executable `exe` via `CreateProcessW` with optional `args`/`cwd`/`env`, optionally `wait_for_window` for visible PID-owned windows. Not gated. Returns the tracked `pid` and `launch_id` used by `process.kill`/`process.wait_for_exit`/`windows.wait_for_window`; the spawned process is owned by this session."
     )]
     pub async fn process_launch(
         &self,
@@ -3239,7 +3239,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "process.list",
-        description = "List Windows process metadata, with optional top-level window candidates and MCP-launched process markers."
+        description = "List Windows processes with metadata, filterable by `name_contains`/`exe_path_contains`, optionally with `include_windows` and `only_mcp_launched`. Read-only; no armed session needed. Returns PIDs and (when requested) owned windows for further binding/control."
     )]
     pub async fn process_list(
         &self,
@@ -3255,7 +3255,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "process.describe",
-        description = "Describe one process with executable metadata, tracked launch status, children, and top-level windows."
+        description = "Describe process `pid`: executable metadata, whether it is a tracked MCP-launched process, child processes, and top-level windows. Read-only; no armed session needed. Fails if the PID does not exist."
     )]
     pub async fn process_describe(
         &self,
@@ -3271,7 +3271,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "process.kill",
-        description = "Terminate only a process launched and tracked by this MCP server session."
+        description = "Terminate a process identified by `pid` or `launch_id`, optionally `kill_tree` for its child tree — but only if it was launched and is tracked by this MCP session. Requires an armed control session (`control.arm`); fails closed otherwise. Refuses to kill untracked/arbitrary processes."
     )]
     pub async fn process_kill(
         &self,
@@ -3294,7 +3294,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "process.wait_for_exit",
-        description = "Wait for a process identified by PID or MCP launch ID to exit and return lifecycle timing metadata."
+        description = "Wait (up to `timeout_ms`, polling `poll_interval_ms`) for the process identified by `pid` or `launch_id` (from `process.launch`) to exit. Read-only; no armed session needed. Returns exit/lifecycle timing metadata, or indicates timeout if still running."
     )]
     pub async fn process_wait_for_exit(
         &self,
@@ -3310,7 +3310,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.click",
-        description = "Click a bound window coordinate after identity revalidation and window-from-point preflight."
+        description = "Click at (`x`,`y`) in the given `coordinate_space` on a bound window via SendInput, with identity revalidation and window-from-point preflight (optionally `fail_if_outside_bound`); `button` defaults to left. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
     pub async fn input_click(&self, request: Parameters<ClickRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -3331,7 +3331,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.mouse_move",
-        description = "Move the mouse to a bound window coordinate after identity revalidation and point preflight."
+        description = "Move the mouse to (`x`,`y`) in the given `coordinate_space` on a bound window via SendInput, with identity revalidation and point preflight (optionally `fail_if_outside_bound`). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
     pub async fn input_mouse_move(
         &self,
@@ -3355,7 +3355,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.double_click",
-        description = "Double-click a bound window coordinate after identity revalidation and point preflight."
+        description = "Double-click at (`x`,`y`) in the given `coordinate_space` on a bound window via SendInput (optional `button`, `interval_ms`), with identity revalidation and point preflight (optionally `fail_if_outside_bound`). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
     pub async fn input_double_click(
         &self,
@@ -3379,7 +3379,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.drag",
-        description = "Drag between two bound window coordinates after identity revalidation and point preflight."
+        description = "Drag from (`start_x`,`start_y`) to (`end_x`,`end_y`) in the given `coordinate_space` on a bound window via SendInput (optional `button`, `duration_ms`), with identity revalidation and point preflight on both points (optionally `fail_if_outside_bound`). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
     pub async fn input_drag(&self, request: Parameters<DragRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -3400,7 +3400,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.scroll",
-        description = "Scroll at a bound window coordinate after identity revalidation and point preflight."
+        description = "Scroll the wheel by `delta_x`/`delta_y` (default `delta_y` -120) at (`x`,`y`) in the given `coordinate_space` on a bound window via SendInput, with identity revalidation and point preflight (optionally `fail_if_outside_bound`). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
     pub async fn input_scroll(
         &self,
@@ -3424,7 +3424,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.key_down",
-        description = "Focus a bound window and dispatch a virtual key-down event after identity revalidation."
+        description = "Focus a bound window and dispatch a virtual key-down for `key` (e.g. `ctrl`, `shift`, `enter`, `a`, `f5`) via SendInput after identity revalidation. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Pair with `input.key_up` to release held keys."
     )]
     pub async fn input_key_down(&self, request: Parameters<KeyRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -3445,7 +3445,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.key_up",
-        description = "Focus a bound window and dispatch a virtual key-up event after identity revalidation."
+        description = "Focus a bound window and dispatch a virtual key-up for `key` via SendInput after identity revalidation, releasing a key held by `input.key_down`. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
     pub async fn input_key_up(&self, request: Parameters<KeyRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -3466,7 +3466,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.shortcut",
-        description = "Focus a bound window and dispatch a virtual-key shortcut after identity revalidation."
+        description = "Focus a bound window and dispatch an ordered key chord `keys` (e.g. `[\"ctrl\",\"shift\",\"s\"]`) via SendInput after identity revalidation, optionally holding `hold_ms` before releasing in reverse order. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
     pub async fn input_shortcut(
         &self,
@@ -3490,7 +3490,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.delay",
-        description = "Wait for a bounded number of milliseconds and return timing metadata for replay manifests."
+        description = "Sleep for a bounded `duration_ms` and return timing metadata. No bound target; not gated. Used as an explicit pacing step inside macro/test replay manifests."
     )]
     pub async fn input_delay(&self, request: Parameters<DelayRequest>) -> Json<serde_json::Value> {
         let request = request.0;
@@ -3499,7 +3499,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "input.type_text",
-        description = "Focus a bound window and type Unicode text with SendInput after identity revalidation."
+        description = "Focus a bound window and type Unicode `text` via SendInput after identity revalidation. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Prefer `uia.set_value` when the target field exposes a ValuePattern."
     )]
     pub async fn input_type_text(
         &self,
@@ -3523,7 +3523,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.screenshot_window",
-        description = "Capture a screenshot of a bound window and return exact virtual desktop region metadata."
+        description = "Capture a PNG screenshot of a window previously bound with `windows.bind`. Read-only (no armed session needed); identity is revalidated and the call fails closed if the window changed process or closed. Returns the capture artifact id and the exact virtual-desktop region (x, y, width, height) so coordinates align with `input.click` on the same target."
     )]
     pub async fn screenshot_window(
         &self,
@@ -3539,7 +3539,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.screenshot_display",
-        description = "Capture a screenshot of a display by zero-based monitor index and return exact virtual desktop region metadata."
+        description = "Capture a PNG screenshot of a whole display by zero-based `display_index` (see `windows.monitors`). Read-only; no bound target or armed session needed. Returns the capture artifact id and exact virtual-desktop region (x, y, width, height); fails if the index is out of range."
     )]
     pub async fn screenshot_display(
         &self,
@@ -3555,7 +3555,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.wait_for_window_image_change",
-        description = "Poll bound-window screenshots until the image bytes change, returning replay-safe capture diagnostics."
+        description = "Poll screenshots of a bound window until the image bytes change, bounded by `timeout_ms`/`poll_interval_ms`. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Use to wait for a UI repaint after an action; returns replay-safe capture diagnostics or times out."
     )]
     pub async fn wait_for_window_image_change(
         &self,
@@ -3571,7 +3571,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.video_start",
-        description = "Start recording a bound window or display to an animated GIF replay artifact."
+        description = "Start recording a bound window (`bound_id`) or a `display_index` (default 0) to an animated GIF, with clamped `frame_interval_ms`/`max_duration_ms` and frame-size caps. If `bound_id` is given the target must first be bound via `windows.bind`. Read-only (no armed session needed). Returns a `recording_id`; stop with `capture.video_stop`."
     )]
     pub async fn video_start(
         &self,
@@ -3587,7 +3587,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.video_stop",
-        description = "Stop the active video recording and return the replay artifact metadata."
+        description = "Stop a video recording (by `recording_id` from `capture.video_start`, or the active one if omitted) and finalize the GIF. Read-only (no armed session needed). Returns the replay artifact id and metadata; fails if there is no matching active recording."
     )]
     pub async fn video_stop(
         &self,
