@@ -5,8 +5,6 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -18,7 +16,7 @@ use winctl::{
 };
 
 #[cfg(windows)]
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 pub(crate) const CAPTURE_HELPER_ENV: &str = "WINCTL_CAPTURE_HELPER";
 pub(crate) const CAPTURE_DIR_ENV: &str = "WINCTL_CAPTURE_DIR";
@@ -26,8 +24,6 @@ const CAPTURE_HELPER_REQUEST_ENV: &str = "WINCTL_CAPTURE_REQUEST";
 const CAPTURE_HELPER_RESPONSE_ENV: &str = "WINCTL_CAPTURE_RESPONSE";
 #[cfg(windows)]
 const CAPTURE_HELPER_TIMEOUT: Duration = Duration::from_secs(15);
-#[cfg(windows)]
-static CAPTURE_HELPER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const MAX_COMPLETED_VIDEO_RECORDINGS: usize = 50;
 const DEFAULT_VIDEO_FRAME_INTERVAL_MS: u64 = 250;
@@ -127,6 +123,22 @@ struct CaptureHelperProcessOutput {
     status_code: Option<i32>,
     stdout: String,
     stderr: String,
+    helper_pid: Option<u32>,
+    elapsed_ms: Option<u64>,
+}
+
+#[cfg(windows)]
+struct CaptureHelperJob {
+    handle: windows::Win32::Foundation::HANDLE,
+}
+
+#[cfg(windows)]
+impl Drop for CaptureHelperJob {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.handle);
+        }
+    }
 }
 
 pub fn screenshot_window(state: &AppState, bound_id: String) -> serde_json::Value {
@@ -1036,14 +1048,6 @@ fn run_capture_helper_process(
         code: CaptureErrorCode::CaptureFailed,
         message: format!("failed to encode capture helper request: {error}"),
     })?;
-    let (request_path, response_path) = capture_helper_ipc_paths(capture_kind);
-    write_atomic_file(&request_path, &request).map_err(|error| CaptureError {
-        code: CaptureErrorCode::CaptureFailed,
-        message: format!(
-            "failed to write capture helper request {}: {error}",
-            request_path.display()
-        ),
-    })?;
     let current_exe = std::env::current_exe().map_err(|error| CaptureError {
         code: CaptureErrorCode::CaptureFailed,
         message: format!("failed to resolve capture helper executable: {error}"),
@@ -1053,133 +1057,217 @@ fn run_capture_helper_process(
         helper_exe = %current_exe.display(),
         "capture helper spawning"
     );
-    let child = Command::new(current_exe)
+
+    let mut command = Command::new(current_exe);
+    command
         .env(CAPTURE_HELPER_ENV, "1")
-        .env(CAPTURE_HELPER_REQUEST_ENV, &request_path)
-        .env(CAPTURE_HELPER_RESPONSE_ENV, &response_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| CaptureError {
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_capture_helper_command(&mut command);
+
+    let mut child = command.spawn().map_err(|error| CaptureError {
+        code: CaptureErrorCode::CaptureFailed,
+        message: format!("failed to start capture helper: {error}"),
+    })?;
+    let helper_pid = child.id();
+    let job = match CaptureHelperJob::create_for_child(&child) {
+        Ok(job) => Some(job),
+        Err(error) => {
+            tracing::warn!(
+                capture_kind = capture_kind,
+                helper_pid = helper_pid,
+                error = %error,
+                "capture helper job object setup failed; falling back to direct child termination"
+            );
+            None
+        }
+    };
+    let stdout = child.stdout.take().map(spawn_capture_pipe_reader);
+    let stderr = child.stderr.take().map(spawn_capture_pipe_reader);
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(error) = stdin.write_all(&request).and_then(|_| stdin.flush()) {
+            terminate_capture_helper(&mut child, job.as_ref(), 1);
+            let _ = child.wait();
+            return Err(CaptureError {
+                code: CaptureErrorCode::CaptureFailed,
+                message: format!(
+                    "failed to send {capture_kind} capture helper request to pid {helper_pid}: {error}"
+                ),
+            });
+        }
+    } else {
+        terminate_capture_helper(&mut child, job.as_ref(), 1);
+        let _ = child.wait();
+        return Err(CaptureError {
             code: CaptureErrorCode::CaptureFailed,
-            message: format!("failed to start capture helper: {error}"),
-        })?;
+            message: format!("{capture_kind} capture helper pid {helper_pid} did not expose stdin"),
+        });
+    }
     tracing::info!(
         capture_kind = capture_kind,
-        helper_pid = child.id(),
+        helper_pid = helper_pid,
         "capture helper spawned"
     );
-    let helper_pid = child.id();
-    drop(child);
 
     tracing::info!(
         capture_kind = capture_kind,
         helper_pid = helper_pid,
         timeout_secs = timeout.as_secs(),
-        request_path = %request_path.display(),
-        response_path = %response_path.display(),
-        "capture helper waiting for response file"
+        "capture helper waiting for process exit"
     );
-    wait_for_capture_helper_response(
-        helper_pid,
-        capture_kind,
-        &request_path,
-        &response_path,
-        timeout,
-    )
-}
-
-#[cfg(windows)]
-fn wait_for_capture_helper_response(
-    helper_pid: u32,
-    capture_kind: &str,
-    request_path: &Path,
-    response_path: &Path,
-    timeout: Duration,
-) -> Result<ScreenshotResult, CaptureError> {
     let started = Instant::now();
-
-    loop {
-        match fs::read_to_string(response_path) {
-            Ok(stdout) => {
-                tracing::info!(
-                    capture_kind = capture_kind,
-                    helper_pid = helper_pid,
-                    response_path = %response_path.display(),
-                    "capture helper response file received"
-                );
-                let _ = fs::remove_file(request_path);
-                let _ = fs::remove_file(response_path);
-                tracing::info!(
-                    capture_kind = capture_kind,
-                    helper_pid = helper_pid,
-                    response_bytes = stdout.len(),
-                    "capture helper response cleanup complete"
-                );
-                return decode_capture_helper_output(CaptureHelperProcessOutput {
-                    success: true,
-                    status_code: Some(0),
-                    stdout,
-                    stderr: String::new(),
-                });
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < timeout => {
+                thread::sleep(Duration::from_millis(25));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(None) => {
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                terminate_capture_helper(&mut child, job.as_ref(), 1);
+                let _ = child.wait();
+                let stdout = join_capture_pipe_reader(stdout);
+                let stderr = join_capture_pipe_reader(stderr);
+                let error = capture_helper_timeout_error(
+                    capture_kind,
+                    timeout,
+                    helper_pid,
+                    elapsed_ms,
+                    &stderr,
+                );
+                tracing::warn!(
+                    capture_kind = capture_kind,
+                    helper_pid = helper_pid,
+                    timeout_secs = timeout.as_secs(),
+                    elapsed_ms = elapsed_ms,
+                    stdout_bytes = stdout.len(),
+                    stderr = %summarize_output(&stderr),
+                    "capture helper timed out"
+                );
+                return Err(error);
+            }
             Err(error) => {
-                terminate_capture_helper_pid(helper_pid);
-                let _ = fs::remove_file(request_path);
+                terminate_capture_helper(&mut child, job.as_ref(), 1);
+                let _ = child.wait();
                 return Err(CaptureError {
                     code: CaptureErrorCode::CaptureFailed,
                     message: format!(
-                        "failed to read capture helper response {}: {error}",
-                        response_path.display()
+                        "failed to wait for {capture_kind} capture helper pid {helper_pid}: {error}"
                     ),
                 });
             }
         }
+    };
 
-        if started.elapsed() >= timeout {
-            let error = capture_helper_timeout_error(capture_kind, timeout);
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let stdout = join_capture_pipe_reader(stdout);
+    let stderr = join_capture_pipe_reader(stderr);
+    tracing::info!(
+        capture_kind = capture_kind,
+        helper_pid = helper_pid,
+        success = status.success(),
+        status_code = status.code(),
+        elapsed_ms = elapsed_ms,
+        stdout_bytes = stdout.len(),
+        stderr_bytes = stderr.len(),
+        "capture helper exited"
+    );
+    decode_capture_helper_output(CaptureHelperProcessOutput {
+        success: status.success(),
+        status_code: status.code(),
+        stdout,
+        stderr,
+        helper_pid: Some(helper_pid),
+        elapsed_ms: Some(elapsed_ms),
+    })
+}
+
+#[cfg(windows)]
+fn configure_capture_helper_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    use windows::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    command.creation_flags(CREATE_NO_WINDOW.0);
+}
+
+#[cfg(windows)]
+fn spawn_capture_pipe_reader<R>(mut reader: R) -> thread::JoinHandle<String>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        String::from_utf8_lossy(&bytes).into_owned()
+    })
+}
+
+#[cfg(windows)]
+fn join_capture_pipe_reader(handle: Option<thread::JoinHandle<String>>) -> String {
+    handle
+        .map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|_| "<capture helper pipe reader panicked>".into())
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(windows)]
+fn terminate_capture_helper(child: &mut Child, job: Option<&CaptureHelperJob>, exit_code: u32) {
+    if let Some(job) = job {
+        if let Err(error) = job.terminate(exit_code) {
             tracing::warn!(
-                capture_kind = capture_kind,
-                helper_pid = helper_pid,
-                timeout_secs = timeout.as_secs(),
-                "capture helper timed out"
+                helper_pid = child.id(),
+                error = %error,
+                "failed to terminate capture helper job; falling back to child.kill"
             );
-            terminate_capture_helper_pid(helper_pid);
-            let _ = fs::remove_file(request_path);
-            let _ = fs::remove_file(response_path);
-            return Err(error);
+            let _ = child.kill();
         }
-
-        thread::sleep(Duration::from_millis(50));
+    } else {
+        let _ = child.kill();
     }
 }
 
 #[cfg(windows)]
-fn capture_helper_ipc_paths(capture_kind: &str) -> (PathBuf, PathBuf) {
-    let sequence = CAPTURE_HELPER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let mut path = std::env::temp_dir();
-    let name = format!(
-        "winctl-capture-{capture_kind}-{}-{sequence}",
-        std::process::id()
-    );
-    let mut request_path = path.clone();
-    request_path.push(format!("{name}-request.json"));
-    path.push(format!("{name}-response.json"));
-    (request_path, path)
-}
+impl CaptureHelperJob {
+    fn create_for_child(child: &Child) -> Result<Self, String> {
+        use std::mem::size_of;
+        use std::os::windows::io::AsRawHandle;
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
 
-#[cfg(windows)]
-fn terminate_capture_helper_pid(helper_pid: u32) {
-    thread::spawn(move || {
-        let _ = Command::new("taskkill.exe")
-            .args(["/PID", &helper_pid.to_string(), "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-    });
+        let handle = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
+            .map_err(|error| format!("CreateJobObjectW failed: {error}"))?;
+        let job = Self { handle };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        unsafe {
+            SetInformationJobObject(
+                job.handle,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        }
+        .map_err(|error| format!("SetInformationJobObject failed: {error}"))?;
+        unsafe { AssignProcessToJobObject(job.handle, HANDLE(child.as_raw_handle())) }
+            .map_err(|error| format!("AssignProcessToJobObject failed: {error}"))?;
+        Ok(job)
+    }
+
+    fn terminate(&self, exit_code: u32) -> Result<(), String> {
+        use windows::Win32::System::JobObjects::TerminateJobObject;
+
+        unsafe { TerminateJobObject(self.handle, exit_code) }
+            .map_err(|error| format!("TerminateJobObject failed: {error}"))
+    }
 }
 
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
@@ -1189,20 +1277,33 @@ fn decode_capture_helper_output(
     tracing::info!(
         success = output.success,
         status_code = output.status_code,
+        helper_pid = output.helper_pid,
+        elapsed_ms = output.elapsed_ms,
         stdout_bytes = output.stdout.len(),
         stderr_bytes = output.stderr.len(),
         "decoding capture helper output"
     );
     if !output.success {
-        let status = output
-            .status_code
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "unknown".into());
+        let status = output.status_code.map(format_exit_status_code);
         let stderr = summarize_output(&output.stderr);
+        let pid = output
+            .helper_pid
+            .map(|pid| format!(" pid {pid}"))
+            .unwrap_or_default();
+        let elapsed = output
+            .elapsed_ms
+            .map(|elapsed_ms| format!(" after {elapsed_ms}ms"))
+            .unwrap_or_default();
         let details = if stderr.is_empty() {
-            format!("capture helper exited with status {status}")
+            format!(
+                "capture helper{pid} exited with status {}{elapsed}",
+                status.unwrap_or_else(|| "unknown".into())
+            )
         } else {
-            format!("capture helper exited with status {status}; stderr: {stderr}")
+            format!(
+                "capture helper{pid} exited with status {}{elapsed}; stderr: {stderr}",
+                status.unwrap_or_else(|| "unknown".into())
+            )
         };
         return Err(CaptureError {
             code: CaptureErrorCode::CaptureFailed,
@@ -1248,13 +1349,43 @@ fn decode_capture_helper_output(
 }
 
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
-fn capture_helper_timeout_error(capture_kind: &str, timeout: Duration) -> CaptureError {
+fn capture_helper_timeout_error(
+    capture_kind: &str,
+    timeout: Duration,
+    helper_pid: u32,
+    elapsed_ms: u64,
+    stderr: &str,
+) -> CaptureError {
+    let stderr = summarize_output(stderr);
+    let suffix = if stderr.is_empty() {
+        String::new()
+    } else {
+        format!("; stderr: {stderr}")
+    };
     CaptureError {
         code: CaptureErrorCode::CaptureFailed,
         message: format!(
-            "{capture_kind} capture helper timed out after {}s",
-            timeout.as_secs()
+            "{capture_kind} capture helper pid {helper_pid} timed out after {}s ({elapsed_ms}ms elapsed){suffix}",
+            timeout.as_secs(),
         ),
+    }
+}
+
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn format_exit_status_code(code: i32) -> String {
+    let unsigned = code as u32;
+    let label = match unsigned {
+        0xC000_0005 => Some("access_violation"),
+        0xC000_0409 => Some("stack_buffer_overrun"),
+        0xC000_00FD => Some("stack_overflow"),
+        0xC000_0374 => Some("heap_corruption"),
+        0xC000_013A => Some("control_c_exit"),
+        0xC000_0135 => Some("dll_not_found"),
+        _ => None,
+    };
+    match label {
+        Some(label) => format!("{code} (0x{unsigned:08X}, {label})"),
+        None => format!("{code} (0x{unsigned:08X})"),
     }
 }
 
@@ -1396,6 +1527,8 @@ mod tests {
             })
             .to_string(),
             stderr: String::new(),
+            helper_pid: Some(1234),
+            elapsed_ms: Some(50),
         };
 
         let screenshot = decode_capture_helper_output(output).unwrap();
@@ -1420,6 +1553,8 @@ mod tests {
             })
             .to_string(),
             stderr: String::new(),
+            helper_pid: Some(1234),
+            elapsed_ms: Some(50),
         };
 
         let error = decode_capture_helper_output(output).unwrap_err();
@@ -1430,10 +1565,40 @@ mod tests {
 
     #[test]
     fn helper_timeout_is_reported_as_capture_failed() {
-        let error = capture_helper_timeout_error("window", std::time::Duration::from_secs(12));
+        let error = capture_helper_timeout_error(
+            "window",
+            std::time::Duration::from_secs(12),
+            1234,
+            12_050,
+            "native stack stopped responding",
+        );
 
         assert_eq!(error.code, winctl::CaptureErrorCode::CaptureFailed);
-        assert!(error.message.contains("window capture helper timed out"));
+        assert!(error
+            .message
+            .contains("window capture helper pid 1234 timed out"));
         assert!(error.message.contains("12s"));
+        assert!(error.message.contains("12050ms"));
+        assert!(error.message.contains("native stack stopped responding"));
+    }
+
+    #[test]
+    fn helper_crash_status_includes_native_exit_label() {
+        let output = CaptureHelperProcessOutput {
+            success: false,
+            status_code: Some(0xC000_0005_u32 as i32),
+            stdout: String::new(),
+            stderr: "fault in d3d11".into(),
+            helper_pid: Some(4321),
+            elapsed_ms: Some(99),
+        };
+
+        let error = decode_capture_helper_output(output).unwrap_err();
+
+        assert_eq!(error.code, winctl::CaptureErrorCode::CaptureFailed);
+        assert!(error.message.contains("pid 4321"));
+        assert!(error.message.contains("0xC0000005"));
+        assert!(error.message.contains("access_violation"));
+        assert!(error.message.contains("fault in d3d11"));
     }
 }
