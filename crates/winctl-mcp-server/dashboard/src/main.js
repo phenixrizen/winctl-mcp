@@ -77,6 +77,8 @@ createApp({
       docsLoading: false,
       docsError: null,
       docsSearch: '',
+      expandedItems: {},
+      deletingId: null,
       tabs: [
         { id: 'overview', label: 'Overview' },
         { id: 'control', label: 'Control' },
@@ -102,7 +104,29 @@ createApp({
       return this.data?.memory?.items ?? this.data?.memory?.memories ?? [];
     },
     macroItems() {
-      return this.data?.macros?.items ?? this.data?.macros?.macros ?? [];
+      const session = (this.data?.macros?.session_macros ?? []).map((macro) => ({
+        key: `session:${macro.id}`,
+        deleteId: macro.memory_id ?? null,
+        title: macro.title || macro.manifest?.title || macro.id,
+        description: macro.manifest?.description ?? '',
+        kind: macro.kind || macro.manifest?.kind || 'macro',
+        tags: macro.tags ?? macro.manifest?.tags ?? [],
+        steps: macro.manifest?.steps?.length ?? null,
+        source: 'session',
+        raw: macro,
+      }));
+      const stored = (this.data?.macros?.memory_items ?? []).map((item) => ({
+        key: `memory:${item.id}`,
+        deleteId: item.id,
+        title: item.title || item.id,
+        description: item.text ?? '',
+        kind: item.kind || 'macro',
+        tags: item.tags ?? [],
+        steps: item.manifest_json?.steps?.length ?? null,
+        source: 'memory',
+        raw: item,
+      }));
+      return [...session, ...stored];
     },
     macroResults() {
       return this.data?.macro_results?.results ?? [];
@@ -361,6 +385,35 @@ createApp({
         } catch (error) {
           // Leave the original code block in place if the diagram fails to parse.
         }
+      }
+    },
+    toggleExpand(key) {
+      this.expandedItems = { ...this.expandedItems, [key]: !this.expandedItems[key] };
+    },
+    formatStamp(value) {
+      if (!value) return 'n/a';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+    },
+    async deleteItem(id) {
+      if (!id) return;
+      if (!window.confirm('Delete this item permanently? This cannot be undone.')) return;
+      this.deletingId = id;
+      try {
+        const response = await fetch('/dashboard/memory/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ id }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.ok === false) {
+          throw new Error(result?.error?.message ?? `HTTP ${response.status}`);
+        }
+        await this.loadState({ quiet: true });
+      } catch (error) {
+        window.alert(`Delete failed: ${error}`);
+      } finally {
+        this.deletingId = null;
       }
     },
   },
@@ -794,14 +847,96 @@ createApp({
               <h2 class="text-sm font-semibold">Memory</h2>
               <span class="badge badge-info badge-outline">{{ memoryItems.length }}</span>
             </div>
-            <pre class="m-0 max-h-[560px] overflow-auto p-4 text-xs">{{ pretty(data?.memory ?? {}) }}</pre>
+            <div class="max-h-[640px] space-y-3 overflow-auto p-3">
+              <p v-if="!memoryItems.length" class="px-1 py-6 text-center text-sm opacity-60">
+                No memory items.
+              </p>
+              <article
+                v-for="item in memoryItems"
+                :key="item.id"
+                class="rounded-lg border p-3"
+                style="border-color: var(--winctl-border)"
+              >
+                <div class="flex items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="badge badge-sm badge-ghost">{{ item.kind }}</span>
+                      <h3 class="truncate text-sm font-semibold">{{ item.title || item.id }}</h3>
+                    </div>
+                    <p class="mt-1 whitespace-pre-wrap break-words text-xs opacity-80">{{ item.text }}</p>
+                  </div>
+                  <button
+                    class="btn btn-ghost btn-xs text-error shrink-0"
+                    :disabled="deletingId === item.id"
+                    title="Delete"
+                    @click="deleteItem(item.id)"
+                  >Delete</button>
+                </div>
+                <div v-if="item.tags?.length" class="mt-2 flex flex-wrap gap-1">
+                  <span v-for="tag in item.tags" :key="tag" class="badge badge-outline badge-xs">{{ tag }}</span>
+                </div>
+                <div class="mt-2 flex items-center justify-between text-[11px] opacity-60">
+                  <span>updated {{ formatStamp(item.updated_at) }}</span>
+                  <button class="link link-hover" @click="toggleExpand('mem:' + item.id)">
+                    {{ expandedItems['mem:' + item.id] ? 'Hide raw' : 'Raw' }}
+                  </button>
+                </div>
+                <pre
+                  v-if="expandedItems['mem:' + item.id]"
+                  class="winctl-json mt-2 max-h-60 overflow-auto p-2 text-[11px]"
+                >{{ pretty(item) }}</pre>
+              </article>
+            </div>
           </section>
           <section class="winctl-card">
             <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
               <h2 class="text-sm font-semibold">Macros</h2>
               <span class="badge badge-info badge-outline">{{ macroItems.length }}</span>
             </div>
-            <pre class="m-0 max-h-[560px] overflow-auto p-4 text-xs">{{ pretty(data?.macros ?? {}) }}</pre>
+            <div class="max-h-[640px] space-y-3 overflow-auto p-3">
+              <p v-if="!macroItems.length" class="px-1 py-6 text-center text-sm opacity-60">
+                No macros.
+              </p>
+              <article
+                v-for="macro in macroItems"
+                :key="macro.key"
+                class="rounded-lg border p-3"
+                style="border-color: var(--winctl-border)"
+              >
+                <div class="flex items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="badge badge-sm badge-ghost">{{ macro.kind }}</span>
+                      <span class="badge badge-sm" :class="macro.source === 'memory' ? 'badge-info' : 'badge-neutral'">{{ macro.source }}</span>
+                      <h3 class="truncate text-sm font-semibold">{{ macro.title }}</h3>
+                    </div>
+                    <p v-if="macro.description" class="mt-1 whitespace-pre-wrap break-words text-xs opacity-80">{{ macro.description }}</p>
+                  </div>
+                  <button
+                    v-if="macro.deleteId"
+                    class="btn btn-ghost btn-xs text-error shrink-0"
+                    :disabled="deletingId === macro.deleteId"
+                    title="Delete"
+                    @click="deleteItem(macro.deleteId)"
+                  >Delete</button>
+                  <span v-else class="shrink-0 text-[11px] opacity-50" title="Session-only macros are not stored and cannot be deleted here">session-only</span>
+                </div>
+                <div v-if="macro.tags?.length" class="mt-2 flex flex-wrap gap-1">
+                  <span v-for="tag in macro.tags" :key="tag" class="badge badge-outline badge-xs">{{ tag }}</span>
+                </div>
+                <div class="mt-2 flex items-center justify-between text-[11px] opacity-60">
+                  <span v-if="macro.steps != null">{{ macro.steps }} steps</span>
+                  <span v-else></span>
+                  <button class="link link-hover" @click="toggleExpand(macro.key)">
+                    {{ expandedItems[macro.key] ? 'Hide manifest' : 'Manifest' }}
+                  </button>
+                </div>
+                <pre
+                  v-if="expandedItems[macro.key]"
+                  class="winctl-json mt-2 max-h-72 overflow-auto p-2 text-[11px]"
+                >{{ pretty(macro.raw) }}</pre>
+              </article>
+            </div>
           </section>
         </section>
 

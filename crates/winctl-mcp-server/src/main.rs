@@ -17,7 +17,7 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header::CONTENT_TYPE, HeaderMap, StatusCode, Uri};
 use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json as AxumJson, Router};
 use rmcp::schemars;
 use rmcp::{
@@ -3804,6 +3804,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     let dashboard_router = Router::new()
         .route("/dashboard", get(dashboard_html))
         .route("/dashboard/docs", get(dashboard_docs_json))
+        .route("/dashboard/memory/delete", post(dashboard_memory_delete))
         .route("/dashboard/state", get(dashboard_state_json))
         .route("/dashboard/uia", get(dashboard_uia_json))
         .route("/dashboard/screenshot", get(dashboard_screenshot_json))
@@ -3869,6 +3870,20 @@ async fn dashboard_docs_json() -> impl IntoResponse {
         })
         .collect();
     AxumJson(serde_json::json!({ "ok": true, "docs": docs }))
+}
+#[derive(serde::Deserialize)]
+struct DashboardMemoryDeleteBody {
+    id: String,
+}
+async fn dashboard_memory_delete(
+    State(state): State<DashboardState>,
+    AxumJson(body): AxumJson<DashboardMemoryDeleteBody>,
+) -> impl IntoResponse {
+    tracing::info!(memory_id = %body.id, "dashboard memory delete requested");
+    AxumJson(tools::memory::memory_delete(
+        &state.app_state,
+        winctl_memory::MemoryIdRequest { id: body.id },
+    ))
 }
 
 async fn dashboard_asset(AxumPath(path): AxumPath<String>) -> Response {
