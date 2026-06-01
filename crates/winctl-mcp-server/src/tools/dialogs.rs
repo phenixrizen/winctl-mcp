@@ -495,8 +495,7 @@ fn secure_desktop_status() -> serde_json::Value {
 fn input_desktop_name() -> Result<String, String> {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::StationsAndDesktops::{
-        CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_CONTROL_FLAGS,
-        DESKTOP_READOBJECTS, UOI_NAME,
+        CloseDesktop, OpenInputDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS,
     };
 
     let desktop = unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) }
