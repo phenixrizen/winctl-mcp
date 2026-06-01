@@ -1301,6 +1301,38 @@ fn substitute_string(text: &str, context: &ExecutionContext) -> Value {
     }
 }
 
+pub fn macro_results_snapshot(state: &AppState, limit: usize) -> serde_json::Value {
+    let runtime = state.macro_runtime.lock().expect("macro mutex poisoned");
+    let mut results = runtime
+        .results
+        .iter()
+        .map(|(run_id, result)| {
+            serde_json::json!({
+                "run_id": run_id,
+                "result": result,
+            })
+        })
+        .collect::<Vec<_>>();
+    results.sort_by(|left, right| {
+        let left_finished = left
+            .get("result")
+            .and_then(|result| result.get("finished_at"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let right_finished = right
+            .get("result")
+            .and_then(|result| result.get("finished_at"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        right_finished.cmp(left_finished)
+    });
+    results.truncate(limit);
+    serde_json::json!({
+        "ok": true,
+        "results": results,
+    })
+}
+
 fn start_run(state: &AppState) -> (String, Arc<AtomicBool>) {
     let mut runtime = state
         .macro_runtime

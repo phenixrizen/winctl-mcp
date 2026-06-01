@@ -3501,6 +3501,7 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
             limit: Some(20),
         },
     );
+    let macro_results = tools::macros::macro_results_snapshot(&state.app_state, 20);
     let control = tools::control::control_state(&state.app_state)
         .get("control")
         .cloned()
@@ -3515,6 +3516,7 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
         "launched_processes": launched,
         "memory": memory,
         "macros": macros,
+        "macro_results": macro_results,
         "control": control,
         "connected_clients": serde_json::Value::Null,
         "recent_requests": [],
@@ -3619,9 +3621,24 @@ async fn dashboard_capture_file(
         );
         return (StatusCode::FORBIDDEN, "capture path not allowed").into_response();
     }
+    let content_type = capture_file_content_type(&requested);
     match tokio::fs::read(&requested).await {
-        Ok(bytes) => ([(CONTENT_TYPE, "image/png")], bytes).into_response(),
+        Ok(bytes) => ([(CONTENT_TYPE, content_type)], bytes).into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "capture not found").into_response(),
+    }
+}
+
+fn capture_file_content_type(path: &PathBuf) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("gif") => "image/gif",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "image/png",
     }
 }
 

@@ -539,10 +539,14 @@ fn server_listener_accepts(listen: SocketAddr) -> bool {
 #[cfg(windows)]
 mod windows_tray {
     use std::ffi::{c_void, OsStr};
+    use std::io::{Read, Write};
     use std::mem::size_of;
+    use std::net::TcpStream;
     use std::os::windows::ffi::OsStrExt;
+    use std::time::Duration;
 
     use anyhow::Context;
+    use serde_json::Value;
     use windows::core::{w, PCWSTR};
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -552,13 +556,13 @@ mod windows_tray {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
-        DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetWindowLongPtrW, LoadCursorW,
-        LoadIconW, LoadImageW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
-        SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-        CW_USEDEFAULT, GWLP_USERDATA, HICON, IDC_ARROW, IDI_APPLICATION, IMAGE_ICON,
+        DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetWindowLongPtrW, KillTimer,
+        LoadCursorW, LoadIconW, LoadImageW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
+        SetTimer, SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, CREATESTRUCTW, CS_HREDRAW,
+        CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, HICON, IDC_ARROW, IDI_APPLICATION, IMAGE_ICON,
         LR_DEFAULTSIZE, LR_LOADFROMFILE, MF_ENABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
         TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY,
-        WM_LBUTTONDBLCLK, WM_NCCREATE, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+        WM_LBUTTONDBLCLK, WM_NCCREATE, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
     };
 
     use super::{
@@ -576,11 +580,13 @@ mod windows_tray {
     const MENU_OPEN_RECORDER: u32 = 1006;
     const MENU_RECORDING_TOGGLE: u32 = 1007;
     const MENU_QUIT: u32 = 1008;
+    const COMPLETION_TIMER_ID: usize = 2001;
 
     struct TrayState {
         config: TrayConfig,
         icon: HICON,
         icon_needs_destroy: bool,
+        last_completion_key: Option<String>,
     }
 
     pub(super) fn run(config: TrayConfig) -> anyhow::Result<()> {
@@ -616,6 +622,7 @@ mod windows_tray {
                 config,
                 icon,
                 icon_needs_destroy,
+                last_completion_key: None,
             });
             let state_ptr = Box::into_raw(state);
             let hwnd = match CreateWindowExW(
@@ -644,6 +651,7 @@ mod windows_tray {
                 let _ = DestroyWindow(hwnd);
                 return Err(error);
             }
+            let _ = SetTimer(Some(hwnd), COMPLETION_TIMER_ID, 5_000, None);
 
             let mut message = MSG::default();
             while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -703,7 +711,17 @@ mod windows_tray {
                 }
                 LRESULT(0)
             }
+            WM_TIMER => {
+                if wparam.0 == COMPLETION_TIMER_ID {
+                    if let Some(state) = unsafe { tray_state(hwnd) } {
+                        let _ = unsafe { poll_completion(hwnd, state) };
+                    }
+                    return LRESULT(0);
+                }
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
             WM_DESTROY => {
+                let _ = unsafe { KillTimer(Some(hwnd), COMPLETION_TIMER_ID) };
                 if let Some(state) = unsafe { tray_state(hwnd) } {
                     let _ = unsafe { remove_icon(hwnd, state.icon) };
                 }
@@ -823,6 +841,116 @@ mod windows_tray {
                 };
             }
         }
+    }
+
+    unsafe fn poll_completion(hwnd: HWND, state: &mut TrayState) -> anyhow::Result<()> {
+        let Some(completion) = latest_completion(&state.config)? else {
+            return Ok(());
+        };
+        if state.last_completion_key.is_none() {
+            state.last_completion_key = Some(completion.key);
+            return Ok(());
+        }
+        if state.last_completion_key.as_deref() == Some(&completion.key) {
+            return Ok(());
+        }
+        state.last_completion_key = Some(completion.key);
+        let title = if completion.status == "succeeded" {
+            "winctl-mcp run passed"
+        } else {
+            "winctl-mcp run failed"
+        };
+        let message = format!("{} ({})", completion.manifest_title, completion.status);
+        if completion.status == "succeeded" {
+            unsafe { show_balloon(hwnd, title, &message) }?;
+        } else {
+            unsafe { show_error_balloon(hwnd, title, &message) }?;
+        }
+        Ok(())
+    }
+
+    struct Completion {
+        key: String,
+        manifest_title: String,
+        status: String,
+    }
+
+    fn latest_completion(config: &TrayConfig) -> anyhow::Result<Option<Completion>> {
+        let state = fetch_dashboard_state(config)?;
+        let mut completions = state
+            .get("macro_results")
+            .and_then(|value| value.get("results"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                let run_id = entry.get("run_id")?.as_str()?.to_owned();
+                let result = entry.get("result")?;
+                let status = result.get("status")?.as_str()?.to_owned();
+                if !matches!(status.as_str(), "succeeded" | "failed" | "aborted") {
+                    return None;
+                }
+                let finished_at = result
+                    .get("finished_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                let manifest_title = result
+                    .get("manifest_title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("macro run")
+                    .to_owned();
+                Some((
+                    finished_at.clone(),
+                    Completion {
+                        key: format!("{run_id}:{status}:{finished_at}"),
+                        manifest_title,
+                        status,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        completions.sort_by(|left, right| right.0.cmp(&left.0));
+        Ok(completions
+            .into_iter()
+            .map(|(_, completion)| completion)
+            .next())
+    }
+
+    fn fetch_dashboard_state(config: &TrayConfig) -> anyhow::Result<Value> {
+        let mut stream = TcpStream::connect_timeout(&config.listen, Duration::from_millis(600))
+            .context("failed to connect to dashboard state endpoint")?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .context("failed to set dashboard read timeout")?;
+        stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .context("failed to set dashboard write timeout")?;
+        let mut request = format!(
+            "GET /dashboard/state HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
+            config.listen
+        );
+        if let Some(token) = &config.auth_token {
+            request.push_str(&format!("Authorization: Bearer {token}\r\n"));
+        }
+        request.push_str("\r\n");
+        stream
+            .write_all(request.as_bytes())
+            .context("failed to request dashboard state")?;
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .context("failed to read dashboard state response")?;
+        let (headers, body) = response
+            .split_once("\r\n\r\n")
+            .ok_or_else(|| anyhow::anyhow!("dashboard state response was malformed"))?;
+        if !headers.starts_with("HTTP/1.1 200") && !headers.starts_with("HTTP/1.0 200") {
+            anyhow::bail!(
+                "dashboard state returned {}",
+                headers.lines().next().unwrap_or("HTTP error")
+            );
+        }
+        serde_json::from_str(body).context("failed to decode dashboard state JSON")
     }
 
     unsafe fn add_icon(hwnd: HWND, icon: HICON) -> anyhow::Result<()> {

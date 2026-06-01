@@ -116,6 +116,44 @@ textarea {
   background: #0b1020;
 }
 
+.winctl-diff-row,
+.winctl-catalog-item {
+  border: 1px solid var(--winctl-border);
+  border-radius: 8px;
+  background: var(--winctl-panel);
+  padding: 12px;
+}
+
+.winctl-diff-row[aria-selected="true"] {
+  border-color: var(--winctl-cyan);
+  box-shadow: inset 3px 0 0 var(--winctl-cyan);
+}
+
+.winctl-artifact-panel {
+  margin: 0;
+  border: 1px solid var(--winctl-border);
+  border-radius: 8px;
+  background: var(--winctl-panel);
+  padding: 10px;
+}
+
+.winctl-artifact-panel figcaption {
+  margin-bottom: 8px;
+  color: var(--winctl-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.winctl-artifact-panel img {
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #0b1020;
+}
+
 .winctl-dot {
   display: inline-block;
   width: 8px;

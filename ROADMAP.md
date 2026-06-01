@@ -211,9 +211,9 @@
 
 ## Phase 16: Dashboard and System Tray Enhancements
 
-**Status:** Partially complete.
+**Status:** Complete.
 
-**Audit comments:** Added dashboard control/inspection surfaces, authenticated UIA snapshot and screenshot endpoints, capture-image viewing, and tray shortcuts for recorder access/recording toggle. Visual diff browsing, manifest quick-launch catalogs, native toast alerts, and test completion monitoring remain follow-up UX work.
+**Audit comments:** Added dashboard control/inspection surfaces, authenticated UIA snapshot and screenshot endpoints, capture-image viewing, visual diff browsing for failed baseline comparisons, run-video artifact viewing, a read-only saved manifest catalog with copyable run JSON, and tray shortcuts for recorder access/recording toggle. The tray now monitors loopback dashboard state and shows native notification-area alerts when macro/test runs finish as passed, failed, or aborted.
 
 - Add a live view of the UI Automation tree and real-time screenshot feeds to the `/dashboard` for debugging active bindings.
 - Add visual diff viewers to the dashboard for inspecting `capture.compare_baseline` failures.

@@ -44,6 +44,7 @@ createApp({
       error: null,
       selectedTab: 'overview',
       selectedBoundId: '',
+      selectedDiffIndex: 0,
       uiaSnapshot: null,
       screenshotResult: null,
       inspectError: null,
@@ -54,6 +55,8 @@ createApp({
         { id: 'overview', label: 'Overview' },
         { id: 'control', label: 'Control' },
         { id: 'inspect', label: 'Inspect' },
+        { id: 'artifacts', label: 'Artifacts' },
+        { id: 'catalog', label: 'Catalog' },
         { id: 'windows', label: 'Windows' },
         { id: 'processes', label: 'Processes' },
         { id: 'memory', label: 'Memory' },
@@ -73,6 +76,56 @@ createApp({
     },
     macroItems() {
       return this.data?.macros?.items ?? this.data?.macros?.macros ?? [];
+    },
+    macroResults() {
+      return this.data?.macro_results?.results ?? [];
+    },
+    visualDiffs() {
+      const diffs = [];
+      for (const run of this.macroResults) {
+        for (const step of run.result?.step_results ?? []) {
+          const output = step.output ?? {};
+          const comparison = output.comparison ?? output;
+          const diffPath = comparison.diff_path;
+          const actualPath = output.actual_path ?? comparison.actual_path;
+          const baselinePath = output.baseline_path ?? comparison.baseline_path;
+          const passed = output.passed ?? comparison.passed;
+          if (diffPath && actualPath && baselinePath && passed === false) {
+            diffs.push({
+              id: `${run.run_id}:${step.step_id}`,
+              run_id: run.run_id,
+              step_id: step.step_id,
+              title: run.result?.manifest_title ?? 'run',
+              actual_path: actualPath,
+              baseline_path: baselinePath,
+              diff_path: diffPath,
+              different_pixels: comparison.different_pixels,
+              max_different_pixels: comparison.max_different_pixels,
+            });
+          }
+        }
+      }
+      return diffs;
+    },
+    selectedDiff() {
+      return this.visualDiffs[this.selectedDiffIndex] ?? this.visualDiffs[0] ?? null;
+    },
+    videoArtifacts() {
+      const videos = [];
+      for (const run of this.macroResults) {
+        for (const artifact of run.result?.artifacts ?? []) {
+          if (artifact.kind === 'capture.video' && artifact.path) {
+            videos.push({
+              id: `${run.run_id}:${artifact.path}`,
+              run_id: run.run_id,
+              title: run.result?.manifest_title ?? 'run',
+              path: artifact.path,
+              metadata: artifact.metadata ?? {},
+            });
+          }
+        }
+      }
+      return videos;
     },
     controlState() {
       return this.data?.control ?? {};
@@ -123,8 +176,7 @@ createApp({
     screenshotImageUrl() {
       const path = this.screenshotResult?.screenshot?.output_path;
       if (!path) return '';
-      const tokenQuery = authToken ? `&token=${encodeURIComponent(authToken)}` : '';
-      return `/dashboard/capture-file?path=${encodeURIComponent(path)}${tokenQuery}`;
+      return this.captureFileUrl(path);
     },
     controlBadgeClass() {
       const status = this.controlState.status;
@@ -169,8 +221,22 @@ createApp({
     formatUnixMs,
     shortPath,
     rectText,
+    captureFileUrl(path) {
+      if (!path) return '';
+      const tokenQuery = authToken ? `&token=${encodeURIComponent(authToken)}` : '';
+      return `/dashboard/capture-file?path=${encodeURIComponent(path)}${tokenQuery}`;
+    },
     processLabel(process) {
       return process.process_name || process.exe || process.executable_path || 'process';
+    },
+    manifestTitle(item) {
+      return item.manifest?.title || item.title || item.name || item.id || 'Untitled manifest';
+    },
+    manifestDescription(item) {
+      return item.manifest?.description || item.description || item.text || '';
+    },
+    async copyJson(value) {
+      await navigator.clipboard?.writeText(JSON.stringify(value, null, 2)).catch(() => {});
     },
     boundTitle(bound) {
       return bound.window?.title || bound.title_at_bind || 'Untitled window';
@@ -439,6 +505,114 @@ createApp({
             </div>
             <pre class="winctl-json m-0 p-4 text-xs">{{ pretty(uiaSnapshot ?? {}) }}</pre>
           </section>
+        </section>
+
+        <section v-if="selectedTab === 'artifacts'" class="space-y-5">
+          <section class="winctl-card">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+              <h2 class="text-sm font-semibold">Visual diffs</h2>
+              <span class="badge badge-info badge-outline">{{ visualDiffs.length }}</span>
+            </div>
+            <div v-if="!visualDiffs.length" class="px-4 py-8 text-center text-sm text-slate-500">No failed visual baseline artifacts</div>
+            <div v-else class="grid gap-4 p-4 lg:grid-cols-[320px_1fr]">
+              <div class="space-y-2">
+                <button
+                  v-for="(diff, index) in visualDiffs"
+                  :key="diff.id"
+                  type="button"
+                  class="winctl-diff-row w-full text-left"
+                  :aria-selected="selectedDiffIndex === index"
+                  @click="selectedDiffIndex = index"
+                >
+                  <div class="font-medium">{{ diff.title }}</div>
+                  <div class="winctl-code truncate text-xs text-slate-500">{{ diff.step_id }} · {{ diff.different_pixels }} px</div>
+                </button>
+              </div>
+              <div v-if="selectedDiff" class="space-y-4">
+                <div class="grid gap-4 lg:grid-cols-3">
+                  <figure class="winctl-artifact-panel">
+                    <figcaption>Baseline</figcaption>
+                    <img :src="captureFileUrl(selectedDiff.baseline_path)" alt="Baseline artifact" />
+                  </figure>
+                  <figure class="winctl-artifact-panel">
+                    <figcaption>Actual</figcaption>
+                    <img :src="captureFileUrl(selectedDiff.actual_path)" alt="Actual artifact" />
+                  </figure>
+                  <figure class="winctl-artifact-panel">
+                    <figcaption>Diff</figcaption>
+                    <img :src="captureFileUrl(selectedDiff.diff_path)" alt="Diff artifact" />
+                  </figure>
+                </div>
+                <pre class="winctl-json m-0 p-3 text-xs">{{ pretty(selectedDiff) }}</pre>
+              </div>
+            </div>
+          </section>
+
+          <section class="winctl-card">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+              <h2 class="text-sm font-semibold">Run videos</h2>
+              <span class="badge badge-info badge-outline">{{ videoArtifacts.length }}</span>
+            </div>
+            <div v-if="!videoArtifacts.length" class="px-4 py-8 text-center text-sm text-slate-500">No run-video artifacts</div>
+            <div v-else class="grid gap-4 p-4 lg:grid-cols-2">
+              <figure v-for="video in videoArtifacts" :key="video.id" class="winctl-artifact-panel">
+                <figcaption>{{ video.title }}</figcaption>
+                <img :src="captureFileUrl(video.path)" alt="Run video artifact" />
+                <pre class="mt-3 max-h-48 overflow-auto text-xs">{{ pretty(video.metadata) }}</pre>
+              </figure>
+            </div>
+          </section>
+
+          <section class="winctl-card overflow-hidden">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+              <h2 class="text-sm font-semibold">Completions</h2>
+              <span class="badge badge-info badge-outline">{{ macroResults.length }}</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="table winctl-table table-sm min-w-[760px]">
+                <thead>
+                  <tr><th>Run</th><th>Status</th><th>Finished</th><th>Artifacts</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!macroResults.length">
+                    <td colspan="4" class="py-8 text-center text-slate-500">No completed macro or test runs</td>
+                  </tr>
+                  <tr v-for="run in macroResults" :key="run.run_id">
+                    <td>
+                      <div class="font-medium">{{ run.result?.manifest_title || run.run_id }}</div>
+                      <div class="winctl-code text-xs text-slate-500">{{ run.run_id }}</div>
+                    </td>
+                    <td><span class="badge badge-sm" :class="run.result?.status === 'succeeded' ? 'badge-success' : 'badge-error'">{{ run.result?.status }}</span></td>
+                    <td class="text-xs">{{ run.result?.finished_at || 'n/a' }}</td>
+                    <td class="text-xs">{{ (run.result?.artifacts ?? []).length }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section v-if="selectedTab === 'catalog'" class="winctl-card overflow-hidden">
+          <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+            <h2 class="text-sm font-semibold">Manifest catalog</h2>
+            <span class="badge badge-info badge-outline">{{ macroItems.length }}</span>
+          </div>
+          <div class="grid gap-3 p-4 lg:grid-cols-2">
+            <article v-if="!macroItems.length" class="py-8 text-center text-sm text-slate-500 lg:col-span-2">No saved macros or test manifests</article>
+            <article v-for="item in macroItems" :key="item.id || manifestTitle(item)" class="winctl-catalog-item">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <h3 class="text-sm font-semibold">{{ manifestTitle(item) }}</h3>
+                  <p class="mt-1 text-xs text-slate-500">{{ manifestDescription(item) }}</p>
+                </div>
+                <button type="button" class="btn btn-xs" @click="copyJson({ manifest: item.manifest ?? item })">Copy run JSON</button>
+              </div>
+              <div class="mt-3 flex flex-wrap gap-1">
+                <span class="badge badge-ghost badge-sm">{{ item.kind || item.manifest?.version || 'manifest' }}</span>
+                <span v-for="tag in item.tags ?? item.manifest?.tags ?? []" :key="tag" class="badge badge-outline badge-sm">{{ tag }}</span>
+              </div>
+            </article>
+          </div>
         </section>
 
         <section v-if="selectedTab === 'windows'" class="winctl-card overflow-hidden">
