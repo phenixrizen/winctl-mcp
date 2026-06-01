@@ -247,10 +247,11 @@ pub fn capture_ocr_region(state: &AppState, request: CaptureOcrRegionRequest) ->
         bound_id = ?request.bound_id,
         "capture.ocr_region requested"
     );
-    let image_path = match resolve_image_path(state, request.image_path, request.bound_id) {
-        Ok(path) => path,
-        Err(error) => return error,
-    };
+    let (image_path, mapping) =
+        match resolve_image_and_mapping(state, request.image_path, request.bound_id) {
+            Ok(resolved) => resolved,
+            Err(error) => return error,
+        };
     let image = match image::open(&image_path) {
         Ok(image) => image.to_rgba8(),
         Err(error) => return fail("image_open_failed", &format!("{error}"), Some(image_path)),
@@ -298,26 +299,60 @@ pub fn capture_ocr_region(state: &AppState, request: CaptureOcrRegionRequest) ->
         "width": width,
         "height": height,
     });
+    // Word boxes from the providers are crop-local pixels. Translate them so a
+    // caller can click them directly: when the image is a bound-window screenshot
+    // (`mapping` present) words come back in `screen_pixels` with a ready `center`
+    // point usable as `input.click` with `coordinate_space: "screen_pixels"`;
+    // otherwise they stay in the source `image_pixels`.
+    let coordinate_space = if mapping.is_some() {
+        "screen_pixels"
+    } else {
+        "image_pixels"
+    };
 
     #[cfg(windows)]
-    let mut provider_warnings = match run_windows_media_ocr(&crop_path) {
-        Ok(output) => {
-            return ocr_success(image_path, crop_path, region, output, Vec::new());
-        }
-        Err(error) => {
-            tracing::warn!(error = %error, "Windows.Media.Ocr provider failed; falling back to tesseract");
-            vec![serde_json::json!({
-                "provider": "windows_media_ocr",
-                "error": error,
-            })]
-        }
-    };
+    let (provider_output, mut provider_warnings): (Option<OcrOutput>, Vec<serde_json::Value>) =
+        match run_windows_media_ocr(&crop_path) {
+            Ok(output) => (Some(output), Vec::new()),
+            Err(error) => {
+                tracing::warn!(error = %error, "Windows.Media.Ocr provider failed; falling back to tesseract");
+                (
+                    None,
+                    vec![serde_json::json!({
+                        "provider": "windows_media_ocr",
+                        "error": error,
+                    })],
+                )
+            }
+        };
     #[cfg(not(windows))]
-    let mut provider_warnings = Vec::new();
+    let (provider_output, mut provider_warnings): (Option<OcrOutput>, Vec<serde_json::Value>) =
+        (None, Vec::new());
+
+    if let Some(output) = provider_output {
+        let OcrOutput {
+            provider,
+            text,
+            words,
+        } = output;
+        let words = translate_ocr_words(words, x, y, mapping.as_ref());
+        return ocr_success(
+            image_path,
+            crop_path,
+            region,
+            coordinate_space,
+            OcrOutput {
+                provider,
+                text,
+                words,
+            },
+            provider_warnings,
+        );
+    }
 
     match run_tesseract_tsv(&crop_path) {
         Ok(tsv) => {
-            let words = parse_tesseract_tsv(&tsv);
+            let words = translate_ocr_words(parse_tesseract_tsv(&tsv), x, y, mapping.as_ref());
             let text = words
                 .iter()
                 .filter_map(|word| word.get("text").and_then(|value| value.as_str()))
@@ -327,6 +362,7 @@ pub fn capture_ocr_region(state: &AppState, request: CaptureOcrRegionRequest) ->
                 image_path,
                 crop_path,
                 region,
+                coordinate_space,
                 OcrOutput {
                     provider: "tesseract",
                     text,
@@ -497,6 +533,114 @@ fn fresh_snapshot(
     .map_err(|error| serde_json::json!({"ok": false, "error": error}))
 }
 
+/// Maps image (bitmap) pixels to virtual-desktop screen pixels for a bound-window
+/// screenshot, so OCR boxes can be returned in a directly clickable coordinate space.
+struct ScreenMapping {
+    origin_x: f64,
+    origin_y: f64,
+    scale_x: f64,
+    scale_y: f64,
+}
+
+/// Resolve the image to OCR and, when it comes from a bound-window screenshot, the
+/// mapping from image pixels to screen pixels. A caller-supplied `image_path` has no
+/// known screen origin, so it returns `None` and OCR boxes stay in image pixels.
+fn resolve_image_and_mapping(
+    state: &AppState,
+    image_path: Option<String>,
+    bound_id: Option<String>,
+) -> Result<(PathBuf, Option<ScreenMapping>), serde_json::Value> {
+    if let Some(path) = image_path {
+        return Ok((PathBuf::from(path), None));
+    }
+    let Some(bound_id) = bound_id else {
+        return Err(fail(
+            "image_or_bound_id_required",
+            "image_path or bound_id is required",
+            None,
+        ));
+    };
+    let capture = crate::tools::capture::screenshot_window(state, bound_id);
+    if !capture
+        .get("ok")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(capture);
+    }
+    let screenshot = capture.get("screenshot").cloned().unwrap_or_default();
+    let path = screenshot
+        .get("output_path")
+        .and_then(|value| value.as_str())
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            fail(
+                "screenshot_path_missing",
+                "screenshot did not include output_path",
+                None,
+            )
+        })?;
+    let mapping = (|| {
+        let region = screenshot.get("region_virtual_desktop")?;
+        let region_x = region.get("x")?.as_i64()? as f64;
+        let region_y = region.get("y")?.as_i64()? as f64;
+        let region_w = region.get("width")?.as_i64()? as f64;
+        let region_h = region.get("height")?.as_i64()? as f64;
+        let image_w = screenshot.get("width")?.as_u64()? as f64;
+        let image_h = screenshot.get("height")?.as_u64()? as f64;
+        if image_w <= 0.0 || image_h <= 0.0 {
+            return None;
+        }
+        Some(ScreenMapping {
+            origin_x: region_x,
+            origin_y: region_y,
+            scale_x: region_w / image_w,
+            scale_y: region_h / image_h,
+        })
+    })();
+    Ok((path, mapping))
+}
+
+/// Translate provider word boxes (crop-local pixels) into image pixels (adding the
+/// crop origin) and, when a `ScreenMapping` is present, into screen pixels. Adds a
+/// `center` point per word for one-call `input.click` targeting.
+fn translate_ocr_words(
+    words: Vec<serde_json::Value>,
+    crop_x: u32,
+    crop_y: u32,
+    mapping: Option<&ScreenMapping>,
+) -> Vec<serde_json::Value> {
+    words
+        .into_iter()
+        .map(|mut word| {
+            let bounds = word.get("bounds").cloned().unwrap_or_default();
+            let local = |key: &str| bounds.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as f64;
+            let img_x = local("x") + crop_x as f64;
+            let img_y = local("y") + crop_y as f64;
+            let (bx, by, bw, bh) = match mapping {
+                Some(m) => (
+                    m.origin_x + img_x * m.scale_x,
+                    m.origin_y + img_y * m.scale_y,
+                    local("width") * m.scale_x,
+                    local("height") * m.scale_y,
+                ),
+                None => (img_x, img_y, local("width"), local("height")),
+            };
+            word["bounds"] = serde_json::json!({
+                "x": bx.round() as i64,
+                "y": by.round() as i64,
+                "width": bw.round() as i64,
+                "height": bh.round() as i64,
+            });
+            word["center"] = serde_json::json!({
+                "x": (bx + bw / 2.0).round() as i64,
+                "y": (by + bh / 2.0).round() as i64,
+            });
+            word
+        })
+        .collect()
+}
+
 fn resolve_image_path(
     state: &AppState,
     image_path: Option<String>,
@@ -564,6 +708,7 @@ fn ocr_success(
     image_path: PathBuf,
     crop_path: PathBuf,
     region: serde_json::Value,
+    coordinate_space: &str,
     output: OcrOutput,
     provider_warnings: Vec<serde_json::Value>,
 ) -> serde_json::Value {
@@ -574,6 +719,7 @@ fn ocr_success(
         "image_path": image_path,
         "crop_path": crop_path,
         "region": region,
+        "coordinate_space": coordinate_space,
         "text": output.text,
         "words": output.words,
     });
