@@ -20,8 +20,8 @@ use crate::{
     DisplayScreenshotRequest, MacroAbortRequest, MacroDryRunRequest, MacroExportResultRequest,
     MacroGetRequest, MacroListRequest, MacroManifestRequest, MacroPromoteRequest, MacroRunRequest,
     MacroRunStepRequest, ProcessDescribeRequest, ProcessKillRequest, UiFindRequest,
-    WaitForStateRequest, WaitForWindowRequest, WindowImageChangeWaitRequest, WindowMoveRequest,
-    WindowResizeRequest, WindowsForProcessRequest,
+    VideoStartRequest, VideoStopRequest, WaitForStateRequest, WaitForWindowRequest,
+    WindowImageChangeWaitRequest, WindowMoveRequest, WindowResizeRequest, WindowsForProcessRequest,
 };
 
 #[derive(Default)]
@@ -168,7 +168,22 @@ pub fn macro_run(state: &AppState, request: MacroRunRequest) -> serde_json::Valu
         Ok(plan) => {
             let (run_id, abort_flag) = start_run(state);
             let max_steps = request.max_steps.or(state.policy.max_macro_steps);
-            let result = execute_manifest(
+            let mut video_start_warning = None;
+            let video_recording_id = request.video.clone().and_then(|video| {
+                let start = crate::tools::capture::video_start(state, video);
+                if start.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                    start
+                        .get("recording")
+                        .and_then(|recording| recording.get("recording_id"))
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                } else {
+                    tracing::warn!(response = %start, "macro video recording failed to start");
+                    video_start_warning = Some(format!("video recording failed to start: {start}"));
+                    None
+                }
+            });
+            let mut result = execute_manifest(
                 state,
                 &manifest,
                 &plan,
@@ -178,6 +193,18 @@ pub fn macro_run(state: &AppState, request: MacroRunRequest) -> serde_json::Valu
                 ExecutionContext::default(),
                 abort_flag.clone(),
             );
+            if let Some(warning) = video_start_warning {
+                result.diagnostics.push(warning);
+            }
+            if let Some(recording_id) = video_recording_id {
+                let stop = crate::tools::capture::video_stop(
+                    state,
+                    VideoStopRequest {
+                        recording_id: Some(recording_id),
+                    },
+                );
+                attach_video_artifact(&mut result, stop);
+            }
             record_successful_memory_use(state, source_memory_id.as_deref(), &result);
             finish_run(state, &run_id, result.clone());
             serde_json::json!({
@@ -830,6 +857,14 @@ fn dispatch_tool(
                 parse_args::<WindowImageChangeWaitRequest>(args)?,
             ))
         }
+        "capture.video_start" => Ok(crate::tools::capture::video_start(
+            state,
+            parse_args::<VideoStartRequest>(args)?,
+        )),
+        "capture.video_stop" => Ok(crate::tools::capture::video_stop(
+            state,
+            parse_args::<VideoStopRequest>(args)?,
+        )),
         "input.click" => Ok(crate::tools::input::input_click(state, parse_args(args)?)),
         "input.double_click" => Ok(crate::tools::input::input_double_click(
             state,
@@ -1379,6 +1414,25 @@ fn artifacts_from_output(tool: &str) -> Vec<MacroArtifact> {
         path: None,
         metadata: Value::Null,
     }]
+}
+
+fn attach_video_artifact(result: &mut MacroExecutionResult, stop: Value) {
+    if stop.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        let recording = stop.get("recording").cloned().unwrap_or(Value::Null);
+        let path = recording
+            .get("output_path")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        result.artifacts.push(MacroArtifact {
+            kind: "capture.video".into(),
+            path,
+            metadata: recording,
+        });
+    } else {
+        result
+            .diagnostics
+            .push(format!("video recording failed to stop: {stop}"));
+    }
 }
 
 fn macro_filters_match(stored: &StoredMacro, kind: Option<&str>, tags: &[String]) -> bool {

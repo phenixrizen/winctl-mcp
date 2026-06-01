@@ -180,15 +180,17 @@
 
 ## Phase 14: Build, Diagnostics, and Test Reporting
 
-**Status:** Mostly complete.
+**Status:** Complete.
 
-**Audit comments:** Added direct allowlisted `build.run`, `process.metrics`, `diagnostics.crash_report`, `test.report_export`, `dialogs.list`, and `dialogs.invoke_button`. `build.run` now terminates timed-out child processes, `process.metrics` uses native Windows CPU/memory/handle/GDI/USER counters, and `diagnostics.crash_report` queries recent Application errors through the native Event Log API (`EvtQuery`/`EvtNext`/`EvtRender`) plus WER paths. Native dialog handling enumerates foreground dialog buttons and invokes explicit Button/SplitButton elements through UI Automation only; UAC secure-desktop prompts are detected and reported as not automatable. Run-video capture remains open work.
+**Audit comments:** Added direct allowlisted `build.run`, `process.metrics`, `diagnostics.crash_report`, `test.report_export`, `dialogs.list`, `dialogs.invoke_button`, `capture.video_start`, and `capture.video_stop`. `build.run` now terminates timed-out child processes, `process.metrics` uses native Windows CPU/memory/handle/GDI/USER counters, and `diagnostics.crash_report` queries recent Application errors through the native Event Log API (`EvtQuery`/`EvtNext`/`EvtRender`) plus WER paths. Native dialog handling enumerates foreground dialog buttons and invokes explicit Button/SplitButton elements through UI Automation only; UAC secure-desktop prompts are detected and reported as not automatable. Run-video capture records bound windows or displays into GIF replay artifacts and can be attached automatically to macro/test run results.
 
 **Verification:** A Windows runtime integration test now deliberately crashes `winctl-test-target` and asserts `diagnostics.crash_report` returns a structured `wevtapi` Application error entry for the crashed process.
 
 **Verification:** A Windows runtime integration test now asserts `process.metrics` returns nonzero working-set and handle counters for a launched test process.
 
 **Verification:** A Windows runtime integration test now launches a target-owned MessageBox, finds its foreground `#32770` dialog and `OK` button through `dialogs.list`, and closes it with `dialogs.invoke_button` using `InvokePattern`.
+
+**Verification:** A Windows runtime integration test now records display 0 with `capture.video_start`, stops it with `capture.video_stop`, and asserts a GIF artifact exists with multiple captured frames.
 
 - Add a policy-allowlisted `build.run` task runner (msbuild, dotnet, cargo, cmake) with structured error/warning parsing, distinct from unguarded shell execution.
 - Capture launched-process stdout/stderr/log streams for the app under test and expose them as replay artifacts.

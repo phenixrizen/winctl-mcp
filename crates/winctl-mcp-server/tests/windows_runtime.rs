@@ -581,6 +581,65 @@ async fn windows_dialog_tools_invoke_message_box_button() {
     assert_ok("process.kill dialog cleanup", &kill);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_video_capture_records_display_artifact() {
+    let _guard = runtime_test_lock().await;
+    if std::env::var_os("WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION").is_some() {
+        eprintln!("skipping Windows runtime integration because WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION is set");
+        return;
+    }
+
+    let server_exe = server_exe_path();
+    assert!(
+        server_exe.exists(),
+        "server exe missing at {}",
+        server_exe.display()
+    );
+    let mut harness = McpHarness::start(&server_exe).await;
+    harness.initialize().await;
+    let start = harness
+        .call_tool(
+            "capture.video_start",
+            serde_json::json!({
+                "display_index": 0,
+                "frame_interval_ms": 200,
+                "max_duration_ms": 5000,
+                "output_name": "windows-runtime-video"
+            }),
+        )
+        .await;
+    assert_ok("capture.video_start", &start);
+    let recording_id = start["recording"]["recording_id"]
+        .as_str()
+        .expect("video_start should return recording_id")
+        .to_owned();
+    tokio::time::sleep(Duration::from_millis(850)).await;
+    let stop = harness
+        .call_tool(
+            "capture.video_stop",
+            serde_json::json!({
+                "recording_id": recording_id
+            }),
+        )
+        .await;
+    assert_ok("capture.video_stop", &stop);
+    let output_path = stop["recording"]["output_path"]
+        .as_str()
+        .expect("video_stop should return output_path");
+    assert!(
+        PathBuf::from(output_path).exists(),
+        "video artifact should exist at {output_path}: {stop:#}"
+    );
+    assert!(
+        stop["recording"]["frame_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 2,
+        "video recording should capture multiple frames: {stop:#}"
+    );
+    assert_eq!(stop["recording"]["format"], "gif");
+}
+
 struct McpHarness {
     child: Child,
     client: reqwest::Client,

@@ -1,22 +1,24 @@
-use crate::{AppState, WindowImageChangeWaitRequest};
+use crate::{AppState, VideoStartRequest, VideoStopRequest, WindowImageChangeWaitRequest};
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, VecDeque};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use winctl::{
-    monitors, screenshot_display_to_path, screenshot_window_to_path, CaptureError,
-    CaptureErrorCode, ScreenshotResult,
+    list_windows, monitors, screenshot_display_to_path, screenshot_window_to_path, CaptureError,
+    CaptureErrorCode, MonitorInfo, ScreenshotResult, WindowIdentity, WindowInfo,
 };
 
 #[cfg(windows)]
-use std::{
-    process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::process::{Command, Stdio};
 
 pub(crate) const CAPTURE_HELPER_ENV: &str = "WINCTL_CAPTURE_HELPER";
 pub(crate) const CAPTURE_DIR_ENV: &str = "WINCTL_CAPTURE_DIR";
@@ -26,6 +28,58 @@ const CAPTURE_HELPER_RESPONSE_ENV: &str = "WINCTL_CAPTURE_RESPONSE";
 const CAPTURE_HELPER_TIMEOUT: Duration = Duration::from_secs(15);
 #[cfg(windows)]
 static CAPTURE_HELPER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+const MAX_COMPLETED_VIDEO_RECORDINGS: usize = 50;
+const DEFAULT_VIDEO_FRAME_INTERVAL_MS: u64 = 250;
+const DEFAULT_VIDEO_MAX_DURATION_MS: u64 = 5 * 60 * 1000;
+
+#[derive(Default)]
+pub struct VideoRuntimeState {
+    active: Option<ActiveVideoRecording>,
+    completed: VecDeque<VideoRecordingSummary>,
+    next_id: u64,
+}
+
+struct ActiveVideoRecording {
+    recording_id: String,
+    started_unix_ms: u64,
+    target: VideoTarget,
+    frame_interval_ms: u64,
+    max_duration_ms: u64,
+    output_path: PathBuf,
+    frames_dir: PathBuf,
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<VideoRecordingSummary>,
+}
+
+#[derive(Clone)]
+enum VideoTarget {
+    Window {
+        bound_id: String,
+        identity: WindowIdentity,
+        window: WindowInfo,
+    },
+    Display {
+        display_index: usize,
+        monitor: MonitorInfo,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoRecordingSummary {
+    pub recording_id: String,
+    pub started_unix_ms: u64,
+    pub finished_unix_ms: u64,
+    pub status: String,
+    pub target: serde_json::Value,
+    pub output_path: Option<String>,
+    pub frames_dir: String,
+    pub frame_count: usize,
+    pub frame_interval_ms: u64,
+    pub elapsed_ms: u64,
+    pub format: String,
+    pub warnings: Vec<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -246,6 +300,408 @@ pub fn wait_for_window_image_change(
                 "timing": {"elapsed_ms": started.elapsed().as_millis() as u64}
             });
         }
+    }
+}
+
+pub fn video_start(state: &AppState, request: VideoStartRequest) -> serde_json::Value {
+    tracing::info!(
+        bound_id = ?request.bound_id,
+        display_index = ?request.display_index,
+        frame_interval_ms = ?request.frame_interval_ms,
+        max_duration_ms = ?request.max_duration_ms,
+        "capture.video_start requested"
+    );
+    let target = match video_target(state, &request) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let frame_interval_ms = request
+        .frame_interval_ms
+        .unwrap_or(DEFAULT_VIDEO_FRAME_INTERVAL_MS)
+        .clamp(100, 5_000);
+    let max_duration_ms = request
+        .max_duration_ms
+        .unwrap_or(DEFAULT_VIDEO_MAX_DURATION_MS)
+        .clamp(500, 30 * 60 * 1000);
+    let mut runtime = state.video_runtime.lock().expect("video mutex poisoned");
+    if let Some(active) = &runtime.active {
+        return serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "video_recording_already_active",
+                "message": "a video recording is already active; stop it before starting another"
+            },
+            "active": active_summary(active),
+        });
+    }
+    runtime.next_id = runtime.next_id.saturating_add(1).max(1);
+    let recording_id = format!("video-{}", runtime.next_id);
+    let safe_name = request
+        .output_name
+        .as_deref()
+        .map(sanitize_path_component)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| recording_id.clone());
+    let videos_dir = state.capture_dir.join("videos");
+    let frames_dir = videos_dir.join(format!("{safe_name}-frames"));
+    if let Err(error) = fs::create_dir_all(&frames_dir) {
+        return serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "video_frames_dir_failed",
+                "message": format!("failed to create video frame directory {}: {error}", frames_dir.display())
+            }
+        });
+    }
+    let output_path = videos_dir.join(format!("{safe_name}.gif"));
+    let stop = Arc::new(AtomicBool::new(false));
+    let started_unix_ms = now_unix_ms();
+    let target_for_thread = target.clone();
+    let capture_lock = state.capture_lock.clone();
+    let recording_id_for_thread = recording_id.clone();
+    let frames_dir_for_thread = frames_dir.clone();
+    let output_path_for_thread = output_path.clone();
+    let stop_for_thread = stop.clone();
+    let handle = thread::spawn(move || {
+        run_video_recording(
+            recording_id_for_thread,
+            started_unix_ms,
+            target_for_thread,
+            frame_interval_ms,
+            max_duration_ms,
+            frames_dir_for_thread,
+            output_path_for_thread,
+            stop_for_thread,
+            capture_lock,
+        )
+    });
+    let active = ActiveVideoRecording {
+        recording_id: recording_id.clone(),
+        started_unix_ms,
+        target,
+        frame_interval_ms,
+        max_duration_ms,
+        output_path: output_path.clone(),
+        frames_dir: frames_dir.clone(),
+        stop,
+        handle,
+    };
+    let summary = active_summary(&active);
+    runtime.active = Some(active);
+    serde_json::json!({
+        "ok": true,
+        "recording": summary,
+    })
+}
+
+pub fn video_stop(state: &AppState, request: VideoStopRequest) -> serde_json::Value {
+    tracing::info!(recording_id = ?request.recording_id, "capture.video_stop requested");
+    let active = {
+        let mut runtime = state.video_runtime.lock().expect("video mutex poisoned");
+        let Some(active) = runtime.active.take() else {
+            return serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "video_recording_not_active",
+                    "message": "no video recording is active"
+                }
+            });
+        };
+        if request
+            .recording_id
+            .as_ref()
+            .map(|recording_id| recording_id != &active.recording_id)
+            .unwrap_or(false)
+        {
+            let current = active_summary(&active);
+            runtime.active = Some(active);
+            return serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "video_recording_id_mismatch",
+                    "message": "the requested recording_id is not the active recording"
+                },
+                "active": current,
+            });
+        }
+        active
+    };
+    active.stop.store(true, Ordering::SeqCst);
+    let summary = match active.handle.join() {
+        Ok(summary) => summary,
+        Err(error) => VideoRecordingSummary {
+            recording_id: active.recording_id,
+            started_unix_ms: active.started_unix_ms,
+            finished_unix_ms: now_unix_ms(),
+            status: "failed".into(),
+            target: target_json(&active.target),
+            output_path: None,
+            frames_dir: active.frames_dir.to_string_lossy().into_owned(),
+            frame_count: 0,
+            frame_interval_ms: active.frame_interval_ms,
+            elapsed_ms: 0,
+            format: "gif".into(),
+            warnings: vec![format!(
+                "video recording thread panicked: {}",
+                panic_message(error)
+            )],
+        },
+    };
+    let mut runtime = state.video_runtime.lock().expect("video mutex poisoned");
+    runtime.completed.push_back(summary.clone());
+    while runtime.completed.len() > MAX_COMPLETED_VIDEO_RECORDINGS {
+        runtime.completed.pop_front();
+    }
+    serde_json::json!({
+        "ok": summary.status == "completed",
+        "recording": summary,
+    })
+}
+
+fn video_target(
+    state: &AppState,
+    request: &VideoStartRequest,
+) -> Result<VideoTarget, serde_json::Value> {
+    match (&request.bound_id, request.display_index) {
+        (Some(bound_id), None) => {
+            let window = state.revalidate_bound_window(bound_id).map_err(|error| {
+                serde_json::json!({
+                    "ok": false,
+                    "error": error,
+                })
+            })?;
+            Ok(VideoTarget::Window {
+                bound_id: bound_id.clone(),
+                identity: WindowIdentity::from_window(&window),
+                window,
+            })
+        }
+        (None, display_index) => {
+            let display_index = display_index.unwrap_or(0);
+            let desktop = monitors();
+            let Some(monitor) = desktop.monitors.get(display_index).cloned() else {
+                return Err(serde_json::json!({
+                    "ok": false,
+                    "error": {
+                        "code": "no_display",
+                        "message": format!("display index {display_index} is unavailable")
+                    }
+                }));
+            };
+            Ok(VideoTarget::Display {
+                display_index,
+                monitor,
+            })
+        }
+        (Some(_), Some(_)) => Err(serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "video_target_ambiguous",
+                "message": "specify either bound_id or display_index, not both"
+            }
+        })),
+    }
+}
+
+fn active_summary(active: &ActiveVideoRecording) -> serde_json::Value {
+    serde_json::json!({
+        "recording_id": active.recording_id,
+        "started_unix_ms": active.started_unix_ms,
+        "target": target_json(&active.target),
+        "frame_interval_ms": active.frame_interval_ms,
+        "max_duration_ms": active.max_duration_ms,
+        "output_path": active.output_path,
+        "frames_dir": active.frames_dir,
+        "format": "gif",
+    })
+}
+
+fn run_video_recording(
+    recording_id: String,
+    started_unix_ms: u64,
+    target: VideoTarget,
+    frame_interval_ms: u64,
+    max_duration_ms: u64,
+    frames_dir: PathBuf,
+    output_path: PathBuf,
+    stop: Arc<AtomicBool>,
+    capture_lock: Arc<Mutex<()>>,
+) -> VideoRecordingSummary {
+    let started = Instant::now();
+    let mut frame_paths = Vec::new();
+    let mut warnings = Vec::new();
+    let mut index = 0usize;
+    while !stop.load(Ordering::SeqCst) && started.elapsed().as_millis() < max_duration_ms as u128 {
+        let frame_path = frames_dir.join(format!("frame-{index:06}.png"));
+        let capture_result = {
+            let _capture_guard = match capture_lock.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            capture_video_frame(&target, frame_path.clone())
+        };
+        match capture_result {
+            Ok(screenshot) => {
+                frame_paths.push(PathBuf::from(screenshot.output_path));
+                index += 1;
+            }
+            Err(error) => {
+                warnings.push(format!("frame capture failed: {}", error.message));
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(frame_interval_ms));
+    }
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let output = if frame_paths.is_empty() {
+        warnings.push("recording stopped before any frames were captured".into());
+        None
+    } else {
+        match encode_gif(&frame_paths, &output_path, frame_interval_ms) {
+            Ok(()) => Some(output_path.to_string_lossy().into_owned()),
+            Err(error) => {
+                warnings.push(error);
+                None
+            }
+        }
+    };
+    let status = if output.is_some() {
+        "completed"
+    } else {
+        "failed"
+    };
+    VideoRecordingSummary {
+        recording_id,
+        started_unix_ms,
+        finished_unix_ms: now_unix_ms(),
+        status: status.into(),
+        target: target_json(&target),
+        output_path: output,
+        frames_dir: frames_dir.to_string_lossy().into_owned(),
+        frame_count: frame_paths.len(),
+        frame_interval_ms,
+        elapsed_ms,
+        format: "gif".into(),
+        warnings,
+    }
+}
+
+fn capture_video_frame(
+    target: &VideoTarget,
+    output_path: PathBuf,
+) -> Result<ScreenshotResult, CaptureError> {
+    match target {
+        VideoTarget::Window {
+            identity, window, ..
+        } => {
+            let current = list_windows()
+                .into_iter()
+                .find(|candidate| identity.matches_window(candidate))
+                .ok_or_else(|| CaptureError {
+                    code: CaptureErrorCode::CaptureFailed,
+                    message: format!(
+                        "bound video target {} pid {} is no longer available",
+                        window.hwnd_hex, window.pid
+                    ),
+                })?;
+            capture_window_to_path(&current, output_path.to_string_lossy().into_owned())
+        }
+        VideoTarget::Display {
+            display_index,
+            monitor,
+        } => capture_display_to_path(
+            *display_index,
+            monitor,
+            output_path.to_string_lossy().into_owned(),
+        ),
+    }
+}
+
+fn encode_gif(
+    frame_paths: &[PathBuf],
+    output_path: &Path,
+    frame_interval_ms: u64,
+) -> Result<(), String> {
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create video output directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let file = fs::File::create(output_path).map_err(|error| {
+        format!(
+            "failed to create video artifact {}: {error}",
+            output_path.display()
+        )
+    })?;
+    let mut encoder = image::codecs::gif::GifEncoder::new(file);
+    encoder
+        .set_repeat(image::codecs::gif::Repeat::Infinite)
+        .map_err(|error| format!("failed to configure gif encoder: {error}"))?;
+    let delay = image::Delay::from_numer_denom_ms(frame_interval_ms as u32, 1);
+    for frame_path in frame_paths {
+        let frame = image::open(frame_path)
+            .map_err(|error| {
+                format!(
+                    "failed to read video frame {}: {error}",
+                    frame_path.display()
+                )
+            })?
+            .into_rgba8();
+        encoder
+            .encode_frame(image::Frame::from_parts(frame, 0, 0, delay))
+            .map_err(|error| format!("failed to encode video gif: {error}"))?;
+    }
+    Ok(())
+}
+
+fn target_json(target: &VideoTarget) -> serde_json::Value {
+    match target {
+        VideoTarget::Window {
+            bound_id,
+            identity,
+            window,
+        } => serde_json::json!({
+            "kind": "window",
+            "bound_id": bound_id,
+            "identity": identity,
+            "window": {
+                "hwnd": window.hwnd,
+                "hwnd_hex": window.hwnd_hex,
+                "pid": window.pid,
+                "process_name": window.process_name,
+                "exe_path": window.exe_path,
+                "title": window.title,
+                "class_name": window.class_name,
+            }
+        }),
+        VideoTarget::Display {
+            display_index,
+            monitor,
+        } => serde_json::json!({
+            "kind": "display",
+            "display_index": display_index,
+            "monitor": monitor,
+        }),
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn panic_message(error: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(value) = error.downcast_ref::<&str>() {
+        (*value).into()
+    } else if let Some(value) = error.downcast_ref::<String>() {
+        value.clone()
+    } else {
+        "unknown panic".into()
     }
 }
 

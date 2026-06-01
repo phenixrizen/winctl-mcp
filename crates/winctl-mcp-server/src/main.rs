@@ -50,6 +50,7 @@ pub struct AppState {
     pub memory: Arc<Mutex<winctl_memory::MemoryStore>>,
     pub macro_runtime: Arc<Mutex<tools::macros::MacroRuntimeState>>,
     pub recorder_runtime: Arc<Mutex<tools::recorder::RecorderRuntimeState>>,
+    pub video_runtime: Arc<Mutex<tools::capture::VideoRuntimeState>>,
     pub control_runtime: Arc<Mutex<tools::control::ControlRuntimeState>>,
     launch_counter: Arc<AtomicU64>,
 }
@@ -161,6 +162,7 @@ impl AppState {
             recorder_runtime: Arc::new(
                 Mutex::new(tools::recorder::RecorderRuntimeState::default()),
             ),
+            video_runtime: Arc::new(Mutex::new(tools::capture::VideoRuntimeState::default())),
             control_runtime,
             launch_counter: Arc::new(AtomicU64::new(1)),
         }
@@ -697,6 +699,7 @@ pub struct TestManifestRequest {
 pub struct TestRunRequest {
     pub manifest: winctl_macro::TestManifest,
     pub max_steps: Option<usize>,
+    pub video: Option<VideoStartRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
@@ -704,6 +707,20 @@ pub struct WindowImageChangeWaitRequest {
     pub bound_id: String,
     pub timeout_ms: Option<u64>,
     pub poll_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct VideoStartRequest {
+    pub bound_id: Option<String>,
+    pub display_index: Option<usize>,
+    pub frame_interval_ms: Option<u64>,
+    pub max_duration_ms: Option<u64>,
+    pub output_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct VideoStopRequest {
+    pub recording_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
@@ -976,6 +993,7 @@ pub struct MacroRunRequest {
     pub manifest: Option<winctl_macro::MacroManifest>,
     pub memory_id: Option<String>,
     pub max_steps: Option<usize>,
+    pub video: Option<VideoStartRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
@@ -3158,6 +3176,38 @@ impl WinctlMcpServer {
         })
         .await
     }
+
+    #[tool(
+        name = "capture.video_start",
+        description = "Start recording a bound window or display to an animated GIF replay artifact."
+    )]
+    pub async fn video_start(
+        &self,
+        request: Parameters<VideoStartRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("capture.video_start", move || {
+            tools::capture::video_start(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "capture.video_stop",
+        description = "Stop the active video recording and return the replay artifact metadata."
+    )]
+    pub async fn video_stop(
+        &self,
+        request: Parameters<VideoStopRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("capture.video_stop", move || {
+            tools::capture::video_stop(&state, request)
+        })
+        .await
+    }
 }
 
 async fn run_blocking_tool<F>(tool_name: &'static str, operation: F) -> Json<serde_json::Value>
@@ -4449,6 +4499,8 @@ mod tests {
                 "capture.read_text",
                 "capture.screenshot_display",
                 "capture.screenshot_window",
+                "capture.video_start",
+                "capture.video_stop",
                 "capture.wait_for_window_image_change",
                 "clipboard.read",
                 "clipboard.write",
@@ -4612,6 +4664,7 @@ mod tests {
                 manifest: Some(delay_manifest()),
                 memory_id: None,
                 max_steps: None,
+                video: None,
             },
         );
         assert_eq!(value["ok"], true);
@@ -4696,6 +4749,7 @@ mod tests {
             TestRunRequest {
                 manifest,
                 max_steps: None,
+                video: None,
             },
         );
         assert_eq!(run["ok"], true);
@@ -4755,6 +4809,7 @@ mod tests {
                 manifest: None,
                 memory_id: Some(memory_id.clone()),
                 max_steps: None,
+                video: None,
             },
         );
         assert_eq!(run["ok"], true);
@@ -4814,6 +4869,7 @@ mod tests {
                 manifest: Some(manifest),
                 memory_id: None,
                 max_steps: None,
+                video: None,
             },
         );
 
@@ -4857,6 +4913,7 @@ mod tests {
                 manifest: Some(manifest),
                 memory_id: None,
                 max_steps: None,
+                video: None,
             },
         );
 

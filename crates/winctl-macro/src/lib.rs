@@ -956,6 +956,20 @@ const SUPPORTED_TOOLS: &[ToolDescriptor] = &[
         produces_artifact: true,
     },
     ToolDescriptor {
+        name: "capture.video_start",
+        category: "capture",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: true,
+    },
+    ToolDescriptor {
+        name: "capture.video_stop",
+        category: "capture",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: true,
+    },
+    ToolDescriptor {
         name: "input.click",
         category: "input",
         mutates_ui: true,

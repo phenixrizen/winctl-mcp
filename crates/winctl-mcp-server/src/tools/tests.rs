@@ -40,6 +40,7 @@ pub fn test_run(state: &AppState, request: TestRunRequest) -> serde_json::Value 
             manifest: Some(winctl_macro::test_manifest_to_macro(&request.manifest)),
             memory_id: None,
             max_steps: request.max_steps,
+            video: request.video,
         },
     )
 }

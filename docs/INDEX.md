@@ -126,6 +126,8 @@
 | `winctl-mcp` | [`capture.compare_baseline`](CAPTURE_COMPARE_BASELINE.md) | Compare an actual image against a baseline and write an optional diff artifact. |
 | `winctl-mcp` | [`capture.screenshot_window`](CAPTURE_SCREENSHOT_WINDOW.md) | Capture a screenshot of a bound window and return exact virtual desktop region metadata. |
 | `winctl-mcp` | [`capture.screenshot_display`](CAPTURE_SCREENSHOT_DISPLAY.md) | Capture a screenshot of a display by zero-based monitor index and return exact virtual desktop region metadata. |
+| `winctl-mcp` | [`capture.video_start`](CAPTURE_VIDEO_START.md) | Start recording a bound window or display to an animated GIF replay artifact. |
+| `winctl-mcp` | [`capture.video_stop`](CAPTURE_VIDEO_STOP.md) | Stop the active video recording and return replay artifact metadata. |
 | `winctl-mcp` | [`capture.wait_for_window_image_change`](CAPTURE_WAIT_FOR_WINDOW_IMAGE_CHANGE.md) | Poll bound-window screenshots until the image bytes change, returning replay-safe capture diagnostics. |
 
 ## Related Docs
