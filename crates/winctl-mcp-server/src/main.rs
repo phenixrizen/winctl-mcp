@@ -1834,7 +1834,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.snapshot",
-        description = "Capture the UI Automation tree of a window previously bound with `windows.bind`, with element roles, names, automation IDs, bounds, state, hierarchy, and stable `element_ref` values; tune with `max_depth` (default 8) and `max_elements` (default 2000). Requires `bound_id`. Read-only (no armed session needed). The returned `element_ref`s are the inputs to `uia.find`/`uia.resolve` and the uia action tools."
+        description = "Capture the UI Automation tree of a window previously bound with `windows.bind`, with element roles, names, automation IDs, bounds, state, hierarchy, and stable `element_ref` values; tune with `max_depth` (default 8) and `max_elements` (default 2000). Requires `bound_id`. Read-only. To locate a SPECIFIC control prefer the targeted `uia.find` — a full snapshot can be large/token-heavy. The returned `element_ref`s feed `uia.find`/`uia.resolve` and the uia action tools."
     )]
     pub async fn uia_snapshot(
         &self,
@@ -1850,7 +1850,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "uia.find",
-        description = "Find UI Automation elements in a fresh snapshot of a bound window by semantic `selector` (name, role, automation_id, class_name, text_contains, include_offscreen). Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns matching elements with stable `element_ref`s for the uia action tools; prefer this over coordinate clicks."
+        description = "Find UI Automation elements in a fresh snapshot of a bound window by semantic `selector` (name, role, automation_id, class_name, text_contains, include_offscreen). Requires `bound_id` from `windows.bind`. Read-only. PREFERRED way to locate controls: returns stable `element_ref`s to drive with the uia action tools (`uia.invoke`/`set_value`/`toggle`/`select`) — no coordinates and no screenshots needed. Only screenshot/OCR when a control is not in the UIA tree."
     )]
     pub async fn uia_find(&self, request: Parameters<UiFindRequest>) -> Json<serde_json::Value> {
         let state = self.state.clone();
@@ -2217,7 +2217,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.ocr_region",
-        description = "Run OCR over an `image_path` region or a freshly captured `bound_id` window region (`x`,`y`,`width`,`height`), returning recognized text with per-word boxes. If `bound_id` is given the target must first be bound via `windows.bind`. Read-only (no armed session needed). Prefer `capture.read_text`/UIA when the text is in the accessibility tree."
+        description = "Run OCR over an `image_path` region or a freshly captured `bound_id` window region (`x`,`y`,`width`,`height`), returning text plus per-word boxes each with a ready-to-click `center`; the response `coordinate_space` is `screen_pixels` (directly usable with `input.click`) when `bound_id` is given, else `image_pixels`. Read-only. Use only as a FALLBACK for text/controls not in the accessibility tree (custom-rendered/canvas UIs) — try `uia.find`/`capture.read_text` first; they are cheaper and exact."
     )]
     pub async fn capture_ocr_region(
         &self,
@@ -3523,7 +3523,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "capture.screenshot_window",
-        description = "Capture a PNG screenshot of a window previously bound with `windows.bind`. Read-only (no armed session needed); identity is revalidated and the call fails closed if the window changed process or closed. Returns the capture artifact id and the exact virtual-desktop region (x, y, width, height) so coordinates align with `input.click` on the same target."
+        description = "Capture a PNG screenshot of a window previously bound with `windows.bind`. Read-only; identity is revalidated and fails closed if the window changed process or closed. Returns the artifact id and exact virtual-desktop region. Use mainly for VISUAL verification (`capture.compare_baseline`) — screenshots are slow and token-heavy, so to find or act on controls prefer `uia.find` + `uia.invoke` (structured, no pixels), and fall back to `capture.ocr_region` only when UIA cannot see the element."
     )]
     pub async fn screenshot_window(
         &self,
@@ -3636,8 +3636,27 @@ impl ServerHandler for WinctlMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Strict Windows control tools. Bind a window before focus, click, type, or window capture actions."
-                    .into(),
+                concat!(
+                    "Strict, identity-validated Windows control. Typical flow: `windows.find` -> ",
+                    "`windows.bind` (returns bound_id) -> `control.arm` -> act -> verify. ",
+                    "All input/click/type, window focus/close, process.kill, registry/filesystem/",
+                    "clipboard mutation, and macro/test replay are gated: call `control.arm` first ",
+                    "or they fail closed (control_consent_required); `control.revoke`/",
+                    "`control.emergency_stop` stops control. ",
+                    "To interact with controls, PREFER UI Automation over pixels: `uia.find` to ",
+                    "locate (targeted; cheaper than a full `uia.snapshot`), then `uia.invoke`/",
+                    "`set_value`/`toggle`/`select`/`set_focus` to act by control pattern - no ",
+                    "coordinates, no screenshot, lowest cost. Use `capture.screenshot_window` only ",
+                    "for visual verification (screenshots are slow and token-heavy). Use ",
+                    "`capture.ocr_region`/`capture.read_text` only as a fallback to read text or ",
+                    "find controls UIA cannot expose (custom-rendered/canvas UIs); ",
+                    "`capture.ocr_region` returns screen-pixel `center` points usable with ",
+                    "`input.click`. Verify results with `uia.get_value`/`assert.*` rather than ",
+                    "screenshots. Read-only tools (windows.list/find/describe, *.list, uia.snapshot/",
+                    "find/resolve, assert.*, capture.*) need no armed session. Identity (HWND+PID+exe) ",
+                    "is revalidated before every action; if a call reports a stale target, re-bind.",
+                )
+                .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
