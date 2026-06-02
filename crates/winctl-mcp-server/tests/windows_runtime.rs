@@ -1550,6 +1550,7 @@ async fn launch_crashing_target(target_exe: &PathBuf) -> u32 {
         .arg("360")
         .arg("--height")
         .arg("220")
+        .arg("--crash-event-log")
         .arg("--crash-after-ms")
         .arg("500")
         .stdin(Stdio::null())

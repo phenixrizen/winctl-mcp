@@ -19,10 +19,14 @@ mod windows_app {
     use std::fs;
     use std::os::windows::ffi::OsStrExt;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use windows::core::{Error, Result, PCWSTR};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Diagnostics::Debug::RaiseFailFastException;
+    use windows::Win32::System::EventLog::{
+        DeregisterEventSource, RegisterEventSourceW, ReportEventW, EVENTLOG_ERROR_TYPE,
+    };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Controls::{
         InitCommonControlsEx, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX,
@@ -49,6 +53,7 @@ mod windows_app {
     const ID_TRACKBAR: i32 = 106;
     const ID_STATUS_TEXT: i32 = 107;
     const ID_PASSWORD_EDIT: i32 = 108;
+    static CRASH_EVENT_LOG: AtomicBool = AtomicBool::new(false);
 
     struct Config {
         title: String,
@@ -65,6 +70,7 @@ mod windows_app {
         child_title: String,
         automation_controls: bool,
         password_control: bool,
+        crash_event_log: bool,
     }
 
     pub fn run() -> Result<()> {
@@ -111,6 +117,7 @@ mod windows_app {
         if config.automation_controls {
             create_automation_controls(hwnd, instance, config.password_control)?;
         }
+        CRASH_EVENT_LOG.store(config.crash_event_log, Ordering::SeqCst);
 
         unsafe {
             let _ = ShowWindow(hwnd, SW_SHOW);
@@ -393,6 +400,9 @@ mod windows_app {
             }
             WM_TIMER => {
                 if wparam.0 == CRASH_TIMER_ID {
+                    if CRASH_EVENT_LOG.load(Ordering::SeqCst) {
+                        write_crash_event_log_marker();
+                    }
                     unsafe {
                         RaiseFailFastException(None, None, 0);
                     }
@@ -483,6 +493,7 @@ mod windows_app {
                 child_title: "winctl integration child".into(),
                 automation_controls: false,
                 password_control: false,
+                crash_event_log: false,
             };
 
             let mut args = env::args().skip(1);
@@ -512,6 +523,7 @@ mod windows_app {
                     "--child-title" => config.child_title = next_value(&mut args, "--child-title"),
                     "--automation-controls" => config.automation_controls = true,
                     "--password-control" => config.password_control = true,
+                    "--crash-event-log" => config.crash_event_log = true,
                     "--help" | "-h" => {
                         print_help();
                         std::process::exit(0);
@@ -553,9 +565,39 @@ mod windows_app {
         OsStr::new(value).encode_wide().chain(Some(0)).collect()
     }
 
+    fn write_crash_event_log_marker() {
+        let source = wide("winctl-test-target");
+        let Ok(handle) = (unsafe { RegisterEventSourceW(PCWSTR::null(), PCWSTR(source.as_ptr())) })
+        else {
+            return;
+        };
+        let pid = std::process::id();
+        let process = wide("winctl-test-target.exe");
+        let pid_text = wide(&format!("pid={pid}"));
+        let marker = wide("winctl crash fixture marker");
+        let strings = [
+            PCWSTR(process.as_ptr()),
+            PCWSTR(pid_text.as_ptr()),
+            PCWSTR(marker.as_ptr()),
+        ];
+        let _ = unsafe {
+            ReportEventW(
+                handle,
+                EVENTLOG_ERROR_TYPE,
+                0,
+                0x5754_434c,
+                None,
+                0,
+                Some(&strings),
+                None,
+            )
+        };
+        let _ = unsafe { DeregisterEventSource(handle) };
+    }
+
     fn print_help() {
         eprintln!(
-            "Usage: winctl-test-target [--title TITLE] [--class CLASS] [--x PX] [--y PX] [--width PX] [--height PX] [--duration-ms MS] [--crash-after-ms MS] [--message-box-after-ms MS] [--ready-file PATH] [--create-child] [--automation-controls] [--password-control]"
+            "Usage: winctl-test-target [--title TITLE] [--class CLASS] [--x PX] [--y PX] [--width PX] [--height PX] [--duration-ms MS] [--crash-after-ms MS] [--message-box-after-ms MS] [--ready-file PATH] [--create-child] [--automation-controls] [--password-control] [--crash-event-log]"
         );
     }
 }
