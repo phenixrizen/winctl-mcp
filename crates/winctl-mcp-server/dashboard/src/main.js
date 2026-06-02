@@ -803,11 +803,12 @@ createApp({
       if (group.kind === 'project') return true;
       return group.docs.some((doc) => doc.slug === this.activeDocSlug);
     },
-    toggleDocGroup(group) {
-      const open = this.docGroupIsOpen(group);
+    setDocGroupOpen(group, event) {
+      if (this.docsSearch.trim()) return;
+      const open = Boolean(event?.target?.open);
       this.collapsedDocGroups = {
         ...this.collapsedDocGroups,
-        [group.id]: open,
+        [group.id]: !open,
       };
     },
     docLinkFromHref(href) {
@@ -1639,29 +1640,25 @@ createApp({
               />
               <div v-if="docsLoading" class="px-1 text-sm opacity-70">Loading docs…</div>
               <div v-else-if="docsError" class="px-1 text-sm text-error">{{ docsError }}</div>
-              <nav v-else class="winctl-doc-groups" aria-label="Documentation navigation">
-                <section v-for="group in filteredDocGroups" :key="group.id" class="winctl-doc-group">
-                  <button
-                    type="button"
-                    class="winctl-doc-group-button"
-                    :aria-expanded="docGroupIsOpen(group)"
-                    @click="toggleDocGroup(group)"
-                  >
-                    <span class="winctl-doc-chevron" aria-hidden="true">{{ docGroupIsOpen(group) ? 'v' : '>' }}</span>
-                    <span class="winctl-doc-group-title">{{ group.label }}</span>
-                    <span class="winctl-doc-count">{{ group.docs.length }}</span>
-                  </button>
-                  <ul v-show="docGroupIsOpen(group)" class="menu menu-sm w-full p-0">
-                    <li v-for="doc in group.docs" :key="doc.slug">
-                      <a
-                        :class="{ active: doc.slug === activeDocSlug }"
-                        @click="selectDoc(doc.slug)"
-                      >{{ doc.title }}</a>
-                    </li>
-                  </ul>
-                </section>
-                <div v-if="!filteredDocs.length" class="px-2 py-1 text-sm opacity-60">No matches</div>
-              </nav>
+              <ul v-else class="menu menu-sm winctl-doc-menu bg-base-200 rounded-box" aria-label="Documentation navigation">
+                <li v-for="group in filteredDocGroups" :key="group.id">
+                  <details :open="docGroupIsOpen(group)" @toggle="setDocGroupOpen(group, $event)">
+                    <summary>
+                      <span class="truncate">{{ group.label }}</span>
+                      <span class="badge badge-xs badge-ghost">{{ group.docs.length }}</span>
+                    </summary>
+                    <ul>
+                      <li v-for="doc in group.docs" :key="doc.slug">
+                        <a
+                          :class="{ 'menu-active': doc.slug === activeDocSlug }"
+                          @click="selectDoc(doc.slug)"
+                        >{{ doc.title }}</a>
+                      </li>
+                    </ul>
+                  </details>
+                </li>
+                <li v-if="!filteredDocs.length" class="px-2 py-1 text-sm opacity-60">No matches</li>
+              </ul>
             </div>
           </aside>
           <section class="winctl-card overflow-hidden">
