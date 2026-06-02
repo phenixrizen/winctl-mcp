@@ -10,6 +10,7 @@ pub mod memory;
 pub mod network;
 pub mod process;
 pub mod recorder;
+pub mod secrets;
 pub mod system;
 pub mod tests;
 pub mod uia;

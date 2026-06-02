@@ -5035,6 +5035,7 @@ dependencies = [
  "winctl-macro",
  "winctl-memory",
  "windows 0.62.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -5051,6 +5052,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "uuid",
+ "windows 0.62.2",
+ "zeroize",
 ]
 
 [[package]]

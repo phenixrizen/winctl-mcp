@@ -54,6 +54,9 @@ flowchart LR
 | `winctl-mcp` | [`registry.read`](REGISTRY_READ.md) | Read a Windows registry value from a selected hive. |
 | `winctl-mcp` | [`registry.write`](REGISTRY_WRITE.md) | Write a Windows registry value only when registry mutation is explicitly enabled. |
 | `winctl-mcp` | [`registry.delete`](REGISTRY_DELETE.md) | Delete a Windows registry value only when registry mutation is explicitly enabled. |
+| `winctl-mcp` | [`secret.set`](SECRET_SET.md) | Store or replace one encrypted secret by name using Windows current-user DPAPI. |
+| `winctl-mcp` | [`secret.list`](SECRET_LIST.md) | List encrypted secret metadata without exposing secret values. |
+| `winctl-mcp` | [`secret.delete`](SECRET_DELETE.md) | Delete one encrypted secret by name. |
 | `winctl-mcp` | [`server.config`](SERVER_CONFIG.md) | Return effective runtime configuration and security policy diagnostics. |
 | `winctl-mcp` | [`server.ping`](SERVER_PING.md) | Return a minimal health response without touching Win32 APIs. |
 | `winctl-mcp` | [`test.validate`](TEST_VALIDATE.md) | Validate a winctl test manifest and its aligned macro manifest. |

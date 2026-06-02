@@ -39,6 +39,7 @@ windows = { version = "0.62", features = [
   "UI_Notifications_Management",
   "Win32_Foundation",
   "Win32_Security",
+  "Win32_Security_Cryptography",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Controls",
   "Win32_UI_Input_KeyboardAndMouse",
@@ -76,3 +77,4 @@ chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 winit = "0.30"
 wry = "0.55.1"
+zeroize = "1"

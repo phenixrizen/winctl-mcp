@@ -1427,6 +1427,27 @@ pub struct MacroExportResultRequest {
     pub run_id: String,
 }
 
+/// Store or replace one encrypted secret.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct SecretSetRequest {
+    /// Stable secret name referenced later by manifest `macro.type_secret` steps.
+    pub name: String,
+    /// Plaintext secret value. The server encrypts it immediately with Windows DPAPI and never returns or logs it.
+    pub value: String,
+    /// Optional human-readable description shown in metadata-only listings.
+    pub description: Option<String>,
+    /// Optional metadata tags for grouping secrets. Defaults to an empty list.
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Delete one encrypted secret by name.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct SecretDeleteRequest {
+    /// Secret name to delete. The value is not returned before deletion.
+    pub name: String,
+}
+
 fn default_force() -> bool {
     true
 }
@@ -1677,6 +1698,47 @@ impl WinctlMcpServer {
         let state = self.state.clone();
         run_blocking_tool("memory.reindex", move || {
             tools::memory::memory_reindex(&state)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "secret.set",
+        description = "Store or replace one encrypted secret by `name`, encrypting `value` immediately with the Windows current-user DPAPI provider. Preconditions: memory mutation policy must allow writes and the server must be running on Windows for DPAPI. Returns metadata only; never returns plaintext or ciphertext. Fails with a policy/provider error rather than writing an unsafe fallback."
+    )]
+    pub async fn secret_set(
+        &self,
+        request: Parameters<SecretSetRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("secret.set", move || {
+            tools::secrets::secret_set(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "secret.list",
+        description = "List encrypted secret metadata: names, descriptions, tags, provider, timestamps, and use counters only. Read-only; no desktop control or armed session needed. There is intentionally no `secret.get`; plaintext is decrypted only by the server-internal macro replay resolver."
+    )]
+    pub async fn secret_list(&self) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        run_blocking_tool("secret.list", move || tools::secrets::secret_list(&state)).await
+    }
+
+    #[tool(
+        name = "secret.delete",
+        description = "Delete one encrypted secret by `name`. Preconditions: memory mutation policy must allow writes. Returns whether a row was removed and never exposes the secret value. Fails with policy or storage diagnostics."
+    )]
+    pub async fn secret_delete(
+        &self,
+        request: Parameters<SecretDeleteRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("secret.delete", move || {
+            tools::secrets::secret_delete(&state, request)
         })
         .await
     }
@@ -5029,6 +5091,9 @@ mod tests {
                 "registry.list",
                 "registry.read",
                 "registry.write",
+                "secret.delete",
+                "secret.list",
+                "secret.set",
                 "server.config",
                 "server.ping",
                 "test.dry_run",

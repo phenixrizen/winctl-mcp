@@ -8,10 +8,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
-pub const MEMORY_SCHEMA_VERSION: i64 = 1;
+pub const MEMORY_SCHEMA_VERSION: i64 = 2;
 pub const DEFAULT_EMBEDDING_DIM: usize = 384;
 pub const DEFAULT_EMBEDDING_MODEL: &str = "winctl-local-minilm-compatible-384";
+pub const SECRET_PROVIDER_WINDOWS_DPAPI_USER: &str = "windows_dpapi_user";
 
 #[derive(Debug, Error)]
 pub enum MemoryError {
@@ -101,6 +103,19 @@ pub struct MemoryListRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryIdRequest {
     pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SecretMetadata {
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    pub provider: String,
+    pub schema_version: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_used_at: Option<String>,
+    pub use_count: i64,
 }
 
 pub struct MemoryStore {
@@ -385,6 +400,104 @@ impl MemoryStore {
         Ok(())
     }
 
+    pub fn set_secret(
+        &mut self,
+        name: &str,
+        plaintext: &str,
+        description: Option<String>,
+        tags: Vec<String>,
+    ) -> Result<SecretMetadata> {
+        let name = normalize_secret_name(name)?;
+        let now = now();
+        let tags_json = serde_json::to_string(&tags)?;
+        let ciphertext = protect_secret(plaintext)?;
+        self.conn.execute(
+            "INSERT INTO secrets (
+                name, ciphertext, description, tags_json, provider, schema_version,
+                created_at, updated_at, use_count
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)
+            ON CONFLICT(name) DO UPDATE SET
+                ciphertext = excluded.ciphertext,
+                description = excluded.description,
+                tags_json = excluded.tags_json,
+                provider = excluded.provider,
+                schema_version = excluded.schema_version,
+                updated_at = excluded.updated_at",
+            params![
+                name,
+                ciphertext,
+                description,
+                tags_json,
+                SECRET_PROVIDER_WINDOWS_DPAPI_USER,
+                MEMORY_SCHEMA_VERSION,
+                now,
+                now,
+            ],
+        )?;
+        self.secret_metadata(&name)?
+            .ok_or_else(|| MemoryError::Other("stored secret metadata could not be read".into()))
+    }
+
+    pub fn list_secrets(&self) -> Result<Vec<SecretMetadata>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, description, tags_json, provider, schema_version,
+                    created_at, updated_at, last_used_at, use_count
+             FROM secrets
+             ORDER BY updated_at DESC, name ASC",
+        )?;
+        let rows = stmt.query_map([], row_to_secret_metadata)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn delete_secret(&mut self, name: &str) -> Result<bool> {
+        let name = normalize_secret_name(name)?;
+        Ok(self
+            .conn
+            .execute("DELETE FROM secrets WHERE name = ?1", [name])?
+            > 0)
+    }
+
+    pub fn resolve_secret_plaintext(&mut self, name: &str) -> Result<Option<Zeroizing<String>>> {
+        let name = normalize_secret_name(name)?;
+        let row = self
+            .conn
+            .query_row(
+                "SELECT ciphertext, provider FROM secrets WHERE name = ?1",
+                [&name],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let Some((ciphertext, provider)) = row else {
+            return Ok(None);
+        };
+        if provider != SECRET_PROVIDER_WINDOWS_DPAPI_USER {
+            return Err(MemoryError::Other(format!(
+                "unsupported secret provider {provider}"
+            )));
+        }
+        let plaintext = unprotect_secret(&ciphertext)?;
+        self.conn.execute(
+            "UPDATE secrets
+             SET last_used_at = ?2, use_count = use_count + 1
+             WHERE name = ?1",
+            params![name, now()],
+        )?;
+        Ok(Some(Zeroizing::new(plaintext)))
+    }
+
+    fn secret_metadata(&self, name: &str) -> Result<Option<SecretMetadata>> {
+        self.conn
+            .query_row(
+                "SELECT name, description, tags_json, provider, schema_version,
+                    created_at, updated_at, last_used_at, use_count
+                 FROM secrets WHERE name = ?1",
+                [name],
+                row_to_secret_metadata,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     fn search_vec(&self, query: &str, limit: usize) -> Result<Vec<(MemoryItem, f64)>> {
         let embedding_json = vector_json(&self.embed_text(query))?;
         let mut stmt = self.conn.prepare(
@@ -512,6 +625,19 @@ impl MemoryStore {
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_vec USING vec0(
               embedding float[384]
             );
+
+            CREATE TABLE IF NOT EXISTS secrets (
+              name TEXT PRIMARY KEY,
+              ciphertext BLOB NOT NULL,
+              description TEXT,
+              tags_json TEXT NOT NULL DEFAULT '[]',
+              provider TEXT NOT NULL,
+              schema_version INTEGER NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              last_used_at TEXT,
+              use_count INTEGER NOT NULL DEFAULT 0
+            );
             ",
         )?;
         self.conn.execute(
@@ -586,6 +712,21 @@ fn row_to_item_offset(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Resul
     })
 }
 
+fn row_to_secret_metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretMetadata> {
+    let tags_json: String = row.get(2)?;
+    Ok(SecretMetadata {
+        name: row.get(0)?,
+        description: row.get(1)?,
+        tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+        provider: row.get(3)?,
+        schema_version: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+        last_used_at: row.get(7)?,
+        use_count: row.get(8)?,
+    })
+}
+
 fn parse_opt_json(value: Option<String>) -> rusqlite::Result<Option<Value>> {
     value
         .map(|value| {
@@ -606,6 +747,94 @@ fn opt_json_to_string(value: &Option<Value>) -> Result<Option<String>> {
         .map(serde_json::to_string)
         .transpose()
         .map_err(Into::into)
+}
+
+fn normalize_secret_name(name: &str) -> Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(MemoryError::Other("secret name must not be empty".into()));
+    }
+    if trimmed.chars().count() > 256 {
+        return Err(MemoryError::Other(
+            "secret name must be 256 characters or fewer".into(),
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+#[cfg(windows)]
+fn protect_secret(plaintext: &str) -> Result<Vec<u8>> {
+    use windows::core::w;
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{
+        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    let bytes = plaintext.as_bytes();
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: bytes.len() as u32,
+        pbData: bytes.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    unsafe {
+        CryptProtectData(
+            &input,
+            w!("winctl-mcp secret"),
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+        .map_err(|error| MemoryError::Other(format!("DPAPI protect failed: {error}")))?;
+        let protected = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let _ = LocalFree(Some(HLOCAL(output.pbData as _)));
+        Ok(protected)
+    }
+}
+
+#[cfg(not(windows))]
+fn protect_secret(_plaintext: &str) -> Result<Vec<u8>> {
+    Err(MemoryError::Other(
+        "DPAPI secrets are only available on Windows".into(),
+    ))
+}
+
+#[cfg(windows)]
+fn unprotect_secret(ciphertext: &[u8]) -> Result<String> {
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: ciphertext.len() as u32,
+        pbData: ciphertext.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    unsafe {
+        CryptUnprotectData(
+            &input,
+            None,
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+        .map_err(|error| MemoryError::Other(format!("DPAPI unprotect failed: {error}")))?;
+        let plaintext = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let _ = LocalFree(Some(HLOCAL(output.pbData as _)));
+        String::from_utf8(plaintext)
+            .map_err(|error| MemoryError::Other(format!("secret was not UTF-8: {error}")))
+    }
+}
+
+#[cfg(not(windows))]
+fn unprotect_secret(_ciphertext: &[u8]) -> Result<String> {
+    Err(MemoryError::Other(
+        "DPAPI secrets are only available on Windows".into(),
+    ))
 }
 
 #[derive(Debug)]
@@ -824,5 +1053,41 @@ mod tests {
 
         assert!(store.delete(&item.id).unwrap());
         assert!(store.get(&item.id).unwrap().is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dpapi_secret_round_trip_and_list_omits_plaintext() {
+        let mut store = MemoryStore::open_in_memory().unwrap();
+        let plaintext = "correct horse battery staple";
+        let metadata = store
+            .set_secret(
+                "betty/login",
+                plaintext,
+                Some("Betty login password".into()),
+                vec!["betty".into(), "login".into()],
+            )
+            .unwrap();
+
+        assert_eq!(metadata.name, "betty/login");
+        assert_eq!(metadata.provider, SECRET_PROVIDER_WINDOWS_DPAPI_USER);
+        let listed = store.list_secrets().unwrap();
+        assert_eq!(listed.len(), 1);
+        let listed_json = serde_json::to_string(&listed).unwrap();
+        assert!(!listed_json.contains(plaintext));
+        assert!(!listed_json.contains("ciphertext"));
+
+        let resolved = store
+            .resolve_secret_plaintext("betty/login")
+            .unwrap()
+            .unwrap();
+        assert_eq!(&*resolved, plaintext);
+        drop(resolved);
+
+        let listed = store.list_secrets().unwrap();
+        assert_eq!(listed[0].use_count, 1);
+        assert!(listed[0].last_used_at.is_some());
+        assert!(store.delete_secret("betty/login").unwrap());
+        assert!(store.list_secrets().unwrap().is_empty());
     }
 }
