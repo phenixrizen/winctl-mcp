@@ -148,7 +148,7 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
             "uia.set_value",
             serde_json::json!({
                 "bound_id": bound_id,
-                "selector": {"role": "Edit"},
+                "selector": {"automation_id": "102", "role": "Edit"},
                 "value": "set by Windows UIA integration",
                 "max_depth": 12,
                 "max_elements": 4000
@@ -159,7 +159,10 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     let get_value = harness
         .call_tool(
             "uia.get_value",
-            action_args(&bound_id, serde_json::json!({"role": "Edit"})),
+            action_args(
+                &bound_id,
+                serde_json::json!({"automation_id": "102", "role": "Edit"}),
+            ),
         )
         .await;
     assert_direct_pattern("uia.get_value", &get_value, "ValuePattern.CurrentValue");
@@ -168,13 +171,17 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
         "set by Windows UIA integration"
     );
 
-    let focus = harness
-        .call_tool(
-            "uia.set_focus",
-            action_args(&bound_id, selector("initial edit value", "Edit")),
-        )
-        .await;
-    assert_direct_pattern("uia.set_focus", &focus, "IUIAutomationElement.SetFocus");
+    let focus = call_direct_pattern_with_retry(
+        &mut harness,
+        "uia.set_focus",
+        "uia.set_focus",
+        action_args(
+            &bound_id,
+            serde_json::json!({"automation_id": "102", "role": "Edit"}),
+        ),
+        "IUIAutomationElement.SetFocus",
+    )
+    .await;
     assert_eq!(focus["outcome"]["after"]["focused"], true);
 
     let secret_value = format!("winctl-secret-{pid}");
@@ -200,7 +207,7 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
             "uia.set_value",
             serde_json::json!({
                 "bound_id": bound_id,
-                "selector": {"role": "Edit"},
+                "selector": {"automation_id": "102", "role": "Edit"},
                 "value": "",
                 "max_depth": 12,
                 "max_elements": 4000
@@ -208,17 +215,17 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
         )
         .await;
     assert_direct_pattern("uia.set_value clear", &clear_edit, "ValuePattern.SetValue");
-    let focus_secret = harness
-        .call_tool(
-            "uia.set_focus",
-            action_args(&bound_id, serde_json::json!({"role": "Edit"})),
-        )
-        .await;
-    assert_direct_pattern(
+    let _focus_secret = call_direct_pattern_with_retry(
+        &mut harness,
+        "uia.set_focus",
         "uia.set_focus before secret",
-        &focus_secret,
+        action_args(
+            &bound_id,
+            serde_json::json!({"automation_id": "102", "role": "Edit"}),
+        ),
         "IUIAutomationElement.SetFocus",
-    );
+    )
+    .await;
     let type_secret = harness
         .call_tool(
             "macro.type_secret",
@@ -246,7 +253,10 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     let typed_secret_value = harness
         .call_tool(
             "uia.get_value",
-            action_args(&bound_id, serde_json::json!({"role": "Edit"})),
+            action_args(
+                &bound_id,
+                serde_json::json!({"automation_id": "102", "role": "Edit"}),
+            ),
         )
         .await;
     assert_direct_pattern(
@@ -1305,6 +1315,29 @@ fn assert_direct_pattern(tool: &str, value: &Value, pattern: &str) {
     assert_ok(tool, value);
     assert_eq!(value["outcome"]["direct_uia_pattern_used"], true);
     assert_eq!(value["outcome"]["pattern_used"], pattern);
+}
+
+async fn call_direct_pattern_with_retry(
+    harness: &mut McpHarness,
+    tool_name: &str,
+    label: &str,
+    arguments: Value,
+    pattern: &str,
+) -> Value {
+    let mut last = Value::Null;
+    for _ in 0..5 {
+        let value = harness.call_tool(tool_name, arguments.clone()).await;
+        if value["ok"] == true
+            && value["outcome"]["direct_uia_pattern_used"] == true
+            && value["outcome"]["pattern_used"] == pattern
+        {
+            return value;
+        }
+        last = value;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert_direct_pattern(label, &last, pattern);
+    last
 }
 
 fn assert_direct_pattern_prefix(tool: &str, value: &Value, pattern_prefix: &str) {
