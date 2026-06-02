@@ -255,6 +255,99 @@
 - Preserve fail-closed behavior: no title-only target resolution, no implicit fallback to a stale previous binding, no guessing when multiple windows match, and no coordinate or pixel fallback unless explicitly requested and reported.
 - Add integration coverage for launch -> bind -> target alias/current -> `input.*`/`uia.*` replay without manually editing `bound_id` into each step, plus negative tests for missing current target, stale HWND, PID recycle, and multi-window ambiguity.
 
+## Phase 19: Human-Recorded Macros and Secrets Vault
+
+**Status:** Planned.
+
+Let a developer record a macro by performing the task themselves: global input hooks resolve the human's clicks and keystrokes into semantic UI Automation steps, and an encrypted, name-referenced secrets vault lets login and secure flows be recorded and replayed without the password ever entering the manifest or the model. Output is a standard `winctl.macro.v1` manifest the MCP replays, using the Phase 18 target model (launch establishes a named alias; later steps use `target: current`/`target: alias`, never raw runtime `bound_id`). Scope is trusted, own-machine developer use. Build order: secrets vault first (it is a dependency and independently useful), then the capture engine, then review/save UX.
+
+- Add a DPAPI-encrypted secrets vault in the embedded SQLite DB with `secret.set`, `secret.list` (names/metadata only), and `secret.delete`. Provide NO model-facing `secret.get`; a server-internal resolver decrypts a secret only at the instant it is typed during replay. Plaintext is never returned to the model, written to a manifest, or logged. DPAPI ties secrets to the current Windows user.
+- Add a `type_secret` macro step kind that resolves a `secret_ref` by name, decrypts server-side, and types it through the existing gated input path; gate it through the control consent gate like other input.
+- Add an in-server capture engine: global `WH_MOUSE_LL` and `WH_KEYBOARD_LL` hooks on a dedicated message-loop thread (the Phase 11 hotkey-thread pattern), ignoring events whose target window belongs to the recorder's own tray, dashboard, or overlay.
+- Add an event-to-step translator: coalesce mouse down/up into `click`, double-click timing into `double_click`, down/move/up into `drag`, wheel into `scroll`, character runs into `type_text`, and modifier combos into `shortcut`. Resolve each pointer event via UIA `ElementFromPoint` to a semantic target (automation id, name, role, class, owning-window identity, stable element reference) with coordinate-plus-screenshot fallback, emitting steps in the Phase 18 target model.
+- Detect focused UIA password fields (`IsPassword`): buffer those keystrokes in memory only (never to disk, log, or model), emit a `type_secret` step with an unbound `secret_ref`, and let the user bind it to a named secret or create one from the buffered value during review.
+- Handle launch with infer-and-confirm: derive a `launch`/`bind` step from the first interaction's process identity (executable path and command line) and establish a named target alias; support an optional explicit fresh launch for deterministic test macros, bind-only for already-running apps, and per-step identity for multi-app/multi-window sessions; let the user confirm or edit launch intent in review.
+- Add session control via global hotkeys (reuse the Phase 11 `RegisterHotKey` infrastructure for start/stop/pause) and tray-toggle plus dashboard buttons, with a persistent on-screen RECORDING overlay (Phase 11 layered window) and tray state. Log every session start, stop, and pause to the audit log; the recorder is a passive observer and never injects input.
+- Add a dashboard Recorder tab to review a stopped session: list captured steps, edit/reorder/delete, scrub text, insert waits and assertions, confirm launch/bind and bind-only choices, bind secret references, then save as a `winctl.macro.v1` manifest via `macro.promote`/memory for replay with `macro.run`.
+- Add tests: unit coverage for the coalescer (down/up to click, double-click timing, drag detection, character-run merging) and the DPAPI vault round-trip (encrypt/decrypt; `secret.list` never returns plaintext); a Windows integration test that records against `winctl-test-target` (click a button, type into an edit, type into a password field) and asserts the manifest has a semantic click, a `type_text`, and a plaintext-free `type_secret`, then replays it with a stored secret.
+- First cut keeps the minimum loop (hooks to coalescer to saved manifest to replay with secrets); the review/scrub UI and assertion insertion may follow as refinements.
+
+## Phase 20: Server Observability — Connected Clients and Request History
+
+**Status:** Planned.
+
+Replace the dashboard's "connected client and request-history tracking are not enabled yet" placeholder with a real observability panel: which MCP clients are connected and a rolling history of tool calls. Each request is attributed to the client that made it, and entries carry only redacted metadata so typed text, secrets, and large blobs never reach the panel. This request-history ring is also the backend data source for the Phase 17 live activity feed.
+
+- Give each per-session MCP server instance a `connection_id`. The HTTP service factory mints one handler per client session, so override rmcp `initialize` to capture the client's name/version against that connection, and deregister on the instance's `Drop`. If rmcp is found not to instantiate one handler per session, fall back to a transport-level task-local or `Mcp-Session-Id` header carried into the dispatch path.
+- Add a connected-clients registry in `AppState`: `connection_id -> { name, version, transport, connected_at, last_seen, request_count, last_tool }`, updated on each request, pruned on disconnect/Drop with staleness fallback. Stdio runs as a single fixed connection.
+- Add a bounded request-history ring (~500 entries) of `{ id, connection_id, tool_name, started_at, duration_ms, ok, error_code, summary }`, recorded centrally at the `run_blocking_tool` choke point (measure duration, read result `ok`/`error.code`, attribute via the instance `connection_id`).
+- Add a `safe_summary(tool, args, result)` redactor built on an explicit allowlist of non-sensitive keys (e.g. `bound_id`, `pid`, `launch_id`, `x`/`y`, counts). It must never emit `text`, `value`, `secret_ref`, clipboard/memory text, or large blobs; an allowlist (not denylist) prevents future sensitive fields from leaking by default.
+- Update `dashboard_state_json` to return real `connected_clients` and `recent_requests` and drop the placeholder warning.
+- Add a dashboard observability panel: a Clients table (client, version, transport, connected-at, last-seen, request count, last tool) and a Requests table (time, client, tool, duration, ok/fail, redacted summary), reusing the existing search/paginate table components. Keep it polled on the existing refresh for v1; true streaming is deferred to the Phase 17 live feed.
+- Keep both rings in-memory (lost on restart, consistent with the control-event ring); durable persistence is future work. The panel stays behind the existing dashboard auth.
+- Add tests: a table-driven redactor test asserting `text`/`value`/`secret_ref` are never emitted for representative tools, ring-eviction behavior, and an integration test that connects an MCP client, issues several tool calls, and asserts the dashboard state shows the client (name/version) plus attributed, redacted request rows.
+
+## Phase 21: Assertion and Require Primitives
+
+**Status:** Planned.
+
+Expand the assertion surface so a developer can fully describe "does my app work" in automated tests. Every assertion shares one model: a `negate`/`expect: present|absent` flag (so absence checks reuse the same tool), an optional `timeout_ms`/`poll_interval_ms` that turns the check into a require/wait-until (poll until it holds, fail on timeout — no separate wait tools), a uniform result `{ ok, passed, negated, expected, actual, predicate, target, elapsed_ms, diagnostics }`, non-mutating execution, targets resolved through the Phase 18 resolver, and a mirrored manifest assertion kind usable in both `preconditions` (fail-fast requires) and `assertions`.
+
+- Extend `assert.element` into a rich matcher: exists, enabled, focused, checked (toggle state), selected, expanded, value (equals/contains/regex via ValuePattern), name, role/control type, editable/readonly, on/offscreen, bounds within tolerance, and count (N elements match the selector).
+- Add `assert.window`: exists, foreground, minimized/maximized/normal, title/class (equals/contains/regex), size/position within tolerance, and responsive (not hung).
+- Add `assert.process`: running/exited, exit code, responsive (not hung), resource ceilings (working-set/handle/GDI/USER via `process.metrics`), and no new crash/WER dump or Application Event Log error since a recorded marker.
+- Add `assert.no_dialog` and `assert.dialog`: fail when an unexpected modal/error dialog is present, or assert a specific dialog with expected title/text/buttons (reusing the dialog tools).
+- Add `assert.file` (exists/absent, content equals/contains/regex, size/hash, within allowlisted roots) and `assert.registry` (value exists/absent/equals/kind), reusing the existing filesystem and registry policy and read paths.
+- Add `assert.visual_match`: element or region screenshot compared to a baseline with tolerance and a saved diff artifact, building on `capture.compare_baseline`; negation asserts no visual change.
+- Add `assert.a11y`: accessible name present, keyboard-focusable, role assigned, contrast ratio above a threshold, and monotonic tab order. (Softest of the set; first candidate to defer if the phase grows too large.)
+- Add `assert.timing`: a measured duration is within budget (action latency, window render after launch), realized as an assertion over recorded step timing metadata. (Also deferrable.)
+- Extend `assert.text_visible` and `assert.pixel_color` with negate, timeout, regex, and explicit window/element scope.
+- Add every new assertion as a manifest assertion kind, validated as non-mutating, and keep assertion failures returning `ok=false` so macro/test runs fail correctly.
+- Add tests: per-predicate unit coverage (true/false/negated, wait-until success and timeout) and a Windows integration pass against `winctl-test-target` (toggle a checkbox then assert checked, close a window then assert it is absent, crash a process then assert it exited and is crash-free=false, write a file then assert it exists, etc.).
+
+## Phase 22: Test Orchestration and Suite Runner
+
+**Status:** Planned (follow-on to Phase 21).
+
+Build the harness that runs the Phase 21 primitives at scale so the MCP can fully automate testing while an app is being developed.
+
+- Add a test-suite concept that runs many `winctl.macro.v1`/test manifests in order, with shared setup/teardown fixtures, per-test tags, and selective runs by tag or name.
+- Add retry and quarantine policy for flaky tests, with per-attempt artifacts and a final stable/flaky verdict.
+- Add a watch mode that reruns a suite (or an affected subset) when a build output changes, closing the edit -> rebuild -> retest loop driven by the Phase 14 `build.run` tooling.
+- Aggregate results into JUnit XML and HTML reports (extending `test.report_export`) with per-test status, timing, and linked artifacts (screenshots, diffs, crash reports) for CI.
+- Surface suite progress and results in the dashboard, including the Phase 17 visual-diff viewer for failed `assert.visual_match` checkpoints.
+- Keep orchestration loopback-first and behind the control consent gate for any suite that performs control actions.
+
+## Phase 23: CDP Web Automation (Chrome, Edge, WebView2)
+
+**Status:** Planned.
+
+Turn the read-only CDP introspection from Phase 15 into full web automation across all Chromium surfaces: standalone Chrome/Edge and embedded WebView2. Introduce a protocol-agnostic web session abstraction (CDP backend now, designed to admit the WebDriver backend in Phase 24) so the tool surface is identical regardless of browser.
+
+- Add a `WebSession` abstraction with a CDP backend and refactor the existing `web.*` tools onto it; add a session/target model where tools take a `web_session_id` (plus optional frame), per-backend capability flags, and an `unsupported_for_protocol` result where applicable.
+- Add attach/launch tools: `web.launch` (Chrome/Edge with `--remote-debugging-port`, reusing process ownership), `web.attach` (a running debug endpoint or a WebView2 host — discover its CDP port and document the host opt-in via `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`), and `web.targets`/`web.close` (generalizing `web.cdp.list_targets`). Keep debug endpoints loopback-only.
+- Add gated interaction tools: `web.navigate`/`reload`/`back`/`forward`; `web.click`/`type`/`set_value`/`press_key`/`select_option`/`hover`/`focus`/`scroll_into_view`/`upload_file` by selector; `web.wait_for` (selector, navigation, network-idle, response, or JS predicate). Typing supports the Phase 19 `secret_ref` so passwords never enter the manifest.
+- Add DOM read tools: `web.query` (CSS/XPath to nodes with attributes, text, and box model) and `web.get_attribute`/`text`/`value`; keep the existing DOM, accessibility, and style snapshots.
+- Add network interception and mocking: `web.network.intercept` rules that match (url/method/resource type) and block, fulfill (mock status/headers/body), modify the request, continue, or fault-inject (offline/abort/delay); plus `web.wait_for_response`/`network_idle` and throttling, over the CDP `Fetch`/`Network` domains. Gated.
+- Add `web.console.events` to capture console messages and uncaught JS exceptions, so a test can catch a broken web app.
+- Add `web.screenshot` (full-scrolling-page and per-element, emitted as an artifact for `assert.visual_match`) and `web.cookies.*`/`web.storage.*` for auth/session setup.
+- Extend the Phase 21 assertion model with a web target (selector plus `web_session_id`) so `assert.element`/text/visual work against the DOM, and add `assert.web_console` (no errors). No parallel assertion set.
+- Gate launch/attach/interaction/mocking through the control consent gate and policy; keep endpoints loopback-only; WebView2 requires host opt-in (cannot be forced).
+- Add tests: unit coverage for interception-rule matching, selector-to-action mapping, and capability routing; an integration test that launches Chrome with a debug port, navigates a local page, clicks/types, asserts DOM state, mocks an API response and asserts the page reflects it, and captures a console error; plus a WebView2 attach test.
+
+## Phase 24: WebDriver-BiDi Backend (Firefox)
+
+**Status:** Planned (follow-on to Phase 23).
+
+Add a second `WebSession` backend so the same web tools drive Firefox via WebDriver BiDi, with no change to the tool surface.
+
+- Add a `BidiSession` backend behind the Phase 23 `WebSession` abstraction, with Firefox launch/session setup (geckodriver/BiDi) and session/target/frame parity.
+- Map interaction, DOM read, and waits onto BiDi (`browsingContext`, `script`, `input`); set capability flags and return `unsupported_for_protocol` for any features BiDi cannot cover.
+- Provide network interception/mocking and console capture via the BiDi `network` and `log` domains; document any parity gaps versus CDP.
+- Make the Phase 21/23 web assertions and `web.screenshot` work against BiDi sessions through the same surfaces.
+- Keep launch/attach/interaction loopback-only and gated, consistent with Phase 23.
+- Add Firefox/BiDi parity integration tests mirroring the Phase 23 suite (navigate, click/type, assert DOM, mock a response, capture a console error) plus capability-flag tests for unsupported features.
+
 ## Not Planned Without Further Design
 
 - Unguarded arbitrary shell execution.
