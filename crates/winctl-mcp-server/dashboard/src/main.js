@@ -54,6 +54,24 @@ function rectText(windowInfo) {
   return `${windowInfo.x}, ${windowInfo.y} / ${windowInfo.width} x ${windowInfo.height}`;
 }
 
+function fieldValue(row, path) {
+  return path.split('.').reduce((value, part) => value?.[part], row);
+}
+
+function searchableText(value) {
+  if (value == null) return '';
+  if (Array.isArray(value)) return value.map(searchableText).join(' ');
+  if (typeof value === 'object') return Object.values(value).map(searchableText).join(' ');
+  return String(value);
+}
+
+function compactValue(value) {
+  if (value == null || value === '') return 'n/a';
+  if (Array.isArray(value)) return value.length ? `${value.length} items` : 'none';
+  if (typeof value === 'object') return `${Object.keys(value).length} fields`;
+  return String(value);
+}
+
 createApp({
   data() {
     return {
@@ -79,6 +97,13 @@ createApp({
       docsSearch: '',
       expandedItems: {},
       deletingId: null,
+      tableState: {
+        control: { query: '', page: 1, pageSize: 10 },
+        completions: { query: '', page: 1, pageSize: 10 },
+        windows: { query: '', page: 1, pageSize: 10 },
+        processes: { query: '', page: 1, pageSize: 10 },
+        uia: { query: '', page: 1, pageSize: 12 },
+      },
       tabs: [
         { id: 'overview', label: 'Overview' },
         { id: 'control', label: 'Control' },
@@ -183,6 +208,63 @@ createApp({
     },
     controlEvents() {
       return this.controlState.events ?? [];
+    },
+    controlEventRows() {
+      return this.controlEvents.slice().reverse();
+    },
+    controlTableFields() {
+      return ['kind', 'status', 'tool_name', 'bound_id', 'message'];
+    },
+    completionTableFields() {
+      return ['run_id', 'result.manifest_title', 'result.status', 'result.finished_at'];
+    },
+    windowsTableFields() {
+      return [
+        'bound_id',
+        'title_at_bind',
+        'identity.hwnd_hex',
+        'identity.pid',
+        'window.title',
+        'window.process_name',
+        'window.exe_path',
+      ];
+    },
+    processTableFields() {
+      return ['process_name', 'exe', 'executable_path', 'pid', 'launch_id', 'command_line'];
+    },
+    uiaTableFields() {
+      return ['name', 'role', 'automation_id', 'class_name', 'element_ref'];
+    },
+    uiaElements() {
+      const root = this.uiaSnapshot?.snapshot?.root;
+      if (!root) return [];
+      const rows = [];
+      this.flattenUiElement(root, rows);
+      return rows;
+    },
+    screenshotDetails() {
+      const screenshot = this.screenshotResult?.screenshot;
+      if (!screenshot) return [];
+      return [
+        ['Artifact', screenshot.artifact_id],
+        ['Output path', screenshot.output_path],
+        ['Region', this.rectText(screenshot.region)],
+        ['Coordinate space', screenshot.coordinate_space],
+        ['Captured at', screenshot.captured_at],
+      ].filter(([, value]) => value != null && value !== '');
+    },
+    selectedDiffDetails() {
+      const diff = this.selectedDiff;
+      if (!diff) return [];
+      return [
+        ['Run', diff.run_id],
+        ['Step', diff.step_id],
+        ['Different pixels', diff.different_pixels],
+        ['Allowed pixels', diff.max_different_pixels],
+        ['Baseline', diff.baseline_path],
+        ['Actual', diff.actual_path],
+        ['Diff', diff.diff_path],
+      ];
     },
     warnings() {
       return this.data?.warnings ?? [];
@@ -312,6 +394,114 @@ createApp({
     badgeClass(value) {
       return value ? 'badge-success' : 'badge-ghost';
     },
+    tableFilteredRows(key, rows, fields) {
+      const query = this.tableState[key]?.query?.trim().toLowerCase() ?? '';
+      if (!query) return rows;
+      return rows.filter((row) =>
+        fields.some((field) => searchableText(fieldValue(row, field)).toLowerCase().includes(query)),
+      );
+    },
+    tablePageRows(key, rows, fields) {
+      const state = this.tableState[key];
+      const filtered = this.tableFilteredRows(key, rows, fields);
+      const totalPages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+      const page = Math.min(Math.max(state.page, 1), totalPages);
+      const start = (page - 1) * state.pageSize;
+      return filtered.slice(start, start + state.pageSize);
+    },
+    tableMeta(key, rows, fields) {
+      const state = this.tableState[key];
+      const filtered = this.tableFilteredRows(key, rows, fields);
+      const totalPages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+      const page = Math.min(Math.max(state.page, 1), totalPages);
+      const start = filtered.length ? (page - 1) * state.pageSize + 1 : 0;
+      const end = Math.min(filtered.length, page * state.pageSize);
+      return {
+        page,
+        totalPages,
+        total: rows.length,
+        filtered: filtered.length,
+        start,
+        end,
+      };
+    },
+    resetTablePage(key) {
+      this.tableState[key].page = 1;
+    },
+    setTablePage(key, page, rows, fields) {
+      const meta = this.tableMeta(key, rows, fields);
+      this.tableState[key].page = Math.min(Math.max(page, 1), meta.totalPages);
+    },
+    previousTablePage(key, rows, fields) {
+      const meta = this.tableMeta(key, rows, fields);
+      this.setTablePage(key, meta.page - 1, rows, fields);
+    },
+    nextTablePage(key, rows, fields) {
+      const meta = this.tableMeta(key, rows, fields);
+      this.setTablePage(key, meta.page + 1, rows, fields);
+    },
+    flattenUiElement(element, rows) {
+      rows.push(element);
+      for (const child of element.children ?? []) {
+        this.flattenUiElement(child, rows);
+      }
+    },
+    uiElementName(element) {
+      return element.name || element.automation_id || element.class_name || element.element_ref || 'Unnamed element';
+    },
+    uiElementState(element) {
+      const states = [];
+      if (element.enabled === true) states.push('enabled');
+      if (element.focused === true) states.push('focused');
+      if (element.offscreen === true) states.push('offscreen');
+      if (element.diagnostics?.length) states.push(`${element.diagnostics.length} diagnostics`);
+      return states;
+    },
+    boundsText(bounds) {
+      if (!bounds) return 'n/a';
+      return `${bounds.x}, ${bounds.y} / ${bounds.width} x ${bounds.height}`;
+    },
+    uiaIndent(element) {
+      return {
+        paddingLeft: `${Math.min(element.depth || 0, 8) * 14}px`,
+      };
+    },
+    detailPairs(value) {
+      if (!value || typeof value !== 'object') return [];
+      return Object.entries(value)
+        .filter(([, detail]) => detail != null && detail !== '')
+        .map(([key, detail]) => [key.replaceAll('_', ' '), compactValue(detail)]);
+    },
+    memoryDetailRows(item) {
+      return [
+        ['ID', item.id],
+        ['Kind', item.kind],
+        ['Created', this.formatStamp(item.created_at)],
+        ['Updated', this.formatStamp(item.updated_at)],
+        ['Use count', item.use_count],
+        ['Last used', this.formatStamp(item.last_used_at)],
+        ['Tags', item.tags?.join(', ')],
+      ].filter(([, value]) => value != null && value !== '' && value !== 'n/a');
+    },
+    macroManifest(macro) {
+      return macro.raw?.manifest ?? macro.raw?.manifest_json ?? macro.manifest ?? null;
+    },
+    macroDetailRows(macro) {
+      const manifest = this.macroManifest(macro);
+      return [
+        ['Source', macro.source],
+        ['Kind', macro.kind],
+        ['Steps', macro.steps],
+        ['Manifest version', manifest?.version],
+        ['Launch tool', manifest?.launch?.tool],
+        ['Bind strategy', manifest?.bind?.strategy],
+        ['Required executable', manifest?.bind?.required_executable],
+        ['App executable', manifest?.app_identity?.executable_name],
+      ].filter(([, value]) => value != null && value !== '');
+    },
+    async copyMacroRunJson(item) {
+      await this.copyJson({ manifest: this.macroManifest(item) ?? item.raw ?? item });
+    },
     async loadUiaSnapshot() {
       if (!this.activeBoundId) return;
       this.inspectError = null;
@@ -420,7 +610,7 @@ createApp({
   template: `
     <div class="winctl-shell">
       <header class="winctl-topbar">
-        <div class="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
+        <div class="flex w-full flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
           <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div class="flex items-center gap-4">
               <img :src="logoUrl" alt="winctl" class="winctl-logo h-12 w-12 rounded-xl" />
@@ -452,7 +642,7 @@ createApp({
         </div>
       </header>
 
-      <main class="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
+      <main class="w-full px-4 py-5 sm:px-6 lg:px-8">
         <nav class="mb-5 flex overflow-x-auto border-b border-slate-200 dark:border-slate-700" aria-label="Dashboard sections">
           <button
             v-for="tab in tabs"
@@ -584,8 +774,21 @@ createApp({
               <h2 class="text-sm font-semibold">Recent control events</h2>
               <span class="badge badge-info badge-outline">{{ controlEvents.length }}</span>
             </div>
-            <div class="overflow-x-auto">
-              <table class="table winctl-table table-sm min-w-[880px]">
+            <div class="winctl-table-toolbar">
+              <input
+                v-model="tableState.control.query"
+                type="search"
+                placeholder="Search events"
+                class="input input-sm input-bordered w-full sm:max-w-xs"
+                @input="resetTablePage('control')"
+              />
+              <span class="text-xs text-slate-500">
+                Showing {{ tableMeta('control', controlEventRows, controlTableFields).start }}-{{ tableMeta('control', controlEventRows, controlTableFields).end }}
+                of {{ tableMeta('control', controlEventRows, controlTableFields).filtered }}
+              </span>
+            </div>
+            <div class="winctl-table-frame">
+              <table class="table winctl-table table-sm">
                 <thead>
                   <tr>
                     <th>Time</th>
@@ -597,19 +800,24 @@ createApp({
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="!controlEvents.length">
-                    <td colspan="6" class="py-8 text-center text-slate-500">No control events</td>
+                  <tr v-if="!tableMeta('control', controlEventRows, controlTableFields).filtered">
+                    <td colspan="6" class="py-8 text-center text-slate-500">{{ tableState.control.query ? 'No matching control events' : 'No control events' }}</td>
                   </tr>
-                  <tr v-for="event in controlEvents.slice().reverse()" :key="event.id">
+                  <tr v-for="event in tablePageRows('control', controlEventRows, controlTableFields)" :key="event.id">
                     <td class="text-xs">{{ formatUnixMs(event.timestamp_unix_ms) }}</td>
                     <td class="winctl-code text-xs">{{ event.kind }}</td>
                     <td><span class="badge badge-ghost badge-sm">{{ event.status }}</span></td>
                     <td class="winctl-code text-xs">{{ event.tool_name || 'n/a' }}</td>
-                    <td class="winctl-code max-w-[220px] truncate text-xs">{{ event.bound_id || 'n/a' }}</td>
-                    <td class="max-w-[360px] truncate text-xs">{{ event.message }}</td>
+                    <td class="winctl-code text-xs">{{ event.bound_id || 'n/a' }}</td>
+                    <td class="text-xs">{{ event.message }}</td>
                   </tr>
                 </tbody>
               </table>
+            </div>
+            <div class="winctl-table-footer">
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('control', controlEventRows, controlTableFields).page <= 1" @click="previousTablePage('control', controlEventRows, controlTableFields)">Previous</button>
+              <span class="text-xs text-slate-500">Page {{ tableMeta('control', controlEventRows, controlTableFields).page }} of {{ tableMeta('control', controlEventRows, controlTableFields).totalPages }}</span>
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('control', controlEventRows, controlTableFields).page >= tableMeta('control', controlEventRows, controlTableFields).totalPages" @click="nextTablePage('control', controlEventRows, controlTableFields)">Next</button>
             </div>
           </section>
         </section>
@@ -638,16 +846,75 @@ createApp({
               <div v-if="inspectError" class="alert alert-error text-sm">{{ inspectError }}</div>
               <div v-if="screenshotResult?.screenshot" class="space-y-3">
                 <img v-if="screenshotImageUrl" :src="screenshotImageUrl" alt="Bound window screenshot" class="winctl-screenshot" />
-                <pre class="winctl-json m-0 p-3 text-xs">{{ pretty(screenshotResult.screenshot) }}</pre>
+                <dl class="winctl-detail-grid">
+                  <div v-for="[label, value] in screenshotDetails" :key="label" class="winctl-detail-row">
+                    <dt>{{ label }}</dt>
+                    <dd>{{ value }}</dd>
+                  </div>
+                </dl>
               </div>
             </div>
           </section>
 
           <section class="winctl-card overflow-hidden">
-            <div class="winctl-card-header px-4 py-3">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
               <h2 class="text-sm font-semibold">UI Automation tree</h2>
+              <span class="badge badge-info badge-outline">{{ uiaElements.length }}</span>
             </div>
-            <pre class="winctl-json m-0 p-4 text-xs">{{ pretty(uiaSnapshot ?? {}) }}</pre>
+            <div v-if="!uiaSnapshot" class="px-4 py-8 text-center text-sm text-slate-500">Capture a UIA snapshot to inspect elements</div>
+            <template v-else>
+              <div class="winctl-detail-strip">
+                <span>{{ uiaSnapshot.snapshot?.owner_window?.title || 'Untitled window' }}</span>
+                <span>{{ uiaSnapshot.snapshot?.flattened_count || 0 }} elements</span>
+                <span v-if="uiaSnapshot.snapshot?.truncated" class="text-warning">truncated</span>
+              </div>
+              <div class="winctl-table-toolbar">
+                <input
+                  v-model="tableState.uia.query"
+                  type="search"
+                  placeholder="Search UIA elements"
+                  class="input input-sm input-bordered w-full sm:max-w-xs"
+                  @input="resetTablePage('uia')"
+                />
+                <span class="text-xs text-slate-500">
+                  Showing {{ tableMeta('uia', uiaElements, uiaTableFields).start }}-{{ tableMeta('uia', uiaElements, uiaTableFields).end }}
+                  of {{ tableMeta('uia', uiaElements, uiaTableFields).filtered }}
+                </span>
+              </div>
+              <div class="winctl-table-frame">
+                <table class="table winctl-table table-sm">
+                  <thead>
+                    <tr><th>Element</th><th>Role</th><th>Automation ID</th><th>Class</th><th>Bounds</th><th>State</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-if="!tableMeta('uia', uiaElements, uiaTableFields).filtered">
+                      <td colspan="6" class="py-8 text-center text-slate-500">No matching UIA elements</td>
+                    </tr>
+                    <tr v-for="element in tablePageRows('uia', uiaElements, uiaTableFields)" :key="element.element_ref">
+                      <td>
+                        <div class="font-medium" :style="uiaIndent(element)">{{ uiElementName(element) }}</div>
+                        <div class="winctl-code text-[11px] text-slate-500">{{ element.element_ref }}</div>
+                      </td>
+                      <td>{{ element.role || 'n/a' }}</td>
+                      <td class="winctl-code text-xs">{{ element.automation_id || 'n/a' }}</td>
+                      <td class="winctl-code text-xs">{{ element.class_name || 'n/a' }}</td>
+                      <td class="winctl-code text-xs">{{ boundsText(element.bounds) }}</td>
+                      <td>
+                        <div class="flex flex-wrap gap-1">
+                          <span v-for="state in uiElementState(element)" :key="state" class="badge badge-ghost badge-xs">{{ state }}</span>
+                          <span v-if="!uiElementState(element).length" class="text-xs text-slate-500">n/a</span>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="winctl-table-footer">
+                <button type="button" class="btn btn-xs" :disabled="tableMeta('uia', uiaElements, uiaTableFields).page <= 1" @click="previousTablePage('uia', uiaElements, uiaTableFields)">Previous</button>
+                <span class="text-xs text-slate-500">Page {{ tableMeta('uia', uiaElements, uiaTableFields).page }} of {{ tableMeta('uia', uiaElements, uiaTableFields).totalPages }}</span>
+                <button type="button" class="btn btn-xs" :disabled="tableMeta('uia', uiaElements, uiaTableFields).page >= tableMeta('uia', uiaElements, uiaTableFields).totalPages" @click="nextTablePage('uia', uiaElements, uiaTableFields)">Next</button>
+              </div>
+            </template>
           </section>
         </section>
 
@@ -687,7 +954,12 @@ createApp({
                     <img :src="captureFileUrl(selectedDiff.diff_path)" alt="Diff artifact" />
                   </figure>
                 </div>
-                <pre class="winctl-json m-0 p-3 text-xs">{{ pretty(selectedDiff) }}</pre>
+                <dl class="winctl-detail-grid">
+                  <div v-for="[label, value] in selectedDiffDetails" :key="label" class="winctl-detail-row">
+                    <dt>{{ label }}</dt>
+                    <dd>{{ value }}</dd>
+                  </div>
+                </dl>
               </div>
             </div>
           </section>
@@ -702,7 +974,20 @@ createApp({
               <figure v-for="video in videoArtifacts" :key="video.id" class="winctl-artifact-panel">
                 <figcaption>{{ video.title }}</figcaption>
                 <img :src="captureFileUrl(video.path)" alt="Run video artifact" />
-                <pre class="mt-3 max-h-48 overflow-auto text-xs">{{ pretty(video.metadata) }}</pre>
+                <dl class="winctl-detail-grid mt-3">
+                  <div class="winctl-detail-row">
+                    <dt>Run</dt>
+                    <dd>{{ video.run_id }}</dd>
+                  </div>
+                  <div class="winctl-detail-row">
+                    <dt>Path</dt>
+                    <dd>{{ video.path }}</dd>
+                  </div>
+                  <div v-for="[label, value] in detailPairs(video.metadata)" :key="label" class="winctl-detail-row">
+                    <dt>{{ label }}</dt>
+                    <dd>{{ value }}</dd>
+                  </div>
+                </dl>
               </figure>
             </div>
           </section>
@@ -712,16 +997,29 @@ createApp({
               <h2 class="text-sm font-semibold">Completions</h2>
               <span class="badge badge-info badge-outline">{{ macroResults.length }}</span>
             </div>
-            <div class="overflow-x-auto">
-              <table class="table winctl-table table-sm min-w-[760px]">
+            <div class="winctl-table-toolbar">
+              <input
+                v-model="tableState.completions.query"
+                type="search"
+                placeholder="Search completions"
+                class="input input-sm input-bordered w-full sm:max-w-xs"
+                @input="resetTablePage('completions')"
+              />
+              <span class="text-xs text-slate-500">
+                Showing {{ tableMeta('completions', macroResults, completionTableFields).start }}-{{ tableMeta('completions', macroResults, completionTableFields).end }}
+                of {{ tableMeta('completions', macroResults, completionTableFields).filtered }}
+              </span>
+            </div>
+            <div class="winctl-table-frame">
+              <table class="table winctl-table table-sm">
                 <thead>
                   <tr><th>Run</th><th>Status</th><th>Finished</th><th>Artifacts</th></tr>
                 </thead>
                 <tbody>
-                  <tr v-if="!macroResults.length">
-                    <td colspan="4" class="py-8 text-center text-slate-500">No completed macro or test runs</td>
+                  <tr v-if="!tableMeta('completions', macroResults, completionTableFields).filtered">
+                    <td colspan="4" class="py-8 text-center text-slate-500">{{ tableState.completions.query ? 'No matching completions' : 'No completed macro or test runs' }}</td>
                   </tr>
-                  <tr v-for="run in macroResults" :key="run.run_id">
+                  <tr v-for="run in tablePageRows('completions', macroResults, completionTableFields)" :key="run.run_id">
                     <td>
                       <div class="font-medium">{{ run.result?.manifest_title || run.run_id }}</div>
                       <div class="winctl-code text-xs text-slate-500">{{ run.run_id }}</div>
@@ -733,6 +1031,11 @@ createApp({
                 </tbody>
               </table>
             </div>
+            <div class="winctl-table-footer">
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('completions', macroResults, completionTableFields).page <= 1" @click="previousTablePage('completions', macroResults, completionTableFields)">Previous</button>
+              <span class="text-xs text-slate-500">Page {{ tableMeta('completions', macroResults, completionTableFields).page }} of {{ tableMeta('completions', macroResults, completionTableFields).totalPages }}</span>
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('completions', macroResults, completionTableFields).page >= tableMeta('completions', macroResults, completionTableFields).totalPages" @click="nextTablePage('completions', macroResults, completionTableFields)">Next</button>
+            </div>
           </section>
         </section>
 
@@ -743,13 +1046,13 @@ createApp({
           </div>
           <div class="grid gap-3 p-4 lg:grid-cols-2">
             <article v-if="!macroItems.length" class="py-8 text-center text-sm text-slate-500 lg:col-span-2">No saved macros or test manifests</article>
-            <article v-for="item in macroItems" :key="item.id || manifestTitle(item)" class="winctl-catalog-item">
+            <article v-for="item in macroItems" :key="item.key" class="winctl-catalog-item">
               <div class="flex items-start justify-between gap-3">
                 <div>
                   <h3 class="text-sm font-semibold">{{ manifestTitle(item) }}</h3>
                   <p class="mt-1 text-xs text-slate-500">{{ manifestDescription(item) }}</p>
                 </div>
-                <button type="button" class="btn btn-xs" @click="copyJson({ manifest: item.manifest ?? item })">Copy run JSON</button>
+                <button type="button" class="btn btn-xs" @click="copyMacroRunJson(item)">Copy run JSON</button>
               </div>
               <div class="mt-3 flex flex-wrap gap-1">
                 <span class="badge badge-ghost badge-sm">{{ item.kind || item.manifest?.version || 'manifest' }}</span>
@@ -764,8 +1067,21 @@ createApp({
             <h2 class="text-sm font-semibold">Bound windows</h2>
             <span class="badge badge-info badge-outline">{{ boundWindows.length }}</span>
           </div>
-          <div class="overflow-x-auto">
-            <table class="table winctl-table table-sm min-w-[920px]">
+          <div class="winctl-table-toolbar">
+            <input
+              v-model="tableState.windows.query"
+              type="search"
+              placeholder="Search windows"
+              class="input input-sm input-bordered w-full sm:max-w-xs"
+              @input="resetTablePage('windows')"
+            />
+            <span class="text-xs text-slate-500">
+              Showing {{ tableMeta('windows', boundWindows, windowsTableFields).start }}-{{ tableMeta('windows', boundWindows, windowsTableFields).end }}
+              of {{ tableMeta('windows', boundWindows, windowsTableFields).filtered }}
+            </span>
+          </div>
+          <div class="winctl-table-frame">
+            <table class="table winctl-table table-sm">
               <thead>
                 <tr>
                   <th>Title</th>
@@ -777,19 +1093,19 @@ createApp({
                 </tr>
               </thead>
               <tbody>
-                <tr v-if="!boundWindows.length">
-                  <td colspan="6" class="py-8 text-center text-slate-500">No bound windows</td>
+                <tr v-if="!tableMeta('windows', boundWindows, windowsTableFields).filtered">
+                  <td colspan="6" class="py-8 text-center text-slate-500">{{ tableState.windows.query ? 'No matching bound windows' : 'No bound windows' }}</td>
                 </tr>
-                <tr v-for="bound in boundWindows" :key="bound.bound_id">
+                <tr v-for="bound in tablePageRows('windows', boundWindows, windowsTableFields)" :key="bound.bound_id">
                   <td>
-                    <div class="max-w-[320px] truncate font-medium">{{ boundTitle(bound) }}</div>
-                    <div class="winctl-code max-w-[320px] truncate text-xs text-slate-500">{{ bound.bound_id }}</div>
+                    <div class="font-medium">{{ boundTitle(bound) }}</div>
+                    <div class="winctl-code text-xs text-slate-500">{{ bound.bound_id }}</div>
                   </td>
                   <td class="winctl-code text-xs">{{ bound.identity?.hwnd_hex }}</td>
                   <td class="winctl-code text-xs">{{ bound.identity?.pid }}</td>
                   <td>
                     <div>{{ bound.window?.process_name || 'n/a' }}</div>
-                    <div class="max-w-[260px] truncate text-xs text-slate-500">{{ shortPath(bound.window?.exe_path) }}</div>
+                    <div class="text-xs text-slate-500">{{ shortPath(bound.window?.exe_path) }}</div>
                   </td>
                   <td class="winctl-code text-xs">{{ rectText(bound.window) }}</td>
                   <td>
@@ -804,6 +1120,11 @@ createApp({
               </tbody>
             </table>
           </div>
+          <div class="winctl-table-footer">
+            <button type="button" class="btn btn-xs" :disabled="tableMeta('windows', boundWindows, windowsTableFields).page <= 1" @click="previousTablePage('windows', boundWindows, windowsTableFields)">Previous</button>
+            <span class="text-xs text-slate-500">Page {{ tableMeta('windows', boundWindows, windowsTableFields).page }} of {{ tableMeta('windows', boundWindows, windowsTableFields).totalPages }}</span>
+            <button type="button" class="btn btn-xs" :disabled="tableMeta('windows', boundWindows, windowsTableFields).page >= tableMeta('windows', boundWindows, windowsTableFields).totalPages" @click="nextTablePage('windows', boundWindows, windowsTableFields)">Next</button>
+          </div>
         </section>
 
         <section v-if="selectedTab === 'processes'" class="winctl-card overflow-hidden">
@@ -811,8 +1132,21 @@ createApp({
             <h2 class="text-sm font-semibold">Launched processes</h2>
             <span class="badge badge-info badge-outline">{{ launchedProcesses.length }}</span>
           </div>
-          <div class="overflow-x-auto">
-            <table class="table winctl-table table-sm min-w-[880px]">
+          <div class="winctl-table-toolbar">
+            <input
+              v-model="tableState.processes.query"
+              type="search"
+              placeholder="Search processes"
+              class="input input-sm input-bordered w-full sm:max-w-xs"
+              @input="resetTablePage('processes')"
+            />
+            <span class="text-xs text-slate-500">
+              Showing {{ tableMeta('processes', launchedProcesses, processTableFields).start }}-{{ tableMeta('processes', launchedProcesses, processTableFields).end }}
+              of {{ tableMeta('processes', launchedProcesses, processTableFields).filtered }}
+            </span>
+          </div>
+          <div class="winctl-table-frame">
+            <table class="table winctl-table table-sm">
               <thead>
                 <tr>
                   <th>Process</th>
@@ -823,21 +1157,26 @@ createApp({
                 </tr>
               </thead>
               <tbody>
-                <tr v-if="!launchedProcesses.length">
-                  <td colspan="5" class="py-8 text-center text-slate-500">No launched processes</td>
+                <tr v-if="!tableMeta('processes', launchedProcesses, processTableFields).filtered">
+                  <td colspan="5" class="py-8 text-center text-slate-500">{{ tableState.processes.query ? 'No matching launched processes' : 'No launched processes' }}</td>
                 </tr>
-                <tr v-for="process in launchedProcesses" :key="process.launch_id">
+                <tr v-for="process in tablePageRows('processes', launchedProcesses, processTableFields)" :key="process.launch_id">
                   <td>
                     <div class="font-medium">{{ processLabel(process) }}</div>
-                    <div class="max-w-[280px] truncate text-xs text-slate-500">{{ shortPath(process.executable_path) }}</div>
+                    <div class="text-xs text-slate-500">{{ shortPath(process.executable_path) }}</div>
                   </td>
                   <td class="winctl-code text-xs">{{ process.pid }}</td>
                   <td class="winctl-code text-xs">{{ process.launch_id }}</td>
                   <td class="text-xs">{{ formatUnixMs(process.launch_time_unix_ms) }}</td>
-                  <td class="winctl-code max-w-[340px] truncate text-xs">{{ process.command_line }}</td>
+                  <td class="winctl-code text-xs">{{ process.command_line }}</td>
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div class="winctl-table-footer">
+            <button type="button" class="btn btn-xs" :disabled="tableMeta('processes', launchedProcesses, processTableFields).page <= 1" @click="previousTablePage('processes', launchedProcesses, processTableFields)">Previous</button>
+            <span class="text-xs text-slate-500">Page {{ tableMeta('processes', launchedProcesses, processTableFields).page }} of {{ tableMeta('processes', launchedProcesses, processTableFields).totalPages }}</span>
+            <button type="button" class="btn btn-xs" :disabled="tableMeta('processes', launchedProcesses, processTableFields).page >= tableMeta('processes', launchedProcesses, processTableFields).totalPages" @click="nextTablePage('processes', launchedProcesses, processTableFields)">Next</button>
           </div>
         </section>
 
@@ -878,13 +1217,15 @@ createApp({
                 <div class="mt-2 flex items-center justify-between text-[11px] opacity-60">
                   <span>updated {{ formatStamp(item.updated_at) }}</span>
                   <button class="link link-hover" @click="toggleExpand('mem:' + item.id)">
-                    {{ expandedItems['mem:' + item.id] ? 'Hide raw' : 'Raw' }}
+                    {{ expandedItems['mem:' + item.id] ? 'Hide details' : 'Details' }}
                   </button>
                 </div>
-                <pre
-                  v-if="expandedItems['mem:' + item.id]"
-                  class="winctl-json mt-2 max-h-60 overflow-auto p-2 text-[11px]"
-                >{{ pretty(item) }}</pre>
+                <dl v-if="expandedItems['mem:' + item.id]" class="winctl-detail-grid mt-2">
+                  <div v-for="[label, value] in memoryDetailRows(item)" :key="label" class="winctl-detail-row">
+                    <dt>{{ label }}</dt>
+                    <dd>{{ value }}</dd>
+                  </div>
+                </dl>
               </article>
             </div>
           </section>
@@ -928,13 +1269,18 @@ createApp({
                   <span v-if="macro.steps != null">{{ macro.steps }} steps</span>
                   <span v-else></span>
                   <button class="link link-hover" @click="toggleExpand(macro.key)">
-                    {{ expandedItems[macro.key] ? 'Hide manifest' : 'Manifest' }}
+                    {{ expandedItems[macro.key] ? 'Hide details' : 'Details' }}
                   </button>
                 </div>
-                <pre
-                  v-if="expandedItems[macro.key]"
-                  class="winctl-json mt-2 max-h-72 overflow-auto p-2 text-[11px]"
-                >{{ pretty(macro.raw) }}</pre>
+                <div v-if="expandedItems[macro.key]" class="mt-2 space-y-2">
+                  <dl class="winctl-detail-grid">
+                    <div v-for="[label, value] in macroDetailRows(macro)" :key="label" class="winctl-detail-row">
+                      <dt>{{ label }}</dt>
+                      <dd>{{ value }}</dd>
+                    </div>
+                  </dl>
+                  <button type="button" class="btn btn-xs" @click="copyMacroRunJson(macro)">Copy run JSON</button>
+                </div>
               </article>
             </div>
           </section>

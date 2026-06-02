@@ -213,7 +213,7 @@
 
 **Status:** Complete.
 
-**Audit comments:** Added dashboard control/inspection surfaces, authenticated UIA snapshot and screenshot endpoints, capture-image viewing, visual diff browsing for failed baseline comparisons, run-video artifact viewing, a read-only saved manifest catalog with copyable run JSON, and tray shortcuts for recorder access/recording toggle. The tray now monitors loopback dashboard state and shows native notification-area alerts when macro/test runs finish as passed, failed, or aborted.
+**Audit comments:** Added dashboard control/inspection surfaces, authenticated UIA snapshot and screenshot endpoints, capture-image viewing, visual diff browsing for failed baseline comparisons, run-video artifact viewing, a read-only saved manifest catalog with copyable run JSON, and tray shortcuts for recorder access/recording toggle. The dashboard now uses the full available window width, and dashboard tables use search, pagination, and wrapping cells instead of forcing page-level horizontal overflow. The tray now monitors loopback dashboard state and shows native notification-area alerts when macro/test runs finish as passed, failed, or aborted.
 
 - Add a live view of the UI Automation tree and real-time screenshot feeds to the `/dashboard` for debugging active bindings.
 - Add visual diff viewers to the dashboard for inspecting `capture.compare_baseline` failures.
@@ -223,9 +223,9 @@
 
 ## Phase 17: Dashboard Docs and Live Observability
 
-**Status:** In progress — docs tab shipped.
+**Status:** In progress — docs tab and structured dashboard surfaces shipped.
 
-**Audit comments:** Added a Docs tab serving every `docs/*.md` page, rendered to HTML at build time with comrak and served from `/dashboard/docs`; ```mermaid blocks render as live diagrams via a vendored, lazy-loaded Mermaid.js, with markdown styled to match the dashboard. Added orientation diagrams (driving loop, control-gate state machine, macro lifecycle). Live activity feed, active-control banner, auto-refresh feeds, run timeline, and visual-diff viewer remain follow-up work.
+**Audit comments:** Added a Docs tab serving every `docs/*.md` page, rendered to HTML at build time with comrak and served from `/dashboard/docs`; ```mermaid blocks render as live diagrams via a vendored, lazy-loaded Mermaid.js, with markdown styled to match the dashboard. Added orientation diagrams (driving loop, control-gate state machine, macro lifecycle). Replaced bare dashboard JSON dumps outside the Raw tab with structured screenshot details, visual-diff metadata, run-video metadata, memory/macro detail panels, and a searchable paginated UIA element table. Live all-tool activity feed, active-control Stop banner, auto-refresh screenshot/UIA overlay, richer run timeline, and live `process.metrics` gauges remain follow-up work.
 
 - Add a top-menu Docs/Tools tab serving every tool doc from `docs/*.md`, rendered to HTML at build time with comrak (GFM tables, code fences; raw HTML disabled).
 - Render ```mermaid blocks as live diagrams: convert `code.language-mermaid` into Mermaid nodes and run a vendored (embedded, not CDN) Mermaid.js, lazy-loaded on first use.

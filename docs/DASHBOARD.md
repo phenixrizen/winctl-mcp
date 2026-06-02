@@ -31,6 +31,8 @@ The Windows tray opens the same URL inside a native WebView2 window using `wry`.
 
 The dashboard remains read-only. The manifest catalog provides saved macro/test metadata and copyable run JSON, while execution still goes through MCP tools or a client. Visual diff panels render baseline, actual, and diff artifacts from failed `capture.compare_baseline` or macro image-checkpoint runs.
 
+The main dashboard fills the available window width. Operational tables include local search and pagination, and the Raw tab is the only dashboard view that intentionally renders full JSON state.
+
 ## Development
 
 Dashboard source lives in `crates/winctl-mcp-server/dashboard`. The Rust server embeds the built files from `dashboard/dist`, so rebuild those assets before compiling a release binary after UI changes:
