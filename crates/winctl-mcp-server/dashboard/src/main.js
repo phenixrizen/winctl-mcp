@@ -1640,7 +1640,7 @@ createApp({
               />
               <div v-if="docsLoading" class="px-1 text-sm opacity-70">Loading docs…</div>
               <div v-else-if="docsError" class="px-1 text-sm text-error">{{ docsError }}</div>
-              <ul v-else class="menu menu-sm winctl-doc-menu bg-base-200 rounded-box" aria-label="Documentation navigation">
+              <ul v-else class="menu menu-sm menu-vertical winctl-doc-menu bg-base-200 rounded-box w-full" aria-label="Documentation navigation">
                 <li v-for="group in filteredDocGroups" :key="group.id">
                   <details :open="docGroupIsOpen(group)" @toggle="setDocGroupOpen(group, $event)">
                     <summary>

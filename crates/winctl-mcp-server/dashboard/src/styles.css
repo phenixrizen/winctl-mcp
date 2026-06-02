@@ -279,7 +279,15 @@ textarea {
 
 .winctl-doc-menu {
   max-height: 72vh;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
   overflow-y: auto;
+}
+
+.winctl-doc-menu ul {
+  flex-direction: column;
+  flex-wrap: nowrap;
 }
 
 .winctl-doc-menu summary {
