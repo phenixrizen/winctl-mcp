@@ -827,6 +827,17 @@ pub struct RecorderStartRequest {
     pub tags: Vec<String>,
     /// Optional app identity to associate the recording with a specific application.
     pub app_identity: Option<winctl_macro::AppIdentity>,
+    /// If true or omitted, the native Windows hook recorder captures human input into steps. If false, the session accepts only explicit `recorder.record_step` calls until resumed.
+    pub capture_input: Option<bool>,
+}
+
+/// Pause or resume the active recording session.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct RecorderPauseRequest {
+    /// If true, pause native input capture; if false, resume capture for the active session.
+    pub paused: bool,
+    /// Optional human-readable reason recorded in the durable audit log and session notes.
+    pub reason: Option<String>,
 }
 
 /// Append a step to the active recording session.
@@ -3231,6 +3242,22 @@ impl WinctlMcpServer {
     }
 
     #[tool(
+        name = "recorder.pause",
+        description = "Pause or resume the active human recording session without executing desktop input. Not gated; the recorder is passive. Records a durable audit event and returns the updated session; fails when no recording is active."
+    )]
+    pub async fn recorder_pause(
+        &self,
+        request: Parameters<RecorderPauseRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("recorder.pause", move || {
+            tools::recorder::recorder_pause(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
         name = "recorder.export_manifest",
         description = "Export a recording session as a `winctl.macro.v1` manifest by `session_id`, or the active session when omitted, without stopping it. Read-only; not gated. Use `recorder.state` to find session IDs."
     )]
@@ -5117,6 +5144,7 @@ mod tests {
                 "process.metrics",
                 "process.wait_for_exit",
                 "recorder.export_manifest",
+                "recorder.pause",
                 "recorder.record_step",
                 "recorder.start",
                 "recorder.state",
@@ -5255,6 +5283,7 @@ mod tests {
                 description: Some("Recorded by test".into()),
                 tags: vec!["test".into()],
                 app_identity: None,
+                capture_input: Some(false),
             },
         );
         assert_eq!(started["ok"], true);
@@ -5301,6 +5330,7 @@ mod tests {
                 description: None,
                 tags: Vec::new(),
                 app_identity: None,
+                capture_input: Some(false),
             },
         );
         assert_eq!(started["ok"], true);

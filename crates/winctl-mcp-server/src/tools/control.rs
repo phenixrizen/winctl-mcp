@@ -171,6 +171,37 @@ pub fn control_state(state: &AppState) -> serde_json::Value {
     })
 }
 
+pub fn record_passive_audit_event(
+    runtime: &Arc<Mutex<ControlRuntimeState>>,
+    kind: &str,
+    tool_name: Option<String>,
+    action_kind: Option<String>,
+    bound_id: Option<String>,
+    session_id: Option<String>,
+    message: String,
+) -> Option<ControlEvent> {
+    let mut runtime = match runtime.lock() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::warn!(
+                kind = kind,
+                error = %error,
+                "failed to record passive control audit event because control runtime is poisoned"
+            );
+            return None;
+        }
+    };
+    Some(push_event(
+        &mut runtime,
+        kind,
+        tool_name,
+        action_kind,
+        bound_id,
+        session_id,
+        message,
+    ))
+}
+
 pub fn control_arm(state: &AppState, request: ControlArmRequest) -> serde_json::Value {
     tracing::info!(
         bound_id = ?request.bound_id,
