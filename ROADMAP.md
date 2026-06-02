@@ -257,7 +257,9 @@
 
 ## Phase 19: Human-Recorded Macros and Secrets Vault
 
-**Status:** Planned.
+**Status:** Complete.
+
+**Audit comments:** Implemented DPAPI-backed `secret.*` tools, gated `macro.type_secret`, native recorder hooks/hotkeys, password-field redaction, launch/bind inference, dashboard Recorder review controls, and replay through the Phase 18 target resolver. Windows runtime coverage records `winctl-test-target`, asserts semantic click/text/secret steps with no plaintext in the raw manifest, simulates review by binding a stored `secret_ref`, and replays the manifest successfully. The first cut keeps dashboard review focused on scrub/bind/promote; richer assertion insertion remains future refinement.
 
 Let a developer record a macro by performing the task themselves: global input hooks resolve the human's clicks and keystrokes into semantic UI Automation steps, and an encrypted, name-referenced secrets vault lets login and secure flows be recorded and replayed without the password ever entering the manifest or the model. Output is a standard `winctl.macro.v1` manifest the MCP replays, using the Phase 18 target model (launch establishes a named alias; later steps use `target: current`/`target: alias`, never raw runtime `bound_id`). Scope is trusted, own-machine developer use. Build order: secrets vault first (it is a dependency and independently useful), then the capture engine, then review/save UX.
 
