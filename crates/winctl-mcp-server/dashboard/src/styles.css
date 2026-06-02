@@ -339,6 +339,10 @@ textarea {
   text-decoration: underline;
 }
 
+.winctl-markdown pre:has(> code.language-mermaid):not(.winctl-mermaid-render-failed) {
+  display: none;
+}
+
 .winctl-markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.85em;

@@ -736,7 +736,7 @@ createApp({
           wrapper.innerHTML = svg;
           target.replaceWith(wrapper);
         } catch (error) {
-          // Leave the original code block in place if the diagram fails to parse.
+          target.classList.add('winctl-mermaid-render-failed');
         }
       }
     },
