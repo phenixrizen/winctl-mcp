@@ -1,0 +1,15 @@
+# windows.minimize
+
+[Back to tool index](INDEX.md)
+
+Agent name: `winctl-mcp`
+
+Description: Minimize a bound window after revalidating stable identity.
+
+## Inputs
+
+- `bound_id`: bound window ID.
+
+## Notes
+
+The target is never selected by title alone.

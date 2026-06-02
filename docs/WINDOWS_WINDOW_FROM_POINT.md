@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Resolve a screen point to top-level and child window diagnostics, optionally relative to a bound target.
 

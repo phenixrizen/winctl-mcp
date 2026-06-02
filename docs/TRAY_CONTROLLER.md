@@ -1,0 +1,42 @@
+# Tray Controller
+
+[Back to tool index](INDEX.md)
+
+`winctl-tray` is the optional native Windows notification-area controller. The MCP server remains fully usable headless; the tray app starts, stops, restarts, and opens the local dashboard for the server.
+
+## Commands
+
+```powershell
+winctl-tray.exe status
+winctl-tray.exe start --server-exe C:\winctl\winctl-mcp-server.exe --listen 127.0.0.1:8765
+winctl-tray.exe stop
+winctl-tray.exe restart
+winctl-tray.exe copy-mcp-url
+winctl-tray.exe open-dashboard
+winctl-tray.exe open-recorder
+winctl-tray.exe recording-toggle
+winctl-tray.exe run
+```
+
+## State
+
+The controller writes a PID file under `%LOCALAPPDATA%\winctl-mcp` by default. Use `--pid-file <path>` to override it.
+
+## Native Tray UI
+
+Run the tray UI from Windows:
+
+```powershell
+$base = "$env:LOCALAPPDATA\winctl-mcp"
+Start-Process "$base\bin\winctl-tray.exe" -ArgumentList @(
+  "run",
+  "--server-exe", "$base\bin\winctl-mcp-server.exe",
+  "--config", "$base\config.toml"
+)
+```
+
+The tray icon starts the server if needed. Right-click the icon for Open Dashboard, Open Recorder, Copy MCP URL, Recording Toggle, Start, Stop, Restart, and Quit. Double-click opens the dashboard.
+
+Open Dashboard launches a native WebView2 window through `wry`; it does not open the system browser. The WebView dashboard is enabled in the Windows MSVC build used for release packages. When the server config contains `[auth].token`, the tray reads that token and opens the dashboard with an authenticated local URL. MCP traffic still uses bearer-token auth on the `/mcp` endpoint.
+
+While running, the tray polls the loopback dashboard state and shows native notification-area alerts when macro/test runs complete as passed, failed, or aborted.

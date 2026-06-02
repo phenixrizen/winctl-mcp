@@ -1,0 +1,15 @@
+# Canonical Codex MCP server name. This controls the visible tool prefix:
+# winctl-mcp.capture.screenshot_window, winctl-mcp.windows.list, etc.
+[mcp_servers.winctl-mcp]
+url = "http://127.0.0.1:8765/mcp"
+http_headers = { Authorization = "Bearer replace-me" }
+tool_timeout_sec = 120.0
+
+# When Codex runs in WSL and cannot reach the Windows loopback listener,
+# start the Windows server on a Windows host-only address with an auth token:
+#
+#   winctl-mcp-server.exe serve --transport http --listen <windows-host-ip>:8765 --auth-token replace-me
+#
+# Then set url to:
+#
+#   url = "http://<windows-host-ip>:8765/mcp"

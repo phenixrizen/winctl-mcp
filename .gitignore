@@ -1,3 +1,4 @@
 /target/
 /dist/
 /captures/
+node_modules/

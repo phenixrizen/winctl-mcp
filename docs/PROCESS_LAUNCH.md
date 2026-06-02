@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: Launch a Windows executable via `CreateProcessW` and optionally wait for visible PID-owned window candidates.
 

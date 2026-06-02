@@ -123,19 +123,35 @@ pub fn revalidate_bound_window(
     Ok(current.clone())
 }
 
+/// Criteria for matching a window. Combine fields to narrow the match; prefer
+/// strong identity (`hwnd`, `pid`, `process_name`) over title/class which can be
+/// ambiguous. Ambiguous matches fail closed — use `windows.find` to inspect
+/// candidates first.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct WindowSelector {
+    /// A prior bound-window id to re-select the same target.
     pub id: Option<String>,
+    /// Exact window handle (HWND), as a decimal or `0x`-prefixed hex string.
     pub hwnd: Option<String>,
+    /// Owning process id (PID); matches any top-level window of that process.
     pub pid: Option<u32>,
+    /// Executable file name (case-insensitive), e.g. `notepad.exe`.
     pub process_name: Option<String>,
+    /// Case-insensitive substring the executable's full path must contain.
     pub exe_path_contains: Option<String>,
+    /// Case-insensitive suffix the executable's full path must end with.
     pub exe_path_ends_with: Option<String>,
+    /// Case-insensitive substring the window title must contain.
     pub title_contains: Option<String>,
+    /// Regular expression the window title must match.
     pub title_regex: Option<String>,
+    /// Case-insensitive substring the window class name must contain.
     pub class_name_contains: Option<String>,
+    /// If set, only match windows whose visibility equals this value (default: require visible).
     pub must_be_visible: Option<bool>,
+    /// If true, allow matching minimized windows (default false).
     pub allow_minimized: Option<bool>,
+    /// If true, allow matching cloaked windows on another virtual desktop (default false).
     pub allow_cloaked: Option<bool>,
 }
 

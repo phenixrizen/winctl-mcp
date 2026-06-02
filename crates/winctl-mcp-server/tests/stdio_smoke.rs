@@ -150,6 +150,64 @@ async fn streamable_http_health_and_tool_listing_work() {
     let client = reqwest::Client::new();
     let base = format!("http://{addr}");
     wait_for_health(&client, &base).await;
+    let dashboard = client
+        .get(format!("{base}/dashboard"))
+        .send()
+        .await
+        .expect("dashboard should respond");
+    assert_eq!(dashboard.status(), reqwest::StatusCode::OK);
+    let dashboard_body = dashboard
+        .text()
+        .await
+        .expect("dashboard body should be readable");
+    assert!(dashboard_body.contains("winctl-mcp dashboard"));
+    assert!(dashboard_body.contains("/dashboard/assets/dashboard.js"));
+    assert!(dashboard_body.contains("/dashboard/assets/dashboard.css"));
+    let dashboard_js = client
+        .get(format!("{base}/dashboard/assets/dashboard.js"))
+        .send()
+        .await
+        .expect("dashboard JS should respond");
+    assert_eq!(dashboard_js.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        dashboard_js
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/javascript; charset=utf-8")
+    );
+    let dashboard_css = client
+        .get(format!("{base}/dashboard/assets/dashboard.css"))
+        .send()
+        .await
+        .expect("dashboard CSS should respond");
+    assert_eq!(dashboard_css.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        dashboard_css
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/css; charset=utf-8")
+    );
+
+    let dashboard_state: Value = client
+        .get(format!("{base}/dashboard/state"))
+        .send()
+        .await
+        .expect("dashboard state should respond")
+        .json()
+        .await
+        .expect("dashboard state should be JSON");
+    assert_eq!(dashboard_state["ok"], true);
+    assert_eq!(dashboard_state["service"], "winctl-mcp-server");
+    let recorder = client
+        .get(format!("{base}/recorder"))
+        .send()
+        .await
+        .expect("recorder should respond");
+    assert_eq!(recorder.status(), reqwest::StatusCode::OK);
+    let recorder_body = recorder.text().await.expect("recorder body");
+    assert!(recorder_body.contains("winctl-mcp recorder"));
 
     let init = post_mcp(
         &client,

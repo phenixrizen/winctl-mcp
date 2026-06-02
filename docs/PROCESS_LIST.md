@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: List Windows process metadata, with optional top-level window candidates and MCP-launched process markers.
 

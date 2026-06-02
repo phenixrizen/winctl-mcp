@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "winctl-mcp": {
+      "command": "C:\\Users\\nater\\AppData\\Local\\winctl-mcp\\bin\\winctl-mcp-server.exe",
+      "args": [
+        "serve",
+        "--transport",
+        "stdio",
+        "--log-file",
+        "C:\\Users\\nater\\AppData\\Local\\winctl-mcp\\logs\\server.log"
+      ]
+    }
+  }
+}

@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  WINDOWS_TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  rust:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust targets
+        run: |
+          rustup default stable
+          rustup component add rustfmt
+          rustup target add "${WINDOWS_TARGET}"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: crates/winctl-mcp-server/dashboard/package-lock.json
+
+      - name: Build dashboard assets
+        run: |
+          cd crates/winctl-mcp-server/dashboard
+          npm ci
+          npm run build
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Check Windows core crate
+        run: cargo check -p winctl --target "${WINDOWS_TARGET}"
+
+  windows-runtime:
+    name: Windows runtime integration
+    runs-on: windows-latest
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust MSVC target
+        shell: pwsh
+        run: |
+          rustup default stable
+          rustup target add $env:WINDOWS_TARGET
+
+      - name: Build Windows workspace
+        shell: pwsh
+        run: cargo build --workspace --target $env:WINDOWS_TARGET
+
+      - name: Locate Windows UI test target
+        shell: pwsh
+        run: |
+          $target = Resolve-Path "target\$env:WINDOWS_TARGET\debug\winctl-test-target.exe"
+          "WINCTL_TEST_TARGET_EXE=$target" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Run Windows runtime integration tests
+        shell: pwsh
+        run: cargo test --workspace --target $env:WINDOWS_TARGET -- --nocapture

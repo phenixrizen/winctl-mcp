@@ -2,7 +2,7 @@
 
 [Back to tool index](INDEX.md)
 
-Agent name: `winctl-cmp`
+Agent name: `winctl-mcp`
 
 Description: List visible and discoverable top-level Windows windows with HWND, PID, executable, class, title, and virtual desktop geometry.
 
