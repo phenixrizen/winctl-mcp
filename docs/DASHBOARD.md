@@ -9,7 +9,7 @@ The Streamable HTTP server exposes a read-only Vue dashboard:
 - `/dashboard/uia`: authenticated JSON endpoint for live UIA snapshots by `bound_id`.
 - `/dashboard/screenshot`: authenticated JSON endpoint for live bound-window screenshots.
 - `/dashboard/capture-file`: authenticated image endpoint for capture files under the configured capture directory, including PNG/JPEG/WebP/GIF artifacts.
-- `/dashboard/assets/*`: embedded static Vue/Tailwind/daisyUI assets.
+- `/dashboard/assets/*`: embedded static Vue/Tailwind/daisyUI, Mermaid, and Monaco assets.
 
 ## Policy
 
@@ -31,7 +31,7 @@ The Windows tray opens the same URL inside a native WebView2 window using `wry`.
 
 The dashboard remains read-only. The manifest catalog provides saved macro/test metadata and copyable run JSON, while execution still goes through MCP tools or a client. Visual diff panels render baseline, actual, and diff artifacts from failed `capture.compare_baseline` or macro image-checkpoint runs.
 
-The main dashboard fills the available window width. Operational tables include local search and pagination, and the Raw tab is the only dashboard view that intentionally renders full JSON state.
+The main dashboard fills the available window width. Operational tables and large card collections include local search and pagination. The Docs tab keeps relative Markdown links inside the dashboard and renders Mermaid diagrams with the dashboard color palette. The Raw tab uses a read-only Monaco JSON viewer with a maximize control instead of a bare JSON block.
 
 ## Development
 

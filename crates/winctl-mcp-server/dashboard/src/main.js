@@ -1,4 +1,6 @@
-import { createApp } from 'vue/dist/vue.esm-bundler.js';
+import { createApp, markRaw } from 'vue/dist/vue.esm-bundler.js';
+import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import './styles.css';
 import logoUrl from '../../../../assets/brand/winctl-logo.svg';
 
@@ -14,12 +16,58 @@ function getMermaid() {
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'strict',
-        theme: prefersDark ? 'dark' : 'default',
+        theme: 'base',
+        themeVariables: {
+          background: prefersDark ? '#181c22' : '#ffffff',
+          primaryColor: prefersDark ? '#1f2630' : '#f8fafc',
+          primaryTextColor: prefersDark ? '#e9edf2' : '#0b1020',
+          primaryBorderColor: '#4cc9f0',
+          secondaryColor: prefersDark ? '#15191f' : '#eef2f6',
+          secondaryTextColor: prefersDark ? '#e9edf2' : '#0b1020',
+          secondaryBorderColor: '#06d6a0',
+          tertiaryColor: prefersDark ? '#202731' : '#fff8e8',
+          tertiaryTextColor: prefersDark ? '#e9edf2' : '#0b1020',
+          tertiaryBorderColor: '#ffb454',
+          lineColor: prefersDark ? '#aeb7c2' : '#5f6b7a',
+          textColor: prefersDark ? '#e9edf2' : '#0b1020',
+          mainBkg: prefersDark ? '#1f2630' : '#f8fafc',
+          secondBkg: prefersDark ? '#15191f' : '#eef2f6',
+          nodeBorder: '#4cc9f0',
+          clusterBkg: prefersDark ? '#15191f' : '#fafbfc',
+          clusterBorder: prefersDark ? '#303741' : '#d9dde3',
+          edgeLabelBackground: prefersDark ? '#181c22' : '#ffffff',
+          actorBkg: prefersDark ? '#1f2630' : '#f8fafc',
+          actorBorder: '#4cc9f0',
+          actorTextColor: prefersDark ? '#e9edf2' : '#0b1020',
+          labelBoxBkgColor: prefersDark ? '#15191f' : '#ffffff',
+          labelBoxBorderColor: '#d9dde3',
+          labelTextColor: prefersDark ? '#e9edf2' : '#0b1020',
+          signalColor: prefersDark ? '#e9edf2' : '#0b1020',
+          signalTextColor: prefersDark ? '#e9edf2' : '#0b1020',
+          noteBkgColor: prefersDark ? '#312815' : '#fff8e8',
+          noteBorderColor: '#ffb454',
+          noteTextColor: prefersDark ? '#e9edf2' : '#0b1020',
+        },
       });
       return mermaid;
     });
   }
   return mermaidPromise;
+}
+
+globalThis.MonacoEnvironment = {
+  getWorker(_workerId, label) {
+    if (label === 'json') return new jsonWorker();
+    return new editorWorker();
+  },
+};
+
+let monacoPromise = null;
+function getMonaco() {
+  if (!monacoPromise) {
+    monacoPromise = import('monaco-editor/esm/vs/editor/editor.api');
+  }
+  return monacoPromise;
 }
 
 const params = new URLSearchParams(window.location.search);
@@ -97,12 +145,20 @@ createApp({
       docsSearch: '',
       expandedItems: {},
       deletingId: null,
+      rawEditor: null,
+      rawMonaco: null,
+      rawEditorLoading: false,
+      rawEditorError: null,
+      rawEditorMaximized: false,
       tableState: {
         control: { query: '', page: 1, pageSize: 10 },
+        catalog: { query: '', page: 1, pageSize: 12 },
         completions: { query: '', page: 1, pageSize: 10 },
         windows: { query: '', page: 1, pageSize: 10 },
         processes: { query: '', page: 1, pageSize: 10 },
         uia: { query: '', page: 1, pageSize: 12 },
+        memory: { query: '', page: 1, pageSize: 8 },
+        macros: { query: '', page: 1, pageSize: 8 },
       },
       tabs: [
         { id: 'overview', label: 'Overview' },
@@ -214,6 +270,15 @@ createApp({
     },
     controlTableFields() {
       return ['kind', 'status', 'tool_name', 'bound_id', 'message'];
+    },
+    catalogCollectionFields() {
+      return ['key', 'title', 'description', 'kind', 'source', 'tags', 'raw.id', 'raw.text'];
+    },
+    memoryCollectionFields() {
+      return ['id', 'kind', 'title', 'text', 'tags', 'created_at', 'updated_at'];
+    },
+    macroCollectionFields() {
+      return ['key', 'title', 'description', 'kind', 'source', 'tags', 'raw.id', 'raw.text'];
     },
     completionTableFields() {
       return ['run_id', 'result.manifest_title', 'result.status', 'result.finished_at'];
@@ -330,20 +395,33 @@ createApp({
     activeDoc() {
       return this.docs.find((doc) => doc.slug === this.activeDocSlug) ?? null;
     },
+    rawJson() {
+      return JSON.stringify(this.data ?? {}, null, 2);
+    },
   },
   watch: {
     selectedTab(tab) {
       if (tab === 'docs') this.loadDocs();
+      if (tab === 'raw') this.renderRawEditor();
+    },
+    data() {
+      this.updateRawEditor();
+    },
+    rawEditorMaximized() {
+      this.layoutRawEditor();
     },
   },
   mounted() {
     this.loadState();
+    window.addEventListener('resize', this.layoutRawEditor);
     this.intervalId = window.setInterval(() => {
       if (this.autoRefresh) this.loadState({ quiet: true });
     }, 5000);
   },
   beforeUnmount() {
     window.clearInterval(this.intervalId);
+    window.removeEventListener('resize', this.layoutRawEditor);
+    this.rawEditor?.dispose();
   },
   methods: {
     async loadState(options = {}) {
@@ -365,8 +443,61 @@ createApp({
         this.refreshing = false;
       }
     },
-    pretty(value) {
-      return JSON.stringify(value, null, 2);
+    async renderRawEditor() {
+      await this.$nextTick();
+      const host = this.$refs.rawEditor;
+      if (!host) return;
+      if (this.rawEditor) {
+        this.updateRawEditor();
+        return;
+      }
+      this.rawEditorLoading = true;
+      this.rawEditorError = null;
+      try {
+        const monaco = markRaw(await getMonaco());
+        const prefersDark =
+          window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        monaco.editor.setTheme(prefersDark ? 'vs-dark' : 'vs');
+        this.rawMonaco = monaco;
+        this.rawEditor = markRaw(monaco.editor.create(host, {
+          value: this.rawJson,
+          language: 'json',
+          readOnly: true,
+          automaticLayout: false,
+          fontSize: 12,
+          fontFamily: 'Consolas, "SFMono-Regular", ui-monospace, monospace',
+          minimap: { enabled: true },
+          scrollBeyondLastLine: false,
+          wordWrap: 'on',
+          wrappingIndent: 'same',
+          renderLineHighlight: 'line',
+          overviewRulerBorder: false,
+          padding: { top: 12, bottom: 12 },
+        }));
+        this.layoutRawEditor();
+      } catch (error) {
+        this.rawEditorError = String(error);
+      } finally {
+        this.rawEditorLoading = false;
+      }
+    },
+    updateRawEditor() {
+      if (!this.rawEditor) return;
+      const model = this.rawEditor.getModel();
+      if (model && model.getValue() !== this.rawJson) {
+        const position = this.rawEditor.getPosition();
+        const scrollTop = this.rawEditor.getScrollTop();
+        model.setValue(this.rawJson);
+        if (position) this.rawEditor.setPosition(position);
+        this.rawEditor.setScrollTop(scrollTop);
+      }
+      this.layoutRawEditor();
+    },
+    layoutRawEditor() {
+      if (!this.rawEditor) return;
+      window.requestAnimationFrame(() => {
+        this.rawEditor?.layout();
+      });
     },
     formatUnixMs,
     shortPath,
@@ -556,6 +687,35 @@ createApp({
       this.activeDocSlug = slug;
       this.renderMermaid();
     },
+    docLinkFromHref(href) {
+      if (!href || href.startsWith('#')) return null;
+      let fileName = '';
+      try {
+        const url = new URL(href, window.location.href);
+        if (url.origin !== window.location.origin) return null;
+        fileName = url.pathname.split('/').pop() ?? '';
+      } catch (error) {
+        fileName = href.split('#')[0].split('?')[0].split('/').pop() ?? '';
+      }
+      if (!fileName.toLowerCase().endsWith('.md')) return null;
+      const wanted = decodeURIComponent(fileName).replace(/\.md$/i, '').toLowerCase();
+      return {
+        fileName,
+        slug: this.docs.find((doc) => doc.slug.toLowerCase() === wanted)?.slug ?? null,
+      };
+    },
+    handleDocClick(event) {
+      const link = event.target?.closest?.('a');
+      if (!link) return;
+      const docLink = this.docLinkFromHref(link.getAttribute('href'));
+      if (!docLink) return;
+      event.preventDefault();
+      if (docLink.slug) {
+        this.selectDoc(docLink.slug);
+      } else {
+        this.docsError = `Document not available: ${docLink.fileName}`;
+      }
+    },
     async renderMermaid() {
       await this.$nextTick();
       const host = this.$el?.querySelector?.('.winctl-markdown');
@@ -657,7 +817,7 @@ createApp({
         </nav>
 
         <section v-if="selectedTab === 'overview'" class="space-y-5">
-          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <article class="winctl-card p-4">
               <div class="winctl-kpi-accent mb-4"></div>
               <div class="text-xs font-bold uppercase text-slate-500">Bound windows</div>
@@ -1044,9 +1204,24 @@ createApp({
             <h2 class="text-sm font-semibold">Manifest catalog</h2>
             <span class="badge badge-info badge-outline">{{ macroItems.length }}</span>
           </div>
+          <div class="winctl-table-toolbar">
+            <input
+              v-model="tableState.catalog.query"
+              type="search"
+              placeholder="Search manifests"
+              class="input input-sm input-bordered w-full sm:max-w-xs"
+              @input="resetTablePage('catalog')"
+            />
+            <span class="text-xs text-slate-500">
+              Showing {{ tableMeta('catalog', macroItems, catalogCollectionFields).start }}-{{ tableMeta('catalog', macroItems, catalogCollectionFields).end }}
+              of {{ tableMeta('catalog', macroItems, catalogCollectionFields).filtered }}
+            </span>
+          </div>
           <div class="grid gap-3 p-4 lg:grid-cols-2">
-            <article v-if="!macroItems.length" class="py-8 text-center text-sm text-slate-500 lg:col-span-2">No saved macros or test manifests</article>
-            <article v-for="item in macroItems" :key="item.key" class="winctl-catalog-item">
+            <article v-if="!tableMeta('catalog', macroItems, catalogCollectionFields).filtered" class="py-8 text-center text-sm text-slate-500 lg:col-span-2">
+              {{ tableState.catalog.query ? 'No matching saved macros or test manifests' : 'No saved macros or test manifests' }}
+            </article>
+            <article v-for="item in tablePageRows('catalog', macroItems, catalogCollectionFields)" :key="item.key" class="winctl-catalog-item">
               <div class="flex items-start justify-between gap-3">
                 <div>
                   <h3 class="text-sm font-semibold">{{ manifestTitle(item) }}</h3>
@@ -1059,6 +1234,11 @@ createApp({
                 <span v-for="tag in item.tags ?? item.manifest?.tags ?? []" :key="tag" class="badge badge-outline badge-sm">{{ tag }}</span>
               </div>
             </article>
+          </div>
+          <div class="winctl-table-footer">
+            <button type="button" class="btn btn-xs" :disabled="tableMeta('catalog', macroItems, catalogCollectionFields).page <= 1" @click="previousTablePage('catalog', macroItems, catalogCollectionFields)">Previous</button>
+            <span class="text-xs text-slate-500">Page {{ tableMeta('catalog', macroItems, catalogCollectionFields).page }} of {{ tableMeta('catalog', macroItems, catalogCollectionFields).totalPages }}</span>
+            <button type="button" class="btn btn-xs" :disabled="tableMeta('catalog', macroItems, catalogCollectionFields).page >= tableMeta('catalog', macroItems, catalogCollectionFields).totalPages" @click="nextTablePage('catalog', macroItems, catalogCollectionFields)">Next</button>
           </div>
         </section>
 
@@ -1181,17 +1361,30 @@ createApp({
         </section>
 
         <section v-if="selectedTab === 'memory'" class="grid gap-5 lg:grid-cols-2">
-          <section class="winctl-card">
+          <section class="winctl-card overflow-hidden">
             <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
               <h2 class="text-sm font-semibold">Memory</h2>
               <span class="badge badge-info badge-outline">{{ memoryItems.length }}</span>
             </div>
-            <div class="max-h-[640px] space-y-3 overflow-auto p-3">
-              <p v-if="!memoryItems.length" class="px-1 py-6 text-center text-sm opacity-60">
-                No memory items.
+            <div class="winctl-table-toolbar">
+              <input
+                v-model="tableState.memory.query"
+                type="search"
+                placeholder="Search memory"
+                class="input input-sm input-bordered w-full sm:max-w-xs"
+                @input="resetTablePage('memory')"
+              />
+              <span class="text-xs text-slate-500">
+                Showing {{ tableMeta('memory', memoryItems, memoryCollectionFields).start }}-{{ tableMeta('memory', memoryItems, memoryCollectionFields).end }}
+                of {{ tableMeta('memory', memoryItems, memoryCollectionFields).filtered }}
+              </span>
+            </div>
+            <div class="winctl-collection-list space-y-3 p-3">
+              <p v-if="!tableMeta('memory', memoryItems, memoryCollectionFields).filtered" class="px-1 py-6 text-center text-sm opacity-60">
+                {{ tableState.memory.query ? 'No matching memory items.' : 'No memory items.' }}
               </p>
               <article
-                v-for="item in memoryItems"
+                v-for="item in tablePageRows('memory', memoryItems, memoryCollectionFields)"
                 :key="item.id"
                 class="rounded-lg border p-3"
                 style="border-color: var(--winctl-border)"
@@ -1228,18 +1421,36 @@ createApp({
                 </dl>
               </article>
             </div>
+            <div class="winctl-table-footer">
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('memory', memoryItems, memoryCollectionFields).page <= 1" @click="previousTablePage('memory', memoryItems, memoryCollectionFields)">Previous</button>
+              <span class="text-xs text-slate-500">Page {{ tableMeta('memory', memoryItems, memoryCollectionFields).page }} of {{ tableMeta('memory', memoryItems, memoryCollectionFields).totalPages }}</span>
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('memory', memoryItems, memoryCollectionFields).page >= tableMeta('memory', memoryItems, memoryCollectionFields).totalPages" @click="nextTablePage('memory', memoryItems, memoryCollectionFields)">Next</button>
+            </div>
           </section>
-          <section class="winctl-card">
+          <section class="winctl-card overflow-hidden">
             <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
               <h2 class="text-sm font-semibold">Macros</h2>
               <span class="badge badge-info badge-outline">{{ macroItems.length }}</span>
             </div>
-            <div class="max-h-[640px] space-y-3 overflow-auto p-3">
-              <p v-if="!macroItems.length" class="px-1 py-6 text-center text-sm opacity-60">
-                No macros.
+            <div class="winctl-table-toolbar">
+              <input
+                v-model="tableState.macros.query"
+                type="search"
+                placeholder="Search macros"
+                class="input input-sm input-bordered w-full sm:max-w-xs"
+                @input="resetTablePage('macros')"
+              />
+              <span class="text-xs text-slate-500">
+                Showing {{ tableMeta('macros', macroItems, macroCollectionFields).start }}-{{ tableMeta('macros', macroItems, macroCollectionFields).end }}
+                of {{ tableMeta('macros', macroItems, macroCollectionFields).filtered }}
+              </span>
+            </div>
+            <div class="winctl-collection-list space-y-3 p-3">
+              <p v-if="!tableMeta('macros', macroItems, macroCollectionFields).filtered" class="px-1 py-6 text-center text-sm opacity-60">
+                {{ tableState.macros.query ? 'No matching macros.' : 'No macros.' }}
               </p>
               <article
-                v-for="macro in macroItems"
+                v-for="macro in tablePageRows('macros', macroItems, macroCollectionFields)"
                 :key="macro.key"
                 class="rounded-lg border p-3"
                 style="border-color: var(--winctl-border)"
@@ -1283,6 +1494,11 @@ createApp({
                 </div>
               </article>
             </div>
+            <div class="winctl-table-footer">
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('macros', macroItems, macroCollectionFields).page <= 1" @click="previousTablePage('macros', macroItems, macroCollectionFields)">Previous</button>
+              <span class="text-xs text-slate-500">Page {{ tableMeta('macros', macroItems, macroCollectionFields).page }} of {{ tableMeta('macros', macroItems, macroCollectionFields).totalPages }}</span>
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('macros', macroItems, macroCollectionFields).page >= tableMeta('macros', macroItems, macroCollectionFields).totalPages" @click="nextTablePage('macros', macroItems, macroCollectionFields)">Next</button>
+            </div>
           </section>
         </section>
 
@@ -1317,16 +1533,24 @@ createApp({
             </div>
             <div
               class="winctl-markdown max-h-[80vh] overflow-y-auto p-5"
+              @click="handleDocClick"
               v-html="activeDoc?.html ?? '<p class=&quot;opacity-60&quot;>Choose a tool doc from the list.</p>'"
             ></div>
           </section>
         </section>
 
-        <section v-if="selectedTab === 'raw'" class="winctl-card overflow-hidden">
-          <div class="winctl-card-header px-4 py-3">
+        <section v-show="selectedTab === 'raw'" class="winctl-card winctl-raw-card overflow-hidden" :class="{ 'winctl-raw-card-maximized': rawEditorMaximized }">
+          <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
             <h2 class="text-sm font-semibold">Dashboard state</h2>
+            <button type="button" class="btn btn-xs" @click="rawEditorMaximized = !rawEditorMaximized">
+              {{ rawEditorMaximized ? 'Restore' : 'Maximize' }}
+            </button>
           </div>
-          <pre class="winctl-json m-0 p-4 text-xs">{{ pretty(data ?? {}) }}</pre>
+          <div v-if="rawEditorError" class="alert alert-error m-4 text-sm">{{ rawEditorError }}</div>
+          <div class="winctl-monaco-shell">
+            <div v-if="rawEditorLoading" class="winctl-monaco-loading text-sm text-slate-500">Loading editor</div>
+            <div ref="rawEditor" class="winctl-monaco-host" aria-label="Dashboard state JSON"></div>
+          </div>
         </section>
       </main>
     </div>

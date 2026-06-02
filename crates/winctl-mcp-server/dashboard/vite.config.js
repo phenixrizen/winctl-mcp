@@ -13,8 +13,12 @@ export default defineConfig({
         entryFileNames: 'assets/dashboard.js',
         chunkFileNames: 'assets/[name].js',
         assetFileNames: (assetInfo) => {
-          const name = assetInfo.names?.[0] ?? assetInfo.name ?? 'asset';
-          if (name.endsWith('.css')) return 'assets/dashboard.css';
+          const names = [...(assetInfo.names ?? []), assetInfo.name ?? 'asset'];
+          const name = names[0] ?? 'asset';
+          if (names.some((candidate) => candidate.endsWith('styles.css') || candidate === 'index.css')) {
+            return 'assets/dashboard.css';
+          }
+          if (name.endsWith('.css')) return 'assets/[name][extname]';
           return 'assets/[name][extname]';
         },
       },
