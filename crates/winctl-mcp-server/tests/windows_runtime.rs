@@ -175,6 +175,88 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     assert_direct_pattern("uia.set_focus", &focus, "IUIAutomationElement.SetFocus");
     assert_eq!(focus["outcome"]["after"]["focused"], true);
 
+    let secret_value = format!("winctl-secret-{pid}");
+    let secret_set = harness
+        .call_tool(
+            "secret.set",
+            serde_json::json!({
+                "name": "windows-runtime/login",
+                "value": secret_value.clone(),
+                "description": "Windows runtime macro.type_secret fixture",
+                "tags": ["runtime"]
+            }),
+        )
+        .await;
+    assert_ok("secret.set", &secret_set);
+    let secret_set_json = secret_set.to_string();
+    assert!(
+        !secret_set_json.contains(&secret_value),
+        "secret.set response must not include plaintext: {secret_set:#}"
+    );
+    let clear_edit = harness
+        .call_tool(
+            "uia.set_value",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "selector": {"role": "Edit"},
+                "value": "",
+                "max_depth": 12,
+                "max_elements": 4000
+            }),
+        )
+        .await;
+    assert_direct_pattern("uia.set_value clear", &clear_edit, "ValuePattern.SetValue");
+    let focus_secret = harness
+        .call_tool(
+            "uia.set_focus",
+            action_args(&bound_id, serde_json::json!({"role": "Edit"})),
+        )
+        .await;
+    assert_direct_pattern(
+        "uia.set_focus before secret",
+        &focus_secret,
+        "IUIAutomationElement.SetFocus",
+    );
+    let type_secret = harness
+        .call_tool(
+            "macro.type_secret",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "secret_ref": "windows-runtime/login"
+            }),
+        )
+        .await;
+    assert_ok("macro.type_secret", &type_secret);
+    assert_eq!(type_secret["typed_secret"], true);
+    assert!(
+        type_secret.get("typed").is_none(),
+        "macro.type_secret must not return typed counts: {type_secret:#}"
+    );
+    let type_secret_json = type_secret.to_string();
+    assert!(
+        !type_secret_json.contains(&secret_value),
+        "macro.type_secret response must not include plaintext: {type_secret:#}"
+    );
+    assert!(
+        !type_secret_json.contains("windows-runtime/login"),
+        "macro.type_secret response must not include the secret_ref: {type_secret:#}"
+    );
+    let typed_secret_value = harness
+        .call_tool(
+            "uia.get_value",
+            action_args(&bound_id, serde_json::json!({"role": "Edit"})),
+        )
+        .await;
+    assert_direct_pattern(
+        "uia.get_value after secret",
+        &typed_secret_value,
+        "ValuePattern.CurrentValue",
+    );
+    assert_eq!(
+        typed_secret_value["outcome"]["value"]["value"],
+        secret_value
+    );
+
     let toggle = harness
         .call_tool(
             "uia.toggle",

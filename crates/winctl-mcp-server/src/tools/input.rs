@@ -375,6 +375,54 @@ pub fn input_type_text(state: &AppState, req: TypeTextRequest) -> serde_json::Va
     serde_json::json!({"ok": true, "bound_id": req.bound_id, "typed": typed})
 }
 
+pub fn input_type_secret_value(
+    state: &AppState,
+    bound_id: String,
+    secret: &str,
+) -> serde_json::Value {
+    tracing::info!(bound_id = %bound_id, "macro.type_secret input dispatch requested");
+    let window = match state.revalidate_bound_window(&bound_id) {
+        Ok(window) => window,
+        Err(error) => {
+            tracing::warn!(
+                bound_id = %bound_id,
+                error_code = ?error.code,
+                "macro.type_secret revalidation failed"
+            );
+            return serde_json::json!({"ok": false, "error": error});
+        }
+    };
+    if let Err(error) = focus_window(&window) {
+        tracing::warn!(
+            bound_id = %bound_id,
+            hwnd = %window.hwnd_hex,
+            pid = window.pid,
+            error_code = ?error.code,
+            "macro.type_secret focus failed"
+        );
+        return serde_json::json!({"ok": false, "error": error});
+    }
+    match type_text_unicode(secret) {
+        Ok(_) => {
+            tracing::info!(bound_id = %bound_id, "macro.type_secret dispatched");
+            serde_json::json!({
+                "ok": true,
+                "bound_id": bound_id,
+                "typed_secret": true,
+                "replay": keyboard_replay_metadata(&window)
+            })
+        }
+        Err(error) => {
+            tracing::warn!(
+                bound_id = %bound_id,
+                error_code = ?error.code,
+                "macro.type_secret dispatch failed"
+            );
+            serde_json::json!({"ok": false, "error": error})
+        }
+    }
+}
+
 fn dispatch_key_action(
     state: &AppState,
     req: KeyRequest,

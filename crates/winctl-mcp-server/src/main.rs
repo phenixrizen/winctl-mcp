@@ -1384,6 +1384,15 @@ pub struct MacroRunStepRequest {
     pub context_json: Option<serde_json::Value>,
 }
 
+/// Type a named secret into a bound window without exposing the plaintext to the model.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct MacroTypeSecretRequest {
+    /// Stable bound-window id returned by `windows.bind`. Identity is revalidated before typing.
+    pub bound_id: String,
+    /// Name of the encrypted secret to resolve server-side at replay time.
+    pub secret_ref: String,
+}
+
 /// Abort an in-progress macro run.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct MacroAbortRequest {
@@ -1812,6 +1821,30 @@ impl WinctlMcpServer {
                 "macro_replay",
                 true,
                 || tools::macros::macro_run_step(&state, request),
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "macro.type_secret",
+        description = "Resolve a named encrypted `secret_ref` server-side and type it into a revalidated `bound_id` via SendInput without returning plaintext, ciphertext, or typed length. Preconditions: the secret must exist in the DPAPI vault and desktop control must be armed (`control.arm`). Returns only `{ok, bound_id, typed_secret, replay}` on success; failures report missing secret, provider, control-gate, or target identity diagnostics."
+    )]
+    pub async fn macro_type_secret(
+        &self,
+        request: Parameters<MacroTypeSecretRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        let bound_id = request.bound_id.clone();
+        run_blocking_tool("macro.type_secret", move || {
+            tools::control::with_control_gate(
+                &state,
+                "macro.type_secret",
+                Some(&bound_id),
+                "secret_input",
+                true,
+                || tools::secrets::macro_type_secret(&state, request),
             )
         })
         .await
@@ -5064,6 +5097,7 @@ mod tests {
                 "macro.promote",
                 "macro.run",
                 "macro.run_step",
+                "macro.type_secret",
                 "macro.validate",
                 "memory.delete",
                 "memory.get",

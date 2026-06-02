@@ -1268,6 +1268,10 @@ fn dispatch_tool(
             state,
             parse_args(args)?,
         )),
+        "macro.type_secret" => Ok(crate::tools::secrets::macro_type_secret(
+            state,
+            parse_args(args)?,
+        )),
         "input.shortcut" => Ok(crate::tools::input::input_shortcut(
             state,
             parse_args(args)?,

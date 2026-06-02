@@ -1,4 +1,4 @@
-use crate::{AppState, SecretDeleteRequest, SecretSetRequest};
+use crate::{AppState, MacroTypeSecretRequest, SecretDeleteRequest, SecretSetRequest};
 use zeroize::Zeroizing;
 
 pub fn secret_set(state: &AppState, request: SecretSetRequest) -> serde_json::Value {
@@ -66,6 +66,50 @@ pub fn secret_delete(state: &AppState, request: SecretDeleteRequest) -> serde_js
             serde_json::json!({"ok": false, "error": secret_error("secret_delete_failed", error)})
         }
     }
+}
+
+pub fn macro_type_secret(state: &AppState, request: MacroTypeSecretRequest) -> serde_json::Value {
+    tracing::info!(
+        bound_id = %request.bound_id,
+        has_secret_ref = !request.secret_ref.trim().is_empty(),
+        "macro.type_secret requested"
+    );
+    let secret_ref = request.secret_ref.trim().to_owned();
+    if secret_ref.is_empty() {
+        return serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "secret_ref_required",
+                "message": "macro.type_secret requires a non-empty secret_ref"
+            }
+        });
+    }
+
+    let secret = {
+        let mut store = state.memory.lock().expect("memory store mutex poisoned");
+        match store.resolve_secret_plaintext(&secret_ref) {
+            Ok(Some(secret)) => secret,
+            Ok(None) => {
+                tracing::warn!("macro.type_secret secret was not found");
+                return serde_json::json!({
+                    "ok": false,
+                    "error": {
+                        "code": "secret_not_found",
+                        "message": "secret was not found"
+                    }
+                });
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "macro.type_secret failed to resolve secret");
+                return serde_json::json!({
+                    "ok": false,
+                    "error": secret_error("secret_resolve_failed", error)
+                });
+            }
+        }
+    };
+
+    crate::tools::input::input_type_secret_value(state, request.bound_id, &secret)
 }
 
 fn secret_error(code: &'static str, error: winctl_memory::MemoryError) -> serde_json::Value {

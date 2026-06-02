@@ -1134,6 +1134,13 @@ const SUPPORTED_TOOLS: &[ToolDescriptor] = &[
         produces_artifact: false,
     },
     ToolDescriptor {
+        name: "macro.type_secret",
+        category: "input",
+        mutates_ui: true,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
         name: "input.shortcut",
         category: "input",
         mutates_ui: true,
@@ -1457,6 +1464,35 @@ mod tests {
             "expected alias to validate after bind step, got {:?}",
             report.issues
         );
+    }
+
+    #[test]
+    fn validator_accepts_type_secret_step_without_plaintext() {
+        let mut manifest = betty_manifest();
+        manifest.steps.push(MacroStep {
+            id: "type-login-secret".into(),
+            tool: "macro.type_secret".into(),
+            args: serde_json::json!({"secret_ref": "betty/login"}),
+            target: Some(MacroTarget::Current),
+            timeout_ms: None,
+            required: true,
+            continue_on_failure: false,
+            coordinate_fallback: None,
+            audit: StepAudit::default(),
+        });
+
+        let descriptor = tool_descriptor("macro.type_secret").unwrap();
+        assert!(descriptor.mutates_ui);
+        assert!(descriptor.requires_bound_window);
+        let report = validate_manifest(&manifest);
+        assert!(
+            report.valid,
+            "expected type_secret manifest to validate, got {:?}",
+            report.issues
+        );
+        let encoded = serde_json::to_string(&manifest).unwrap();
+        assert!(encoded.contains("secret_ref"));
+        assert!(!encoded.contains("password"));
     }
 
     #[test]

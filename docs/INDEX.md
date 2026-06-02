@@ -137,6 +137,7 @@ flowchart LR
 | `winctl-mcp` | [`macro.list`](MACRO_LIST.md) | List session-promoted macros and memory-backed macro items. |
 | `winctl-mcp` | [`macro.get`](MACRO_GET.md) | Get a promoted macro manifest by session macro ID or memory item ID. |
 | `winctl-mcp` | [`macro.promote`](MACRO_PROMOTE.md) | Promote an approved macro manifest into the session registry and optionally explicit memory storage. |
+| `winctl-mcp` | [`macro.type_secret`](MACRO_TYPE_SECRET.md) | Resolve a named encrypted secret server-side and type it into a bound window without exposing plaintext. |
 | `winctl-mcp` | [`macro.export_result`](MACRO_EXPORT_RESULT.md) | Export a structured macro run result and artifact metadata by run ID. |
 | `winctl-mcp` | [`capture.ocr_region`](CAPTURE_OCR_REGION.md) | OCR an image region using Windows OCR or Tesseract fallback. |
 | `winctl-mcp` | [`capture.read_text`](CAPTURE_READ_TEXT.md) | Extract readable text from a bound window using UI Automation. |
