@@ -217,6 +217,12 @@ createApp({
       rawEditorLoading: false,
       rawEditorError: null,
       rawEditorMaximized: false,
+      recorderTitle: 'Recorded macro',
+      recorderDescription: '',
+      recorderRemember: true,
+      recorderBusy: false,
+      recorderError: null,
+      selectedRecordingId: 'active',
       tableState: {
         control: { query: '', page: 1, pageSize: 10 },
         catalog: { query: '', page: 1, pageSize: 12 },
@@ -230,6 +236,7 @@ createApp({
       tabs: [
         { id: 'overview', label: 'Overview' },
         { id: 'control', label: 'Control' },
+        { id: 'recorder', label: 'Recorder' },
         { id: 'inspect', label: 'Inspect' },
         { id: 'artifacts', label: 'Artifacts' },
         { id: 'catalog', label: 'Catalog' },
@@ -334,6 +341,73 @@ createApp({
     },
     controlEventRows() {
       return this.controlEvents.slice().reverse();
+    },
+    recordingState() {
+      return this.data?.recording ?? {};
+    },
+    recordingActive() {
+      return this.recordingState.active ?? null;
+    },
+    recordingCompleted() {
+      return this.recordingState.completed ?? [];
+    },
+    recordingCompletedManifests() {
+      return this.recordingState.completed_manifests ?? [];
+    },
+    recorderNativeCapture() {
+      return this.recordingState.native_capture ?? {};
+    },
+    recorderSessionChoices() {
+      const choices = [];
+      if (this.recordingActive) {
+        choices.push({
+          id: 'active',
+          label: `${this.recordingActive.title || 'Active recording'} (active)`,
+          session: this.recordingActive,
+          manifest: this.recordingState.active_manifest,
+          validation: null,
+        });
+      }
+      for (const session of this.recordingCompleted) {
+        const manifestRecord = this.recordingCompletedManifests.find(
+          (item) => item.session_id === session.id,
+        );
+        choices.push({
+          id: session.id,
+          label: session.title || session.id,
+          session,
+          manifest: manifestRecord?.manifest ?? null,
+          validation: manifestRecord?.validation ?? null,
+        });
+      }
+      return choices;
+    },
+    selectedRecording() {
+      if (this.selectedRecordingId === 'active' && this.recordingActive) {
+        return this.recorderSessionChoices.find((choice) => choice.id === 'active') ?? null;
+      }
+      return (
+        this.recorderSessionChoices.find((choice) => choice.id === this.selectedRecordingId) ??
+        this.recorderSessionChoices[0] ??
+        null
+      );
+    },
+    selectedRecordingManifest() {
+      return this.selectedRecording?.manifest ?? null;
+    },
+    selectedRecordingSteps() {
+      return this.selectedRecordingManifest?.steps ?? this.selectedRecording?.session?.steps ?? [];
+    },
+    recorderInference() {
+      return this.selectedRecordingManifest?.replay?.extra?.recorder?.launch_inference ?? null;
+    },
+    recorderStatusBadgeClass() {
+      const status = this.recordingState.status;
+      return status === 'recording'
+        ? 'badge-success'
+        : status === 'paused'
+          ? 'badge-warning'
+          : 'badge-ghost';
     },
     controlTableFields() {
       return ['kind', 'status', 'tool_name', 'bound_id', 'message'];
@@ -729,6 +803,97 @@ createApp({
     async copyMacroRunJson(item) {
       await this.copyJson({ manifest: this.macroManifest(item) ?? item.raw ?? item });
     },
+    async recorderPost(path, body) {
+      this.recorderBusy = true;
+      this.recorderError = null;
+      try {
+        const response = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(body ?? {}),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.ok === false) {
+          throw new Error(data.error?.message ?? `HTTP ${response.status}`);
+        }
+        await this.loadState({ quiet: true });
+        return data;
+      } catch (error) {
+        this.recorderError = String(error);
+        return null;
+      } finally {
+        this.recorderBusy = false;
+      }
+    },
+    async recorderStart() {
+      const title = this.recorderTitle.trim() || 'Recorded macro';
+      const result = await this.recorderPost('/dashboard/recorder/start', {
+        title,
+        description: this.recorderDescription || null,
+        tags: ['recorded'],
+        app_identity: null,
+        capture_input: true,
+      });
+      if (result?.session?.id) {
+        this.selectedRecordingId = 'active';
+      }
+    },
+    async recorderPause(paused) {
+      await this.recorderPost('/dashboard/recorder/pause', {
+        paused,
+        reason: paused ? 'paused from dashboard' : 'resumed from dashboard',
+      });
+    },
+    async recorderStop() {
+      const result = await this.recorderPost('/dashboard/recorder/stop', {
+        save_to_memory: false,
+      });
+      if (result?.session?.id) {
+        this.selectedRecordingId = result.session.id;
+      }
+    },
+    async recorderPromote() {
+      const sessionId =
+        this.selectedRecording?.id === 'active' ? null : this.selectedRecording?.session?.id;
+      await this.recorderPost('/dashboard/recorder/promote', {
+        session_id: sessionId,
+        remember: this.recorderRemember,
+      });
+    },
+    recorderManifestRows(manifest) {
+      if (!manifest) return [];
+      return [
+        ['Title', manifest.title],
+        ['Version', manifest.version],
+        ['Launch', manifest.launch?.tool],
+        ['Launch exe', manifest.launch?.args?.exe],
+        ['Bind strategy', manifest.bind?.strategy],
+        ['Required executable', manifest.bind?.required_executable],
+        ['Review required', manifest.replay?.extra?.recorder?.launch_inference?.requires_confirmation],
+      ].filter(([, value]) => value != null && value !== '');
+    },
+    recorderStepTarget(step) {
+      const target = step.target;
+      if (!target) return 'n/a';
+      if (target.type === 'uia_element') {
+        return target.automation_id || target.name || target.class_name || target.element_ref || 'UIA element';
+      }
+      if (target.type === 'current') return 'current target';
+      if (target.type === 'alias') return target.name;
+      return target.type || 'target';
+    },
+    recorderStepArgs(step) {
+      const args = step.args ?? {};
+      if (step.tool === 'input.type_text') return 'text redacted';
+      if (step.tool === 'macro.type_secret') return 'secret placeholder';
+      if (step.tool?.startsWith('input.')) {
+        return Object.entries(args)
+          .filter(([key]) => !['text', 'value'].includes(key))
+          .map(([key, value]) => `${key}: ${value}`)
+          .join(', ');
+      }
+      return compactValue(args);
+    },
     async loadUiaSnapshot() {
       if (!this.activeBoundId) return;
       this.inspectError = null;
@@ -1102,6 +1267,125 @@ createApp({
               <button type="button" class="btn btn-xs" :disabled="tableMeta('control', controlEventRows, controlTableFields).page <= 1" @click="previousTablePage('control', controlEventRows, controlTableFields)">Previous</button>
               <span class="text-xs text-slate-500">Page {{ tableMeta('control', controlEventRows, controlTableFields).page }} of {{ tableMeta('control', controlEventRows, controlTableFields).totalPages }}</span>
               <button type="button" class="btn btn-xs" :disabled="tableMeta('control', controlEventRows, controlTableFields).page >= tableMeta('control', controlEventRows, controlTableFields).totalPages" @click="nextTablePage('control', controlEventRows, controlTableFields)">Next</button>
+            </div>
+          </section>
+        </section>
+
+        <section v-if="selectedTab === 'recorder'" class="space-y-5">
+          <div class="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
+            <section class="winctl-card">
+              <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+                <h2 class="text-sm font-semibold">Recording controls</h2>
+                <span class="badge" :class="recorderStatusBadgeClass">{{ recordingState.status || 'idle' }}</span>
+              </div>
+              <div class="space-y-4 p-4">
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <label class="form-control">
+                    <span class="label-text text-xs font-semibold">Title</span>
+                    <input v-model="recorderTitle" type="text" class="input input-sm input-bordered" />
+                  </label>
+                  <label class="form-control">
+                    <span class="label-text text-xs font-semibold">Description</span>
+                    <input v-model="recorderDescription" type="text" class="input input-sm input-bordered" />
+                  </label>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button type="button" class="btn btn-sm btn-info" :disabled="recorderBusy || recordingActive" @click="recorderStart">Start</button>
+                  <button type="button" class="btn btn-sm" :disabled="recorderBusy || !recordingActive || recordingState.status === 'paused'" @click="recorderPause(true)">Pause</button>
+                  <button type="button" class="btn btn-sm" :disabled="recorderBusy || !recordingActive || recordingState.status !== 'paused'" @click="recorderPause(false)">Resume</button>
+                  <button type="button" class="btn btn-sm btn-warning" :disabled="recorderBusy || !recordingActive" @click="recorderStop">Stop</button>
+                  <label class="label cursor-pointer gap-2">
+                    <input v-model="recorderRemember" type="checkbox" class="checkbox checkbox-sm" />
+                    <span class="label-text text-xs">Remember on promote</span>
+                  </label>
+                </div>
+                <div v-if="recorderError" class="alert alert-error text-sm">{{ recorderError }}</div>
+                <dl class="winctl-detail-grid">
+                  <div class="winctl-detail-row">
+                    <dt>Native provider</dt>
+                    <dd>{{ recorderNativeCapture.provider || 'n/a' }}</dd>
+                  </div>
+                  <div class="winctl-detail-row">
+                    <dt>Hooks</dt>
+                    <dd>
+                      <span class="badge badge-sm" :class="badgeClass(recorderNativeCapture.hooks_started)">{{ recorderNativeCapture.hooks_started ? 'started' : 'stopped' }}</span>
+                      <span class="ml-2 badge badge-sm" :class="badgeClass(recorderNativeCapture.hotkeys_started)">{{ recorderNativeCapture.hotkeys_started ? 'hotkeys' : 'no hotkeys' }}</span>
+                    </dd>
+                  </div>
+                  <div class="winctl-detail-row">
+                    <dt>Events</dt>
+                    <dd>{{ recorderNativeCapture.captured_event_count || 0 }} captured, {{ recorderNativeCapture.emitted_step_count || 0 }} steps, {{ recorderNativeCapture.ignored_event_count || 0 }} ignored</dd>
+                  </div>
+                  <div v-if="recorderNativeCapture.last_error" class="winctl-detail-row">
+                    <dt>Last error</dt>
+                    <dd>{{ recorderNativeCapture.last_error }}</dd>
+                  </div>
+                </dl>
+              </div>
+            </section>
+
+            <section class="winctl-card">
+              <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+                <h2 class="text-sm font-semibold">Review manifest</h2>
+                <span class="badge badge-info badge-outline">{{ recorderSessionChoices.length }}</span>
+              </div>
+              <div class="space-y-4 p-4">
+                <select v-model="selectedRecordingId" class="select select-bordered w-full">
+                  <option v-if="!recorderSessionChoices.length" value="active">No recording sessions</option>
+                  <option v-for="choice in recorderSessionChoices" :key="choice.id" :value="choice.id">{{ choice.label }}</option>
+                </select>
+                <div v-if="!selectedRecording" class="py-8 text-center text-sm text-slate-500">Start or stop a recording to review a manifest</div>
+                <template v-else>
+                  <dl class="winctl-detail-grid">
+                    <div v-for="[label, value] in recorderManifestRows(selectedRecordingManifest)" :key="label" class="winctl-detail-row">
+                      <dt>{{ label }}</dt>
+                      <dd>{{ value }}</dd>
+                    </div>
+                  </dl>
+                  <div v-if="recorderInference" class="rounded-lg border border-[#ffb454]/40 bg-[#ffb454]/10 p-3 text-sm">
+                    <div class="font-semibold">Launch inference: {{ recorderInference.status || 'unknown' }}</div>
+                    <div class="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                      Mode {{ recorderInference.mode || 'n/a' }}. Review is required before replay.
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-sm" :disabled="!selectedRecordingManifest" @click="copyJson({ manifest: selectedRecordingManifest })">Copy manifest</button>
+                    <button type="button" class="btn btn-sm btn-info" :disabled="recorderBusy || !selectedRecordingManifest" @click="recorderPromote">Promote</button>
+                  </div>
+                </template>
+              </div>
+            </section>
+          </div>
+
+          <section class="winctl-card overflow-hidden">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+              <h2 class="text-sm font-semibold">Recorded steps</h2>
+              <span class="badge badge-info badge-outline">{{ selectedRecordingSteps.length }}</span>
+            </div>
+            <div class="winctl-table-frame">
+              <table class="table winctl-table table-sm">
+                <thead>
+                  <tr><th>Step</th><th>Tool</th><th>Target</th><th>Arguments</th><th>Review</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!selectedRecordingSteps.length">
+                    <td colspan="5" class="py-8 text-center text-slate-500">No recorded steps</td>
+                  </tr>
+                  <tr v-for="step in selectedRecordingSteps" :key="step.id">
+                    <td class="winctl-code text-xs">{{ step.id }}</td>
+                    <td class="winctl-code text-xs">{{ step.tool }}</td>
+                    <td class="text-xs">{{ recorderStepTarget(step) }}</td>
+                    <td class="text-xs">{{ recorderStepArgs(step) }}</td>
+                    <td>
+                      <div class="flex flex-wrap gap-1">
+                        <span v-if="step.tool === 'input.type_text'" class="badge badge-warning badge-outline badge-xs">scrub text</span>
+                        <span v-if="step.tool === 'macro.type_secret'" class="badge badge-warning badge-outline badge-xs">bind secret</span>
+                        <span v-if="step.coordinate_fallback" class="badge badge-ghost badge-xs">coordinate fallback</span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </section>
         </section>

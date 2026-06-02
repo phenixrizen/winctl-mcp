@@ -3927,6 +3927,13 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
         .route("/dashboard", get(dashboard_html))
         .route("/dashboard/docs", get(dashboard_docs_json))
         .route("/dashboard/memory/delete", post(dashboard_memory_delete))
+        .route("/dashboard/recorder/start", post(dashboard_recorder_start))
+        .route("/dashboard/recorder/pause", post(dashboard_recorder_pause))
+        .route("/dashboard/recorder/stop", post(dashboard_recorder_stop))
+        .route(
+            "/dashboard/recorder/promote",
+            post(dashboard_recorder_promote),
+        )
         .route("/dashboard/state", get(dashboard_state_json))
         .route("/dashboard/uia", get(dashboard_uia_json))
         .route("/dashboard/screenshot", get(dashboard_screenshot_json))
@@ -3997,6 +4004,13 @@ async fn dashboard_docs_json() -> impl IntoResponse {
 struct DashboardMemoryDeleteBody {
     id: String,
 }
+
+#[derive(serde::Deserialize)]
+struct DashboardRecorderPromoteBody {
+    session_id: Option<String>,
+    #[serde(default = "default_true")]
+    remember: bool,
+}
 async fn dashboard_memory_delete(
     State(state): State<DashboardState>,
     AxumJson(body): AxumJson<DashboardMemoryDeleteBody>,
@@ -4005,6 +4019,78 @@ async fn dashboard_memory_delete(
     AxumJson(tools::memory::memory_delete(
         &state.app_state,
         winctl_memory::MemoryIdRequest { id: body.id },
+    ))
+}
+
+async fn dashboard_recorder_start(
+    State(state): State<DashboardState>,
+    AxumJson(body): AxumJson<RecorderStartRequest>,
+) -> impl IntoResponse {
+    tracing::info!("dashboard recorder start requested");
+    AxumJson(tools::recorder::recorder_start(&state.app_state, body))
+}
+
+async fn dashboard_recorder_pause(
+    State(state): State<DashboardState>,
+    AxumJson(body): AxumJson<RecorderPauseRequest>,
+) -> impl IntoResponse {
+    tracing::info!(paused = body.paused, "dashboard recorder pause requested");
+    AxumJson(tools::recorder::recorder_pause(&state.app_state, body))
+}
+
+async fn dashboard_recorder_stop(
+    State(state): State<DashboardState>,
+    AxumJson(body): AxumJson<RecorderStopRequest>,
+) -> impl IntoResponse {
+    tracing::info!("dashboard recorder stop requested");
+    AxumJson(tools::recorder::recorder_stop(&state.app_state, body))
+}
+
+async fn dashboard_recorder_promote(
+    State(state): State<DashboardState>,
+    AxumJson(body): AxumJson<DashboardRecorderPromoteBody>,
+) -> impl IntoResponse {
+    tracing::info!(
+        session_id = ?body.session_id,
+        remember = body.remember,
+        "dashboard recorder promote requested"
+    );
+    let exported = tools::recorder::recorder_export(
+        &state.app_state,
+        RecorderExportRequest {
+            session_id: body.session_id,
+        },
+    );
+    if !exported
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return AxumJson(exported);
+    }
+    let manifest = match exported
+        .get("manifest")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<winctl_macro::MacroManifest>(value).ok())
+    {
+        Some(manifest) => manifest,
+        None => {
+            return AxumJson(serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "recorder_manifest_decode_failed",
+                    "message": "recorded manifest could not be decoded for promotion"
+                },
+                "export": exported,
+            }));
+        }
+    };
+    AxumJson(tools::macros::macro_promote(
+        &state.app_state,
+        MacroPromoteRequest {
+            manifest,
+            remember: body.remember,
+        },
     ))
 }
 
@@ -4070,6 +4156,7 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
         .get("control")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
+    let recording = tools::recorder::recorder_state(&state.app_state);
     AxumJson(serde_json::json!({
         "ok": true,
         "service": "winctl-mcp-server",
@@ -4082,6 +4169,7 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
         "macros": macros,
         "macro_results": macro_results,
         "control": control,
+        "recording": recording,
         "connected_clients": serde_json::Value::Null,
         "recent_requests": [],
         "warnings": [

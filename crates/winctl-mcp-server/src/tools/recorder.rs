@@ -883,12 +883,27 @@ pub fn recorder_state(state: &AppState) -> serde_json::Value {
         .recorder_runtime
         .lock()
         .expect("recorder mutex poisoned");
+    let active_manifest = runtime.active.as_ref().map(manifest_from_session);
+    let completed_manifests = runtime
+        .completed
+        .values()
+        .map(|session| {
+            let manifest = manifest_from_session(session);
+            serde_json::json!({
+                "session_id": session.id,
+                "manifest": manifest,
+                "validation": validate_manifest(&manifest),
+            })
+        })
+        .collect::<Vec<_>>();
     serde_json::json!({
         "ok": true,
         "status": runtime.status,
         "native_capture": runtime.native_capture,
         "active": runtime.active,
+        "active_manifest": active_manifest,
         "completed": runtime.completed.values().collect::<Vec<_>>(),
+        "completed_manifests": completed_manifests,
     })
 }
 
