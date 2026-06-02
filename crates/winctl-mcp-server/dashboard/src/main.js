@@ -400,8 +400,11 @@ createApp({
     },
   },
   watch: {
-    selectedTab(tab) {
-      if (tab === 'docs') this.loadDocs();
+    async selectedTab(tab) {
+      if (tab === 'docs') {
+        await this.loadDocs();
+        await this.renderMermaid();
+      }
       if (tab === 'raw') this.renderRawEditor();
     },
     data() {
