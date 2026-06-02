@@ -32,7 +32,7 @@ mod windows_app {
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetDlgItem, GetMessageW,
         KillTimer, MessageBoxW, PostQuitMessage, RegisterClassW, SendMessageW, SetTimer,
         SetWindowTextW, ShowWindow, TranslateMessage, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-        BS_CHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CB_ADDSTRING, ES_LEFT, HMENU,
+        BS_CHECKBOX, BS_PUSHBUTTON, CBS_DROPDOWNLIST, CB_ADDSTRING, ES_LEFT, ES_PASSWORD, HMENU,
         LBS_EXTENDEDSEL, LBS_NOTIFY, LB_ADDSTRING, MB_OKCANCEL, MSG, SW_SHOW, WINDOW_EX_STYLE,
         WINDOW_STYLE, WM_COMMAND, WM_DESTROY, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CHILD,
         WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
@@ -48,6 +48,7 @@ mod windows_app {
     const ID_COMBOBOX: i32 = 105;
     const ID_TRACKBAR: i32 = 106;
     const ID_STATUS_TEXT: i32 = 107;
+    const ID_PASSWORD_EDIT: i32 = 108;
 
     struct Config {
         title: String,
@@ -63,6 +64,7 @@ mod windows_app {
         create_child: bool,
         child_title: String,
         automation_controls: bool,
+        password_control: bool,
     }
 
     pub fn run() -> Result<()> {
@@ -107,7 +109,7 @@ mod windows_app {
             create_child_window(hwnd, instance, &config.child_title)?;
         }
         if config.automation_controls {
-            create_automation_controls(hwnd, instance)?;
+            create_automation_controls(hwnd, instance, config.password_control)?;
         }
 
         unsafe {
@@ -148,6 +150,7 @@ mod windows_app {
     fn create_automation_controls(
         parent: HWND,
         instance: windows::Win32::Foundation::HINSTANCE,
+        password_control: bool,
     ) -> Result<()> {
         let common_controls = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
@@ -270,6 +273,21 @@ mod windows_app {
             instance,
             0,
         )?;
+
+        if password_control {
+            create_control(
+                "EDIT",
+                "",
+                window_style(ES_LEFT | ES_PASSWORD) | WS_BORDER,
+                360,
+                250,
+                260,
+                28,
+                parent,
+                instance,
+                ID_PASSWORD_EDIT,
+            )?;
+        }
 
         Ok(())
     }
@@ -464,6 +482,7 @@ mod windows_app {
                 create_child: false,
                 child_title: "winctl integration child".into(),
                 automation_controls: false,
+                password_control: false,
             };
 
             let mut args = env::args().skip(1);
@@ -492,6 +511,7 @@ mod windows_app {
                     "--create-child" => config.create_child = true,
                     "--child-title" => config.child_title = next_value(&mut args, "--child-title"),
                     "--automation-controls" => config.automation_controls = true,
+                    "--password-control" => config.password_control = true,
                     "--help" | "-h" => {
                         print_help();
                         std::process::exit(0);
@@ -535,7 +555,7 @@ mod windows_app {
 
     fn print_help() {
         eprintln!(
-            "Usage: winctl-test-target [--title TITLE] [--class CLASS] [--x PX] [--y PX] [--width PX] [--height PX] [--duration-ms MS] [--crash-after-ms MS] [--message-box-after-ms MS] [--ready-file PATH] [--create-child] [--automation-controls]"
+            "Usage: winctl-test-target [--title TITLE] [--class CLASS] [--x PX] [--y PX] [--width PX] [--height PX] [--duration-ms MS] [--crash-after-ms MS] [--message-box-after-ms MS] [--ready-file PATH] [--create-child] [--automation-controls] [--password-control]"
         );
     }
 }

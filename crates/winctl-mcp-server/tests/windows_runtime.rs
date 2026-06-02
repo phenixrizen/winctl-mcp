@@ -7,9 +7,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    VK_CONTROL, VK_ESCAPE, VK_MENU,
+    SendInput, VkKeyScanW, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+    KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT,
+    VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_SHIFT,
 };
+use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
 static WINDOWS_RUNTIME_TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
@@ -169,7 +171,7 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     let focus = harness
         .call_tool(
             "uia.set_focus",
-            action_args(&bound_id, serde_json::json!({"role": "Edit"})),
+            action_args(&bound_id, selector("initial edit value", "Edit")),
         )
         .await;
     assert_direct_pattern("uia.set_focus", &focus, "IUIAutomationElement.SetFocus");
@@ -738,6 +740,290 @@ async fn windows_video_capture_records_display_artifact() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_recorder_records_redacted_manifest_and_replays_with_secret() {
+    let _guard = runtime_test_lock().await;
+    if std::env::var_os("WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION").is_some() {
+        eprintln!("skipping Windows runtime integration because WINCTL_SKIP_WINDOWS_RUNTIME_INTEGRATION is set");
+        return;
+    }
+
+    let server_exe = server_exe_path();
+    let target_exe = target_exe_path();
+    assert!(
+        server_exe.exists(),
+        "server exe missing at {}",
+        server_exe.display()
+    );
+    assert!(
+        target_exe.exists(),
+        "target exe missing at {}",
+        target_exe.display()
+    );
+
+    let mut harness = McpHarness::start(&server_exe).await;
+    harness.initialize().await;
+    let launch = harness
+        .call_tool(
+            "process.launch",
+            serde_json::json!({
+                "exe": target_exe.to_string_lossy(),
+                "args": [
+                    "--title", "winctl recorder target",
+                    "--class", "WinctlRecorderTarget",
+                    "--width", "860",
+                    "--height", "560",
+                    "--duration-ms", "60000",
+                    "--automation-controls",
+                    "--password-control"
+                ],
+                "wait_for_window": true,
+                "timeout_ms": 10000
+            }),
+        )
+        .await;
+    assert_ok("process.launch recorder target", &launch);
+    let pid = launch["pid"].as_u64().expect("launch should return pid") as u32;
+    let launch_id = launch["launch_id"]
+        .as_str()
+        .expect("launch should return launch_id")
+        .to_owned();
+    let hwnd = launch["candidate_top_level_windows"]
+        .as_array()
+        .and_then(|windows| windows.first())
+        .and_then(|window| window["hwnd_hex"].as_str())
+        .expect("launch should return a candidate HWND")
+        .to_owned();
+    let bind = harness
+        .call_tool(
+            "windows.bind",
+            serde_json::json!({
+                "pid": pid,
+                "hwnd": hwnd,
+                "must_be_visible": true
+            }),
+        )
+        .await;
+    assert_ok("windows.bind recorder target", &bind);
+    let bound_id = bind["bound"]["bound_id"]
+        .as_str()
+        .expect("bind should return bound_id")
+        .to_owned();
+
+    let button_find = harness
+        .call_tool(
+            "uia.find",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "selector": {"name": "Invoke Action", "role": "Button"},
+                "max_depth": 12,
+                "max_elements": 4000
+            }),
+        )
+        .await;
+    assert_ok("uia.find recorder button", &button_find);
+    let button_bounds = &button_find["matches"]
+        .as_array()
+        .and_then(|matches| matches.first())
+        .and_then(|element| element.get("bounds"))
+        .expect("button should have UIA bounds");
+    let button_screen_x = button_bounds["x"].as_i64().expect("button x") as i32
+        + (button_bounds["width"].as_i64().expect("button width") as i32 / 2);
+    let button_screen_y = button_bounds["y"].as_i64().expect("button y") as i32
+        + (button_bounds["height"].as_i64().expect("button height") as i32 / 2);
+
+    let arm = harness
+        .call_tool(
+            "control.arm",
+            serde_json::json!({
+                "session_id": "windows-recorder-test",
+                "bound_id": bound_id,
+                "allow_for_ms": 120000,
+                "reason": "Windows recorder integration test"
+            }),
+        )
+        .await;
+    assert_ok("control.arm recorder", &arm);
+
+    let secret_value = format!("recorder-secret-{pid}");
+    let visible_text = format!("recorder text {pid}");
+    let secret_set = harness
+        .call_tool(
+            "secret.set",
+            serde_json::json!({
+                "name": "windows-recorder/login",
+                "value": secret_value.clone(),
+                "description": "Windows recorder replay secret",
+                "tags": ["runtime", "recorder"]
+            }),
+        )
+        .await;
+    assert_ok("secret.set recorder", &secret_set);
+
+    let start = harness
+        .call_tool(
+            "recorder.start",
+            serde_json::json!({
+                "title": "Windows recorder runtime",
+                "description": "Records click/text/password against winctl-test-target",
+                "tags": ["runtime", "recorder"],
+                "capture_input": true
+            }),
+        )
+        .await;
+    assert_ok("recorder.start", &start);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    send_left_click_screen(button_screen_x, button_screen_y);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let focus_edit = harness
+        .call_tool(
+            "uia.set_focus",
+            action_args(
+                &bound_id,
+                serde_json::json!({"automation_id": "102", "role": "Edit"}),
+            ),
+        )
+        .await;
+    assert_direct_pattern(
+        "uia.set_focus recorded edit",
+        &focus_edit,
+        "IUIAutomationElement.SetFocus",
+    );
+    send_virtual_text(&visible_text);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let focus_password = harness
+        .call_tool(
+            "uia.set_focus",
+            action_args(
+                &bound_id,
+                serde_json::json!({"automation_id": "108", "role": "Edit"}),
+            ),
+        )
+        .await;
+    assert_direct_pattern(
+        "uia.set_focus recorded password",
+        &focus_password,
+        "IUIAutomationElement.SetFocus",
+    );
+    send_virtual_text(&secret_value);
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let stop = harness
+        .call_tool(
+            "recorder.stop",
+            serde_json::json!({
+                "save_to_memory": false
+            }),
+        )
+        .await;
+    assert_ok("recorder.stop", &stop);
+    let mut manifest = stop["manifest"].clone();
+    let raw_manifest = serde_json::to_string(&manifest).expect("manifest should serialize");
+    assert!(
+        !raw_manifest.contains(&visible_text),
+        "recorder manifest must redact typed text: {manifest:#}"
+    );
+    assert!(
+        !raw_manifest.contains(&secret_value),
+        "recorder manifest must never contain password plaintext: {manifest:#}"
+    );
+    assert_manifest_has_semantic_click(&manifest);
+    assert_manifest_has_tool(&manifest, "input.type_text");
+    assert_manifest_has_unbound_type_secret(&manifest);
+    assert_eq!(
+        manifest["replay"]["extra"]["recorder"]["launch_inference"]["requires_confirmation"], true,
+        "recorder manifest should require launch/bind confirmation: {manifest:#}"
+    );
+
+    let review_counts = fill_recorded_manifest_for_replay(
+        &mut manifest,
+        &visible_text,
+        "windows-recorder/login",
+        pid,
+        &hwnd,
+    );
+    assert!(
+        review_counts.0 >= 1 && review_counts.1 >= 1,
+        "review should fill at least one type_text and one type_secret step"
+    );
+    let reviewed_json =
+        serde_json::to_string(&manifest).expect("reviewed manifest should serialize");
+    assert!(
+        reviewed_json.contains("windows-recorder/login"),
+        "reviewed manifest should reference the named secret for replay"
+    );
+    assert!(
+        !reviewed_json.contains(&secret_value),
+        "reviewed manifest must still not contain password plaintext: {manifest:#}"
+    );
+
+    let validate = harness
+        .call_tool(
+            "macro.validate",
+            serde_json::json!({
+                "manifest": manifest.clone()
+            }),
+        )
+        .await;
+    assert_ok("macro.validate reviewed recorder manifest", &validate);
+    assert_eq!(
+        validate["valid"], true,
+        "reviewed recorder manifest should validate: {validate:#}"
+    );
+
+    let dry_run = harness
+        .call_tool(
+            "macro.dry_run",
+            serde_json::json!({
+                "manifest": manifest.clone()
+            }),
+        )
+        .await;
+    assert_ok("macro.dry_run reviewed recorder manifest", &dry_run);
+
+    let rearm = harness
+        .call_tool(
+            "control.arm",
+            serde_json::json!({
+                "session_id": "windows-recorder-replay-test",
+                "allow_for_ms": 120000,
+                "reason": "Windows recorder replay integration test"
+            }),
+        )
+        .await;
+    assert_ok("control.arm recorder replay", &rearm);
+    let run = harness
+        .call_tool(
+            "macro.run",
+            serde_json::json!({
+                "manifest": manifest,
+                "max_steps": 20
+            }),
+        )
+        .await;
+    assert_ok("macro.run reviewed recorder manifest", &run);
+    assert_eq!(
+        run["result"]["status"], "succeeded",
+        "macro replay failed: {run:#}"
+    );
+    assert_macro_run_secret_output_is_redacted(&run, &secret_value, "windows-recorder/login");
+
+    let kill = harness
+        .call_tool(
+            "process.kill",
+            serde_json::json!({
+                "launch_id": launch_id,
+                "force": true,
+                "kill_tree": true
+            }),
+        )
+        .await;
+    assert_ok("process.kill recorder cleanup", &kill);
+}
+
 struct McpHarness {
     child: Child,
     client: reqwest::Client,
@@ -1059,6 +1345,128 @@ fn assert_audit_entry(value: &Value, kind: &str, message_contains: &str) {
     );
 }
 
+fn assert_manifest_has_tool(manifest: &Value, tool: &str) {
+    let steps = manifest["steps"]
+        .as_array()
+        .expect("manifest should contain steps");
+    assert!(
+        steps.iter().any(|step| step["tool"] == tool),
+        "manifest should contain {tool}: {manifest:#}"
+    );
+}
+
+fn assert_manifest_has_semantic_click(manifest: &Value) {
+    let steps = manifest["steps"]
+        .as_array()
+        .expect("manifest should contain steps");
+    assert!(
+        steps.iter().any(|step| {
+            step["tool"] == "input.click"
+                && step["target"]["type"] == "ui_element"
+                && step["target"]["role"].is_string()
+                && step["coordinate_fallback"]["original_resolved_target"]["window"]
+                    ["hwnd_hex"]
+                    .is_string()
+                && step["coordinate_fallback"]["original_resolved_target"]["window"]["pid"].is_u64()
+        }),
+        "manifest should contain an input.click with a semantic UIA target and fallback identity: {manifest:#}"
+    );
+}
+
+fn assert_manifest_has_unbound_type_secret(manifest: &Value) {
+    let steps = manifest["steps"]
+        .as_array()
+        .expect("manifest should contain steps");
+    assert!(
+        steps.iter().any(|step| {
+            step["tool"] == "macro.type_secret"
+                && step["args"]["secret_ref"] == ""
+                && step["target"]["type"] == "ui_element"
+        }),
+        "manifest should contain a plaintext-free unbound macro.type_secret step: {manifest:#}"
+    );
+}
+
+fn fill_recorded_manifest_for_replay(
+    manifest: &mut Value,
+    text: &str,
+    secret_ref: &str,
+    pid: u32,
+    hwnd: &str,
+) -> (usize, usize) {
+    manifest["launch"] = Value::Null;
+    manifest["preconditions"] = serde_json::json!([
+        {
+            "id": "bind-recorded-target",
+            "tool": "windows.bind",
+            "args": {
+                "pid": pid,
+                "hwnd": hwnd,
+                "must_be_visible": true
+            },
+            "target": {
+                "type": "alias",
+                "name": "app_main"
+            },
+            "required": true,
+            "continue_on_failure": false
+        }
+    ]);
+    let steps = manifest["steps"]
+        .as_array_mut()
+        .expect("manifest should contain mutable steps");
+    let mut text_steps = 0usize;
+    let mut secret_steps = 0usize;
+    for step in steps {
+        match step["tool"].as_str() {
+            Some("input.type_text") => {
+                step["args"]["text"] = Value::String(text.to_owned());
+                text_steps += 1;
+            }
+            Some("macro.type_secret") => {
+                step["args"]["secret_ref"] = Value::String(secret_ref.to_owned());
+                secret_steps += 1;
+            }
+            _ => {}
+        }
+    }
+    (text_steps, secret_steps)
+}
+
+fn assert_macro_run_secret_output_is_redacted(run: &Value, plaintext: &str, secret_ref: &str) {
+    let step_results = run["result"]["step_results"]
+        .as_array()
+        .expect("macro.run should return step results");
+    let secret_outputs = step_results
+        .iter()
+        .filter(|step| step["tool"] == "macro.type_secret")
+        .collect::<Vec<_>>();
+    assert!(
+        !secret_outputs.is_empty(),
+        "macro.run should execute at least one macro.type_secret step: {run:#}"
+    );
+    for step in secret_outputs {
+        assert_eq!(
+            step["status"], "succeeded",
+            "macro.type_secret replay step should succeed: {step:#}"
+        );
+        assert_eq!(
+            step["output"]["typed_secret"], true,
+            "macro.type_secret should report only typed_secret: {step:#}"
+        );
+        let output = serde_json::to_string(&step["output"])
+            .expect("macro.type_secret output should serialize");
+        assert!(
+            !output.contains(plaintext),
+            "macro.type_secret output must not expose plaintext: {step:#}"
+        );
+        assert!(
+            !output.contains(secret_ref),
+            "macro.type_secret output must not expose secret_ref: {step:#}"
+        );
+    }
+}
+
 fn tool_payload(tool: &str, response: Value) -> Value {
     assert_eq!(
         response["jsonrpc"], "2.0",
@@ -1185,6 +1593,45 @@ fn temp_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
 }
 
+fn send_virtual_text(text: &str) {
+    for ch in text.encode_utf16() {
+        let key_state = unsafe { VkKeyScanW(ch) };
+        assert_ne!(
+            key_state, -1,
+            "test fixture text contains a character without a virtual-key mapping"
+        );
+        let vk = VIRTUAL_KEY((key_state as u16) & 0x00ff);
+        let shift = ((key_state as u16) & 0x0100) != 0;
+        let mut inputs = Vec::new();
+        if shift {
+            inputs.push(key_input(VK_SHIFT, KEYBD_EVENT_FLAGS(0)));
+        }
+        inputs.push(key_input(vk, KEYBD_EVENT_FLAGS(0)));
+        inputs.push(key_input(vk, KEYEVENTF_KEYUP));
+        if shift {
+            inputs.push(key_input(VK_SHIFT, KEYEVENTF_KEYUP));
+        }
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        assert_eq!(
+            sent,
+            inputs.len() as u32,
+            "SendInput should deliver virtual text key"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn send_left_click_screen(x: i32, y: i32) {
+    unsafe { SetCursorPos(x, y) }.expect("SetCursorPos should move to requested point");
+    std::thread::sleep(Duration::from_millis(80));
+    let inputs = [
+        mouse_input(MOUSEEVENTF_LEFTDOWN),
+        mouse_input(MOUSEEVENTF_LEFTUP),
+    ];
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    assert_eq!(sent, inputs.len() as u32, "SendInput should click mouse");
+}
+
 fn send_ctrl_alt_esc() {
     let inputs = [
         key_input(VK_CONTROL, KEYBD_EVENT_FLAGS(0)),
@@ -1209,6 +1656,22 @@ fn send_key(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
     ];
     let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
     assert_eq!(sent, inputs.len() as u32, "SendInput should deliver key");
+}
+
+fn mouse_input(flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
 }
 
 fn key_input(

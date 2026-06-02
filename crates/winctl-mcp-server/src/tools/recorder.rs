@@ -8,13 +8,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use zeroize::Zeroizing;
 use winctl_macro::{
     tool_descriptor, validate_manifest, AppIdentity, BindingStrategy, CoordinateFallbackMetadata,
     MacroManifest, MacroStep, MacroTarget, Rect, ReplayMetadata, Size, StepAudit, ToolCall,
     UiElementTarget, MACRO_MANIFEST_VERSION,
 };
 use winctl_memory::RememberRequest;
+use zeroize::Zeroizing;
 
 use crate::{
     AppState, RecorderExportRequest, RecorderPauseRequest, RecorderRecordStepRequest,
@@ -82,10 +82,7 @@ impl Default for RecorderNativeCaptureState {
             hooks_started: false,
             hotkeys_started: false,
             capture_enabled: false,
-            ignored_process_names: vec![
-                "winctl-mcp-server.exe".into(),
-                "winctl-tray.exe".into(),
-            ],
+            ignored_process_names: vec!["winctl-mcp-server.exe".into(), "winctl-tray.exe".into()],
             captured_event_count: 0,
             emitted_step_count: 0,
             ignored_event_count: 0,
@@ -213,6 +210,7 @@ pub struct RecordingCoalescer {
     pending_down: Option<PendingMouseDown>,
     pending_click: Option<PendingClick>,
     pending_text: Option<PendingText>,
+    pending_password: Option<PendingPassword>,
 }
 
 #[allow(dead_code)]
@@ -234,6 +232,13 @@ struct PendingClick {
 #[derive(Debug, Clone)]
 struct PendingText {
     text: String,
+    timestamp_ms: u64,
+    target: Option<RecorderSemanticTarget>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct PendingPassword {
     timestamp_ms: u64,
     target: Option<RecorderSemanticTarget>,
 }
@@ -377,6 +382,7 @@ impl RecordingCoalescer {
             pending_down: None,
             pending_click: None,
             pending_text: None,
+            pending_password: None,
         }
     }
 
@@ -384,6 +390,7 @@ impl RecordingCoalescer {
         match event {
             RecorderInputEvent::MouseDown { pointer, button } => {
                 let mut steps = self.flush_text();
+                steps.extend(self.flush_password());
                 steps.extend(self.flush_stale_click(pointer.timestamp_ms));
                 self.pending_down = Some(PendingMouseDown {
                     pointer,
@@ -402,6 +409,7 @@ impl RecordingCoalescer {
             }
             RecorderInputEvent::MouseUp { pointer, button } => {
                 let mut steps = self.flush_text();
+                steps.extend(self.flush_password());
                 let Some(down) = self.pending_down.take() else {
                     steps.extend(self.flush_stale_click(pointer.timestamp_ms));
                     return steps;
@@ -438,6 +446,7 @@ impl RecordingCoalescer {
                 delta_y,
             } => {
                 let mut steps = self.flush_text();
+                steps.extend(self.flush_password());
                 steps.extend(self.flush_click());
                 steps.push(self.scroll_step(pointer, delta_x, delta_y));
                 steps
@@ -452,9 +461,23 @@ impl RecordingCoalescer {
                 if is_password {
                     steps.extend(self.flush_text());
                     let _zeroized = Zeroizing::new(text);
-                    steps.push(self.type_secret_step(target));
+                    if let Some(pending) = self.pending_password.as_mut() {
+                        if timestamp_ms.saturating_sub(pending.timestamp_ms)
+                            <= RECORDER_TEXT_MERGE_MS
+                            && pending.target == target
+                        {
+                            pending.timestamp_ms = timestamp_ms;
+                            return steps;
+                        }
+                    }
+                    steps.extend(self.flush_password());
+                    self.pending_password = Some(PendingPassword {
+                        timestamp_ms,
+                        target,
+                    });
                     return steps;
                 }
+                steps.extend(self.flush_password());
                 if let Some(pending) = self.pending_text.as_mut() {
                     if timestamp_ms.saturating_sub(pending.timestamp_ms) <= RECORDER_TEXT_MERGE_MS
                         && pending.target == target
@@ -474,6 +497,7 @@ impl RecordingCoalescer {
             }
             RecorderInputEvent::Shortcut { keys, target, .. } => {
                 let mut steps = self.flush_text();
+                steps.extend(self.flush_password());
                 steps.extend(self.flush_click());
                 steps.push(self.shortcut_step(keys, target));
                 steps
@@ -483,6 +507,7 @@ impl RecordingCoalescer {
 
     pub fn finish(&mut self) -> Vec<MacroStep> {
         let mut steps = self.flush_text();
+        steps.extend(self.flush_password());
         steps.extend(self.flush_click());
         self.pending_down = None;
         steps
@@ -495,7 +520,7 @@ impl RecordingCoalescer {
             serde_json::json!({
                 "x": pointer.x,
                 "y": pointer.y,
-                "coordinate_space": "virtual_desktop",
+                "coordinate_space": "screen_pixels",
                 "button": button.as_tool_button()
             }),
             pointer,
@@ -513,7 +538,7 @@ impl RecordingCoalescer {
             serde_json::json!({
                 "x": pointer.x,
                 "y": pointer.y,
-                "coordinate_space": "virtual_desktop",
+                "coordinate_space": "screen_pixels",
                 "button": button.as_tool_button()
             }),
             pointer,
@@ -536,7 +561,7 @@ impl RecordingCoalescer {
                 "start_y": start.y,
                 "end_x": end.x,
                 "end_y": end.y,
-                "coordinate_space": "virtual_desktop",
+                "coordinate_space": "screen_pixels",
                 "button": button.as_tool_button()
             }),
             target,
@@ -552,7 +577,7 @@ impl RecordingCoalescer {
             serde_json::json!({
                 "x": pointer.x,
                 "y": pointer.y,
-                "coordinate_space": "virtual_desktop",
+                "coordinate_space": "screen_pixels",
                 "delta_x": delta_x,
                 "delta_y": delta_y
             }),
@@ -670,6 +695,13 @@ impl RecordingCoalescer {
             .unwrap_or_default()
     }
 
+    fn flush_password(&mut self) -> Vec<MacroStep> {
+        self.pending_password
+            .take()
+            .map(|pending| vec![self.type_secret_step(pending.target)])
+            .unwrap_or_default()
+    }
+
     fn flush_click(&mut self) -> Vec<MacroStep> {
         self.pending_click
             .take()
@@ -696,7 +728,10 @@ impl RecordingCoalescer {
 pub fn recorder_start(state: &AppState, request: RecorderStartRequest) -> serde_json::Value {
     tracing::info!(title = %request.title, "recorder.start requested");
     start_native_recorder_capture(state.recorder_runtime.clone());
-    start_recorder_hotkeys(state.recorder_runtime.clone(), state.control_runtime.clone());
+    start_recorder_hotkeys(
+        state.recorder_runtime.clone(),
+        state.control_runtime.clone(),
+    );
     let session = {
         let mut runtime = state
             .recorder_runtime
@@ -1009,7 +1044,10 @@ fn ingest_native_event(runtime: &Arc<Mutex<RecorderRuntimeState>>, event: Record
         runtime.ingest_event(event)
     };
     if emitted > 0 {
-        tracing::info!(emitted_steps = emitted, "native recorder emitted macro steps");
+        tracing::info!(
+            emitted_steps = emitted,
+            "native recorder emitted macro steps"
+        );
     }
 }
 
@@ -1082,14 +1120,14 @@ mod windows_recorder {
         COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
+    use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation, IUIAutomationElement};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyboardState, GetKeyState, RegisterHotKey, ToUnicode, UnregisterHotKey, MOD_ALT,
+        GetKeyState, GetKeyboardState, RegisterHotKey, ToUnicode, UnregisterHotKey, MOD_ALT,
         MOD_CONTROL, MOD_NOREPEAT, VK_CONTROL, VK_MENU, VK_SHIFT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT,
-        SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HHOOK, MSG, WH_KEYBOARD_LL,
+        CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
+        UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL,
         WH_MOUSE_LL, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
         WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
     };
@@ -1187,8 +1225,7 @@ mod windows_recorder {
                 let mut runtime = runtime.lock().expect("recorder mutex poisoned");
                 runtime.native_capture.hotkeys_started = true;
                 runtime.native_capture.notes.push(
-                    "registered Ctrl+Alt+F9 recording toggle and Ctrl+Alt+F10 pause/resume"
-                        .into(),
+                    "registered Ctrl+Alt+F9 recording toggle and Ctrl+Alt+F10 pause/resume".into(),
                 );
             }
             Err(error) => {
@@ -1201,11 +1238,7 @@ mod windows_recorder {
         }
     }
 
-    unsafe extern "system" fn mouse_hook(
-        code: i32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
+    unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code >= 0 {
             let message = wparam.0 as u32;
             let kind = match message {
@@ -1233,11 +1266,7 @@ mod windows_recorder {
         unsafe { CallNextHookEx(None, code, wparam, lparam) }
     }
 
-    unsafe extern "system" fn keyboard_hook(
-        code: i32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
+    unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code >= 0 {
             let message = wparam.0 as u32;
             if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
@@ -1263,15 +1292,16 @@ mod windows_recorder {
     }
 
     fn hook_thread(runtime: Arc<Mutex<RecorderRuntimeState>>) {
-        let module = unsafe { GetModuleHandleW(None) }
-            .map(HINSTANCE::from)
-            .ok();
+        let module = unsafe { GetModuleHandleW(None) }.map(HINSTANCE::from).ok();
         let mouse_hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), module, 0) };
         let mouse_hook = match mouse_hook {
             Ok(hook) => HookGuard(hook),
             Err(error) => {
                 super::NATIVE_CAPTURE_STARTED.store(false, Ordering::SeqCst);
-                super::record_native_error(&runtime, format!("failed to install mouse hook: {error}"));
+                super::record_native_error(
+                    &runtime,
+                    format!("failed to install mouse hook: {error}"),
+                );
                 return;
             }
         };
@@ -1517,16 +1547,12 @@ mod windows_recorder {
             return None;
         }
         let window = winctl::window_info_from_hwnd(hwnd.0 as isize)?;
-        Some(RecorderSemanticTarget {
-            automation_id: None,
-            name: None,
-            role: None,
-            control_type: None,
-            class_name: None,
-            element_ref: None,
-            window: Some(window_identity(&window)),
-            screenshot_path: None,
-        })
+        let _apartment = ComApartment::initialize().ok()?;
+        let automation: IUIAutomation =
+            unsafe { CoCreateInstance(&CUIAutomation, None::<&IUnknown>, CLSCTX_INPROC_SERVER) }
+                .ok()?;
+        let element = unsafe { automation.GetFocusedElement() }.ok()?;
+        Some(semantic_target_from_uia_element(&element, Some(&window)))
     }
 
     fn semantic_target_from_point(x: i32, y: i32) -> Option<RecorderSemanticTarget> {
@@ -1559,15 +1585,23 @@ mod windows_recorder {
         window: Option<&winctl::WindowInfo>,
     ) -> Option<RecorderSemanticTarget> {
         let _apartment = ComApartment::initialize().ok()?;
-        let automation: IUIAutomation = unsafe {
-            CoCreateInstance(&CUIAutomation, None::<&IUnknown>, CLSCTX_INPROC_SERVER)
-        }
-        .ok()?;
+        let automation: IUIAutomation =
+            unsafe { CoCreateInstance(&CUIAutomation, None::<&IUnknown>, CLSCTX_INPROC_SERVER) }
+                .ok()?;
         let element = unsafe { automation.ElementFromPoint(POINT { x, y }) }.ok()?;
+        Some(semantic_target_from_uia_element(&element, window))
+    }
+
+    fn semantic_target_from_uia_element(
+        element: &IUIAutomationElement,
+        window: Option<&winctl::WindowInfo>,
+    ) -> RecorderSemanticTarget {
         let name = read_bstr(|| unsafe { element.CurrentName() });
         let automation_id = read_bstr(|| unsafe { element.CurrentAutomationId() });
         let class_name = read_bstr(|| unsafe { element.CurrentClassName() });
-        let control_type_id = unsafe { element.CurrentControlType() }.ok().map(|value| value.0);
+        let control_type_id = unsafe { element.CurrentControlType() }
+            .ok()
+            .map(|value| value.0);
         let role = control_type_id
             .and_then(winctl::control_type_name)
             .map(str::to_owned);
@@ -1582,7 +1616,7 @@ mod windows_recorder {
                 class_name.as_deref().unwrap_or("")
             )
         });
-        Some(RecorderSemanticTarget {
+        RecorderSemanticTarget {
             automation_id,
             name,
             role,
@@ -1591,7 +1625,7 @@ mod windows_recorder {
             element_ref,
             window: window.map(window_identity),
             screenshot_path: None,
-        })
+        }
     }
 
     fn focused_element_is_password() -> bool {
@@ -1647,13 +1681,14 @@ mod windows_recorder {
         window
             .process_name
             .as_ref()
-            .map(|name| ignored_names.iter().any(|ignored| name.eq_ignore_ascii_case(ignored)))
+            .map(|name| {
+                ignored_names
+                    .iter()
+                    .any(|ignored| name.eq_ignore_ascii_case(ignored))
+            })
             .unwrap_or(false)
             || window.title.to_ascii_lowercase().contains("winctl-mcp")
-            || window
-                .class_name
-                .to_ascii_lowercase()
-                .contains("winctl")
+            || window.class_name.to_ascii_lowercase().contains("winctl")
     }
 
     fn native_capture_enabled(runtime: &Arc<Mutex<RecorderRuntimeState>>) -> bool {
@@ -1722,15 +1757,7 @@ mod windows_recorder {
             return None;
         }
         let mut buffer = [0u16; 8];
-        let count = unsafe {
-            ToUnicode(
-                vk_code,
-                scan_code,
-                Some(&keyboard_state),
-                &mut buffer,
-                0,
-            )
-        };
+        let count = unsafe { ToUnicode(vk_code, scan_code, Some(&keyboard_state), &mut buffer, 0) };
         if count <= 0 {
             return None;
         }
@@ -1835,7 +1862,9 @@ struct InferredRecordingSetup {
 fn infer_recording_setup(session: &RecordingSession) -> InferredRecordingSetup {
     let mut replay = ReplayMetadata {
         created_at: Some(session.created_at.clone()),
-        version_note: Some("generated by human recorder; launch/bind inference requires review".into()),
+        version_note: Some(
+            "generated by human recorder; launch/bind inference requires review".into(),
+        ),
         ..Default::default()
     };
     let Some(window) = first_recorded_window(session) else {
@@ -2074,7 +2103,7 @@ mod tests {
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].tool, "input.click");
         assert_eq!(steps[0].args["button"], "left");
-        assert_eq!(steps[0].args["coordinate_space"], "virtual_desktop");
+        assert_eq!(steps[0].args["coordinate_space"], "screen_pixels");
     }
 
     #[test]
@@ -2165,22 +2194,70 @@ mod tests {
     #[test]
     fn coalescer_password_text_becomes_unbound_type_secret() {
         let mut coalescer = RecordingCoalescer::default();
-        let emitted = coalescer.push_event(RecorderInputEvent::Text {
-            text: "super-secret".into(),
-            timestamp_ms: 10,
-            target: Some(semantic_target()),
-            is_password: true,
-        });
+        assert!(coalescer
+            .push_event(RecorderInputEvent::Text {
+                text: "p@55word".into(),
+                timestamp_ms: 10,
+                target: Some(semantic_target()),
+                is_password: true,
+            })
+            .is_empty());
+        let emitted = coalescer.finish();
         assert_eq!(emitted.len(), 1);
         assert_eq!(emitted[0].tool, "macro.type_secret");
         assert_eq!(emitted[0].args["secret_ref"], "");
         let encoded = serde_json::to_string(&emitted).unwrap();
-        assert!(!encoded.contains("super-secret"));
+        assert!(!encoded.contains("p@55word"));
         assert!(emitted[0]
             .audit
             .notes
             .iter()
             .any(|note| note.contains("bind secret_ref")));
+    }
+
+    #[test]
+    fn coalescer_flushes_pending_password_before_text() {
+        let mut coalescer = RecordingCoalescer::default();
+        assert!(coalescer
+            .push_event(RecorderInputEvent::Text {
+                text: "p@55word".into(),
+                timestamp_ms: 10,
+                target: Some(semantic_target()),
+                is_password: true,
+            })
+            .is_empty());
+        let emitted = coalescer.push_event(RecorderInputEvent::Text {
+            text: "hello".into(),
+            timestamp_ms: 10,
+            target: Some(semantic_target()),
+            is_password: false,
+        });
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0].tool, "macro.type_secret");
+        assert_eq!(emitted[0].args["secret_ref"], "");
+        let encoded = serde_json::to_string(&emitted).unwrap();
+        assert!(!encoded.contains("p@55word"));
+    }
+
+    #[test]
+    fn coalescer_merges_password_character_run_without_plaintext() {
+        let mut coalescer = RecordingCoalescer::default();
+        for (index, ch) in "p@55word".chars().enumerate() {
+            assert!(coalescer
+                .push_event(RecorderInputEvent::Text {
+                    text: ch.to_string(),
+                    timestamp_ms: 10 + (index as u64 * 20),
+                    target: Some(semantic_target()),
+                    is_password: true,
+                })
+                .is_empty());
+        }
+        let steps = coalescer.finish();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].tool, "macro.type_secret");
+        assert_eq!(steps[0].args["secret_ref"], "");
+        let encoded = serde_json::to_string(&steps).unwrap();
+        assert!(!encoded.contains("p@55word"));
     }
 
     #[test]
@@ -2220,11 +2297,21 @@ mod tests {
             "recorder_inferred_fresh_launch_main_window"
         );
         assert_eq!(
-            manifest.bind.as_ref().unwrap().required_executable.as_deref(),
+            manifest
+                .bind
+                .as_ref()
+                .unwrap()
+                .required_executable
+                .as_deref(),
             Some("fixture.exe")
         );
         assert_eq!(
-            manifest.app_identity.as_ref().unwrap().executable_path.as_deref(),
+            manifest
+                .app_identity
+                .as_ref()
+                .unwrap()
+                .executable_path
+                .as_deref(),
             Some("C:\\fixture.exe")
         );
         assert_eq!(
