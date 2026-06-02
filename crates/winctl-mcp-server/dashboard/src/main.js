@@ -120,6 +120,72 @@ function compactValue(value) {
   return String(value);
 }
 
+const TOOL_DOC_PREFIXES = [
+  ['APP', 'app'],
+  ['ARTIFACT', 'artifact'],
+  ['ASSERT', 'assert'],
+  ['BROWSER', 'browser'],
+  ['BUILD', 'build'],
+  ['CAPTURE', 'capture'],
+  ['CLIPBOARD', 'clipboard'],
+  ['CONTROL', 'control'],
+  ['DIAGNOSTICS', 'diagnostics'],
+  ['DIALOGS', 'dialogs'],
+  ['FILESYSTEM', 'filesystem'],
+  ['INPUT', 'input'],
+  ['MACRO', 'macro'],
+  ['MEMORY', 'memory'],
+  ['NETWORK', 'network'],
+  ['NOTIFICATIONS', 'notifications'],
+  ['PROCESS', 'process'],
+  ['RECORDER', 'recorder'],
+  ['REGISTRY', 'registry'],
+  ['SERVER', 'server'],
+  ['TEST', 'test'],
+  ['UIA', 'uia'],
+  ['WEB', 'web'],
+  ['WINDOWS', 'windows'],
+];
+const TOOL_DOC_PREFIX_LABELS = new Map(TOOL_DOC_PREFIXES);
+const PROJECT_DOC_SLUGS = new Set([
+  'INDEX',
+  'CLIENT_CONFIGS',
+  'CONFIGURATION',
+  'DASHBOARD',
+  'DIRECTORY_LAYOUT',
+  'DISTRIBUTION',
+  'MACRO_MANIFEST',
+  'MINILM_EMBEDDINGS',
+  'RECORDER',
+  'TEST_MANIFEST',
+  'TRAY_CONTROLLER',
+  'TROUBLESHOOTING',
+  'UIA_ACTIONS_DESIGN',
+  'WINDOWS-RUNBOOK',
+]);
+
+function docSearchText(doc) {
+  return `${doc.title ?? ''} ${doc.slug ?? ''}`.toLowerCase();
+}
+
+function toolDocPrefix(doc) {
+  const slug = String(doc.slug ?? '').toUpperCase();
+  if (PROJECT_DOC_SLUGS.has(slug)) return null;
+  const separator = slug.indexOf('_');
+  if (separator <= 0) return null;
+  const prefix = slug.slice(0, separator);
+  return TOOL_DOC_PREFIX_LABELS.has(prefix) ? prefix : null;
+}
+
+function docGroupFor(doc) {
+  const prefix = toolDocPrefix(doc);
+  if (!prefix) {
+    return { id: 'project', label: 'Project docs', kind: 'project' };
+  }
+  const label = TOOL_DOC_PREFIX_LABELS.get(prefix);
+  return { id: `tool:${prefix}`, label: `${label}.*`, kind: 'tool', prefix };
+}
+
 createApp({
   data() {
     return {
@@ -143,6 +209,7 @@ createApp({
       docsLoading: false,
       docsError: null,
       docsSearch: '',
+      collapsedDocGroups: {},
       expandedItems: {},
       deletingId: null,
       rawEditor: null,
@@ -386,11 +453,37 @@ createApp({
     filteredDocs() {
       const query = this.docsSearch.trim().toLowerCase();
       if (!query) return this.docs;
-      return this.docs.filter(
-        (doc) =>
-          doc.title.toLowerCase().includes(query) ||
-          doc.slug.toLowerCase().includes(query),
-      );
+      return this.docs.filter((doc) => docSearchText(doc).includes(query));
+    },
+    docGroups() {
+      const projectGroup = { id: 'project', label: 'Project docs', kind: 'project', docs: [] };
+      const toolGroups = new Map();
+      for (const doc of this.docs) {
+        const groupInfo = docGroupFor(doc);
+        if (groupInfo.kind === 'project') {
+          projectGroup.docs.push(doc);
+          continue;
+        }
+        if (!toolGroups.has(groupInfo.id)) {
+          toolGroups.set(groupInfo.id, { ...groupInfo, docs: [] });
+        }
+        toolGroups.get(groupInfo.id).docs.push(doc);
+      }
+      const orderedToolGroups = TOOL_DOC_PREFIXES
+        .map(([prefix]) => toolGroups.get(`tool:${prefix}`))
+        .filter(Boolean);
+      const groups = [];
+      if (projectGroup.docs.length) groups.push(projectGroup);
+      return groups.concat(orderedToolGroups);
+    },
+    filteredDocGroups() {
+      const query = this.docsSearch.trim().toLowerCase();
+      return this.docGroups
+        .map((group) => ({
+          ...group,
+          docs: query ? group.docs.filter((doc) => docSearchText(doc).includes(query)) : group.docs,
+        }))
+        .filter((group) => group.docs.length);
     },
     activeDoc() {
       return this.docs.find((doc) => doc.slug === this.activeDocSlug) ?? null;
@@ -688,7 +781,34 @@ createApp({
     },
     selectDoc(slug) {
       this.activeDocSlug = slug;
+      this.expandDocGroupForSlug(slug);
       this.renderMermaid();
+    },
+    docGroupForSlug(slug) {
+      const doc = this.docs.find((candidate) => candidate.slug === slug);
+      return doc ? docGroupFor(doc) : null;
+    },
+    expandDocGroupForSlug(slug) {
+      const group = this.docGroupForSlug(slug);
+      if (!group) return;
+      this.collapsedDocGroups = {
+        ...this.collapsedDocGroups,
+        [group.id]: false,
+      };
+    },
+    docGroupIsOpen(group) {
+      if (this.docsSearch.trim()) return true;
+      const stored = this.collapsedDocGroups[group.id];
+      if (typeof stored === 'boolean') return !stored;
+      if (group.kind === 'project') return true;
+      return group.docs.some((doc) => doc.slug === this.activeDocSlug);
+    },
+    toggleDocGroup(group) {
+      const open = this.docGroupIsOpen(group);
+      this.collapsedDocGroups = {
+        ...this.collapsedDocGroups,
+        [group.id]: open,
+      };
     },
     docLinkFromHref(href) {
       if (!href || href.startsWith('#')) return null;
@@ -1505,10 +1625,10 @@ createApp({
           </section>
         </section>
 
-        <section v-if="selectedTab === 'docs'" class="grid gap-5 lg:grid-cols-[260px_1fr]">
-          <section class="winctl-card overflow-hidden">
+        <section v-if="selectedTab === 'docs'" class="grid gap-5 lg:grid-cols-[320px_1fr]">
+          <aside class="winctl-card winctl-docs-sidebar overflow-hidden">
             <div class="winctl-card-header px-4 py-3">
-              <h2 class="text-sm font-semibold">Tool docs</h2>
+              <h2 class="text-sm font-semibold">Documentation</h2>
             </div>
             <div class="p-3 space-y-3">
               <input
@@ -1519,17 +1639,31 @@ createApp({
               />
               <div v-if="docsLoading" class="px-1 text-sm opacity-70">Loading docs…</div>
               <div v-else-if="docsError" class="px-1 text-sm text-error">{{ docsError }}</div>
-              <ul v-else class="menu menu-sm w-full p-0 max-h-[70vh] flex-nowrap overflow-y-auto">
-                <li v-for="doc in filteredDocs" :key="doc.slug">
-                  <a
-                    :class="{ active: doc.slug === activeDocSlug }"
-                    @click="selectDoc(doc.slug)"
-                  >{{ doc.title }}</a>
-                </li>
-                <li v-if="!filteredDocs.length" class="px-2 py-1 text-sm opacity-60">No matches</li>
-              </ul>
+              <nav v-else class="winctl-doc-groups" aria-label="Documentation navigation">
+                <section v-for="group in filteredDocGroups" :key="group.id" class="winctl-doc-group">
+                  <button
+                    type="button"
+                    class="winctl-doc-group-button"
+                    :aria-expanded="docGroupIsOpen(group)"
+                    @click="toggleDocGroup(group)"
+                  >
+                    <span class="winctl-doc-chevron" aria-hidden="true">{{ docGroupIsOpen(group) ? 'v' : '>' }}</span>
+                    <span class="winctl-doc-group-title">{{ group.label }}</span>
+                    <span class="winctl-doc-count">{{ group.docs.length }}</span>
+                  </button>
+                  <ul v-show="docGroupIsOpen(group)" class="menu menu-sm w-full p-0">
+                    <li v-for="doc in group.docs" :key="doc.slug">
+                      <a
+                        :class="{ active: doc.slug === activeDocSlug }"
+                        @click="selectDoc(doc.slug)"
+                      >{{ doc.title }}</a>
+                    </li>
+                  </ul>
+                </section>
+                <div v-if="!filteredDocs.length" class="px-2 py-1 text-sm opacity-60">No matches</div>
+              </nav>
             </div>
-          </section>
+          </aside>
           <section class="winctl-card overflow-hidden">
             <div class="winctl-card-header px-4 py-3">
               <h2 class="text-sm font-semibold">{{ activeDoc?.title ?? 'Select a document' }}</h2>
