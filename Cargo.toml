@@ -64,7 +64,7 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dwm",
 ] }
 windows-capture = "2"
-rmcp = { version = "0.5", features = ["server", "transport-io", "transport-worker", "transport-streamable-http-server"] }
+rmcp = { version = "1.4", features = ["server", "transport-io", "transport-worker", "transport-streamable-http-server"] }
 regex = "1"
 roxmltree = "0.20"
 base64 = "0.22"
