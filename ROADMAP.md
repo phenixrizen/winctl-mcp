@@ -276,7 +276,16 @@ Let a developer record a macro by performing the task themselves: global input h
 
 ## Phase 20: Server Observability — Connected Clients and Request History
 
-**Status:** Planned.
+**Status:** Complete.
+
+**Audit comments:** Implemented in-memory server observability for connected MCP
+clients and a bounded 500-entry tool request history. HTTP and stdio sessions
+register connection identity, MCP `initialize` captures client name/version,
+`tools/call` records duration/status/error code plus allowlist-redacted
+summaries, `/dashboard/state` returns live `connected_clients` and
+`recent_requests`, and the dashboard Observability tab renders searchable,
+paginated Clients and Requests tables. Persistence remains intentionally
+deferred per the phase scope.
 
 Replace the dashboard's "connected client and request-history tracking are not enabled yet" placeholder with a real observability panel: which MCP clients are connected and a rolling history of tool calls. Each request is attributed to the client that made it, and entries carry only redacted metadata so typed text, secrets, and large blobs never reach the panel. This request-history ring is also the backend data source for the Phase 17 live activity feed.
 

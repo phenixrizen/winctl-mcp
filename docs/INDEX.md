@@ -4,6 +4,13 @@ The typical driving loop: discover a window, bind it by stable identity, arm the
 consent gate, act through UI Automation, then verify — re-binding if a target
 goes stale.
 
+## Project Docs
+
+- [Server observability](SERVER_OBSERVABILITY.md) describes the dashboard
+  connected-client registry and redacted request-history payload.
+
+## Tools
+
 ```mermaid
 flowchart LR
     find["windows.find"] --> bind["windows.bind (bound_id)"]
