@@ -779,7 +779,7 @@ async fn windows_dialog_tools_invoke_message_box_button() {
         .call_tool(
             "assert.dialog",
             serde_json::json!({
-                "title_contains": "winctl dialog owner",
+                "title_contains": "winctl dialog fixture",
                 "button_names": ["OK"],
                 "timeout_ms": 2000,
                 "poll_interval_ms": 100,
