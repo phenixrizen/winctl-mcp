@@ -350,6 +350,22 @@ Add a second `WebSession` backend so the same web tools drive Firefox via WebDri
 - Keep launch/attach/interaction loopback-only and gated, consistent with Phase 23.
 - Add Firefox/BiDi parity integration tests mirroring the Phase 23 suite (navigate, click/type, assert DOM, mock a response, capture a console error) plus capability-flag tests for unsupported features.
 
+## Phase 25: MCP Prompt Library
+
+**Status:** Planned.
+
+Add a bundled library of MCP prompts so any client (Codex, Claude Desktop) surfaces ready-made, parameterized winctl workflows as slash-commands and the agent stays on the rails the server expects (find -> bind -> arm -> act -> verify, secret handling, fail-closed re-bind). Prompts are read-only, never mutate, and never echo secret values; each one references the exact tools and guardrails so it reinforces the conventions.
+
+- Enable the prompts capability (`ServerCapabilities::builder().enable_tools().enable_prompts()`) and add an rmcp `#[prompt_router]` in an isolated `src/prompts.rs` module. Each prompt declares a name, description, and documented arguments and returns guidance messages.
+- Support two prompt flavors: static playbooks that interpolate arguments into a tight instruction template (pure, no Win32), and context-aware scaffolders whose handler calls existing read-only providers (`list_windows`, UIA snapshot, `server.config`, crash reports) to embed current state, failing soft to the static text when state is unavailable (for example off-Windows).
+- Drive & inspect: `winctl.drive_app(target)` (safe find/bind/arm/act/verify playbook; context lists candidate windows) and `winctl.inspect_ui(target)` (bind, snapshot, summarize the tree).
+- Record & replay: `winctl.record_macro(app, title)` (guide the Phase 19 human-input recording flow) and `winctl.replay_macro(macro)` (run with `secret_ref` resolution and summarize).
+- Author & run tests: `winctl.write_ui_test(app, scenario)` (scaffold a test manifest, pulling the UIA tree to suggest selectors), `winctl.run_tests(manifest|suite)` (run and summarize pass/fail, surfacing diffs/crashes), and `winctl.automate_app_testing(build_target, app)` (the build -> launch -> bind -> test -> report loop).
+- Debug, diagnose & safety: `winctl.debug_crash(pid|app)` (orchestrate crash report, metrics, Event Log, last screenshot; context reads recent crash reports), `winctl.diagnose_hang(pid|app)`, `winctl.take_control(target)` (arm/notify/overlay consent flow), `winctl.secrets_setup(name)` (store a login secret via DPAPI without echoing it), and `winctl.setup()` (`server.config` orientation: enabled tools, capture dir, policy flags).
+- Ship each prompt's playbook text now even when it references a not-yet-built feature (recorder, suites, web); the context-aware calls into those tools degrade to static guidance until the relevant phase lands, keeping this phase independent.
+- Add `docs/PROMPTS.md` plus per-prompt entries and an INDEX section, and include the prompt list in startup diagnostics.
+- Add tests: each prompt renders for valid arguments, errors on missing required arguments, context-aware prompts fall back to static when state is unavailable, and prompt output never contains a secret value; an integration test that lists all prompts and renders each via `prompts/get`.
+
 ## Not Planned Without Further Design
 
 - Unguarded arbitrary shell execution.
