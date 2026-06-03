@@ -1141,10 +1141,42 @@ pub struct AssertElementRequest {
     pub exists: Option<bool>,
     /// If set, assert the element's enabled state matches this value.
     pub enabled: Option<bool>,
+    /// If set, assert the element's keyboard focus state matches this value.
+    pub focused: Option<bool>,
+    /// If set, assert a TogglePattern element is checked/on (true) or unchecked/off (false).
+    pub checked: Option<bool>,
+    /// If set, assert a SelectionItemPattern element's selected state matches this value.
+    pub selected: Option<bool>,
+    /// If set, assert an ExpandCollapsePattern element is expanded (true) or collapsed (false).
+    pub expanded: Option<bool>,
     /// If set, assert the element's name equals this value exactly.
     pub name: Option<String>,
     /// Case-insensitive substring the element's name must contain for the assertion to pass.
     pub name_contains: Option<String>,
+    /// Regular expression the element's name must match.
+    pub name_regex: Option<String>,
+    /// If set, assert the element's ValuePattern value equals this string.
+    pub value: Option<String>,
+    /// Case-insensitive substring the element's ValuePattern value must contain.
+    pub value_contains: Option<String>,
+    /// Regular expression the element's ValuePattern value must match.
+    pub value_regex: Option<String>,
+    /// If set, assert the element's semantic role/control type name equals this value case-insensitively.
+    pub role: Option<String>,
+    /// If set, assert the element's UI Automation control type id equals this value.
+    pub control_type_id: Option<i32>,
+    /// If set, assert the element supports editing according to ValuePattern and is not read-only.
+    pub editable: Option<bool>,
+    /// If set, assert the ValuePattern read-only state matches this value.
+    pub readonly: Option<bool>,
+    /// If set, assert the UI Automation offscreen state matches this value.
+    pub offscreen: Option<bool>,
+    /// If set, assert the element bounds are within tolerance of this virtual desktop rectangle.
+    pub bounds: Option<winctl::UiRect>,
+    /// Pixel tolerance for `bounds`; defaults to zero.
+    pub bounds_tolerance: Option<i32>,
+    /// If set, assert the selector resolves to exactly this many elements.
+    pub count: Option<usize>,
     /// If true, invert the final assertion result after all predicates are evaluated.
     #[serde(default)]
     pub negate: bool,

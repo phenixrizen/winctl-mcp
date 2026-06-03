@@ -5,8 +5,12 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::{GenericImageView, ImageBuffer, Rgba};
+use regex::Regex;
 use serde_json::{Map, Value};
-use winctl::{find_ui_elements, flatten_ui_elements, ui_automation_snapshot};
+use winctl::{
+    find_ui_elements, flatten_ui_elements, ui_automation_snapshot, UiActionTarget,
+    UiRect, UiResolvedElementState,
+};
 
 use crate::{
     AppState, AssertClipboardRequest, AssertElementRequest, AssertPixelColorRequest,
@@ -141,6 +145,109 @@ fn expect_absent(expect: Option<AssertionExpect>) -> bool {
     matches!(expect, Some(AssertionExpect::Absent))
 }
 
+fn regex_matches(actual: Option<&str>, regex: Option<&Regex>) -> bool {
+    regex
+        .map(|regex| actual.map(|actual| regex.is_match(actual)).unwrap_or(false))
+        .unwrap_or(true)
+}
+
+fn compile_optional_regex(pattern: &Option<String>) -> Result<Option<Regex>, serde_json::Value> {
+    pattern
+        .as_deref()
+        .map(|pattern| {
+            Regex::new(pattern).map_err(|error| {
+                serde_json::json!({
+                    "ok": false,
+                    "error": {
+                        "code": "invalid_assertion_regex",
+                        "message": format!("invalid regex {pattern:?}: {error}"),
+                    }
+                })
+            })
+        })
+        .transpose()
+}
+
+fn role_matches(actual: Option<&str>, expected: &str) -> bool {
+    actual
+        .map(|actual| actual.eq_ignore_ascii_case(expected))
+        .unwrap_or(false)
+}
+
+fn bounds_within_tolerance(actual: Option<&UiRect>, expected: &UiRect, tolerance: i32) -> bool {
+    let Some(actual) = actual else {
+        return false;
+    };
+    let tolerance = tolerance.max(0);
+    (actual.x - expected.x).abs() <= tolerance
+        && (actual.y - expected.y).abs() <= tolerance
+        && (actual.width - expected.width).abs() <= tolerance
+        && (actual.height - expected.height).abs() <= tolerance
+}
+
+fn toggle_checked(state: Option<&str>) -> Option<bool> {
+    match state {
+        Some("on") => Some(true),
+        Some("off") => Some(false),
+        Some("indeterminate") => None,
+        _ => None,
+    }
+}
+
+fn expanded_state(state: Option<&str>) -> Option<bool> {
+    match state {
+        Some("expanded") | Some("partially_expanded") => Some(true),
+        Some("collapsed") => Some(false),
+        _ => None,
+    }
+}
+
+fn needs_element_pattern_state(request: &AssertElementRequest) -> bool {
+    request.checked.is_some()
+        || request.selected.is_some()
+        || request.expanded.is_some()
+        || request.value.is_some()
+        || request.value_contains.is_some()
+        || request.value_regex.is_some()
+        || request.editable.is_some()
+        || request.readonly.is_some()
+}
+
+enum ResolvedElementStateError {
+    ElementNotFound,
+    Hard(serde_json::Value),
+}
+
+fn resolved_element_state(
+    state: &AppState,
+    bound_id: &str,
+    element_ref: &Option<String>,
+    selector: &Option<winctl::UiElementSelector>,
+    max_depth: Option<usize>,
+    max_elements: Option<usize>,
+) -> Result<UiResolvedElementState, ResolvedElementStateError> {
+    let window = state
+        .revalidate_bound_window(bound_id)
+        .map_err(|error| ResolvedElementStateError::Hard(serde_json::json!({"ok": false, "error": error})))?;
+    winctl::ui_resolved_element_state(
+        &window,
+        &UiActionTarget {
+            element_ref: element_ref.clone(),
+            selector: selector.clone(),
+            max_depth,
+            max_elements,
+            allow_offscreen: true,
+        },
+    )
+    .map_err(|error| {
+        if error.code == winctl::UiAutomationErrorCode::ElementNotFound {
+            ResolvedElementStateError::ElementNotFound
+        } else {
+            ResolvedElementStateError::Hard(serde_json::json!({"ok": false, "error": error}))
+        }
+    })
+}
+
 pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_json::Value {
     tracing::info!(
         bound_id = %request.bound_id,
@@ -148,33 +255,132 @@ pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_
         selector = ?request.selector,
         "assert.element requested"
     );
+    let name_regex = match compile_optional_regex(&request.name_regex) {
+        Ok(regex) => regex,
+        Err(error) => return error,
+    };
+    let value_regex = match compile_optional_regex(&request.value_regex) {
+        Ok(regex) => regex,
+        Err(error) => return error,
+    };
+    let absent = expect_absent(request.expect) || request.exists == Some(false);
+    let use_resolved_state = needs_element_pattern_state(&request) && !absent;
+    if use_resolved_state && request.count.is_some() {
+        return fail(
+            "uia_pattern_assertion_requires_single_element",
+            "pattern-state predicates require a single resolved UIA element; use count in a separate assertion",
+            None,
+        );
+    }
     run_assertion(
         request.negate,
         request.timeout_ms,
         request.poll_interval_ms,
         || {
-            let snapshot = fresh_snapshot(
-                state,
-                &request.bound_id,
-                request.max_depth,
-                request.max_elements,
-            )?;
-            let matches = if let Some(element_ref) = &request.element_ref {
-                flatten_ui_elements(&snapshot.root)
-                    .into_iter()
-                    .filter(|element| element.element_ref == *element_ref)
-                    .collect::<Vec<_>>()
-            } else if let Some(selector) = &request.selector {
-                find_ui_elements(&snapshot, selector)
+            let mut diagnostics = Vec::new();
+            let (matches, first_pattern_state, snapshot_summary_value) = if use_resolved_state {
+                if request.element_ref.is_none() && request.selector.is_none() {
+                    return Err(fail(
+                        "uia_selector_required",
+                        "element_ref or selector is required",
+                        None,
+                    ));
+                }
+                let resolved = match resolved_element_state(
+                    state,
+                    &request.bound_id,
+                    &request.element_ref,
+                    &request.selector,
+                    request.max_depth,
+                    request.max_elements,
+                ) {
+                    Ok(resolved) => resolved,
+                    Err(ResolvedElementStateError::ElementNotFound) => {
+                        return Ok(AssertionAttempt::new(
+                            false,
+                            "all",
+                            serde_json::json!({
+                                "expect": "present",
+                                "exists": true,
+                                "enabled": request.enabled,
+                                "focused": request.focused,
+                                "checked": request.checked,
+                                "selected": request.selected,
+                                "expanded": request.expanded,
+                                "name": request.name,
+                                "name_contains": request.name_contains,
+                                "name_regex": request.name_regex,
+                                "value": request.value,
+                                "value_contains": request.value_contains,
+                                "value_regex": request.value_regex,
+                                "role": request.role,
+                                "control_type_id": request.control_type_id,
+                                "editable": request.editable,
+                                "readonly": request.readonly,
+                                "offscreen": request.offscreen,
+                                "bounds": request.bounds,
+                                "bounds_tolerance": request.bounds_tolerance,
+                                "count": request.count,
+                            }),
+                            serde_json::json!({
+                                "exists": false,
+                                "match_count": 0,
+                                "first": null,
+                                "first_pattern_state": null,
+                                "failures": ["expected present, found no matches"],
+                            }),
+                            serde_json::json!({
+                                "kind": "uia_element",
+                                "bound_id": request.bound_id,
+                                "element_ref": request.element_ref,
+                                "selector": request.selector,
+                            }),
+                        )
+                        .with_extra("match_count", Value::from(0usize))
+                        .with_extra("matches", serde_json::json!(Vec::<winctl::UiElementInfo>::new()))
+                        .with_extra(
+                            "failures",
+                            serde_json::json!(["expected present, found no matches"]),
+                        )
+                        .with_extra("snapshot_summary", Value::Null));
+                    }
+                    Err(ResolvedElementStateError::Hard(error)) => return Err(error),
+                };
+                for warning in &resolved.pattern_state.warnings {
+                    diagnostics.push(serde_json::json!({
+                        "kind": "warning",
+                        "message": warning,
+                    }));
+                }
+                (vec![resolved.element], Some(resolved.pattern_state), Value::Null)
             } else {
-                return Err(fail(
-                    "uia_selector_required",
-                    "element_ref or selector is required",
-                    None,
-                ));
+                let snapshot = fresh_snapshot(
+                    state,
+                    &request.bound_id,
+                    request.max_depth,
+                    request.max_elements,
+                )?;
+                let matches = if let Some(element_ref) = &request.element_ref {
+                    flatten_ui_elements(&snapshot.root)
+                        .into_iter()
+                        .filter(|element| element.element_ref == *element_ref)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else if let Some(selector) = &request.selector {
+                    find_ui_elements(&snapshot, selector)
+                        .into_iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    return Err(fail(
+                        "uia_selector_required",
+                        "element_ref or selector is required",
+                        None,
+                    ));
+                };
+                (matches, None, snapshot_summary(&snapshot))
             };
             let exists = !matches.is_empty();
-            let absent = expect_absent(request.expect) || request.exists == Some(false);
             let mut failures = Vec::new();
             if absent {
                 if exists {
@@ -184,10 +390,20 @@ pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_
                 if !exists {
                     failures.push("expected present, found no matches".to_owned());
                 }
-                let first = matches.first().copied();
+                let first = matches.first();
                 if let (Some(expected), Some(element)) = (request.enabled, first) {
                     if element.enabled != Some(expected) {
                         failures.push(format!("enabled was {:?}", element.enabled));
+                    }
+                }
+                if let (Some(expected), Some(element)) = (request.focused, first) {
+                    if element.focused != Some(expected) {
+                        failures.push(format!("focused was {:?}", element.focused));
+                    }
+                }
+                if let (Some(expected), Some(element)) = (request.offscreen, first) {
+                    if element.offscreen != Some(expected) {
+                        failures.push(format!("offscreen was {:?}", element.offscreen));
                     }
                 }
                 if let (Some(expected), Some(element)) = (&request.name, first) {
@@ -200,6 +416,104 @@ pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_
                         failures.push(format!("name did not contain {needle:?}"));
                     }
                 }
+                if let (Some(pattern), Some(element)) = (&request.name_regex, first) {
+                    if !regex_matches(element.name.as_deref(), name_regex.as_ref()) {
+                        failures.push(format!("name did not match regex {pattern:?}"));
+                    }
+                }
+                if let (Some(expected), Some(element)) = (&request.role, first) {
+                    if !role_matches(element.role.as_deref(), expected) {
+                        failures.push(format!("role was {:?}", element.role));
+                    }
+                }
+                if let (Some(expected), Some(element)) = (request.control_type_id, first) {
+                    if element.control_type_id != Some(expected) {
+                        failures.push(format!(
+                            "control_type_id was {:?}",
+                            element.control_type_id
+                        ));
+                    }
+                }
+                if let (Some(expected), Some(element)) = (&request.bounds, first) {
+                    let tolerance = request.bounds_tolerance.unwrap_or(0);
+                    if !bounds_within_tolerance(element.bounds.as_ref(), expected, tolerance) {
+                        failures.push(format!(
+                            "bounds were {:?}, expected {:?} within tolerance {}",
+                            element.bounds, expected, tolerance
+                        ));
+                    }
+                }
+                if let Some(expected) = request.checked {
+                    let actual = first_pattern_state
+                        .as_ref()
+                        .and_then(|state| toggle_checked(state.toggle_state.as_deref()));
+                    if actual != Some(expected) {
+                        failures.push(format!("checked was {actual:?}"));
+                    }
+                }
+                if let Some(expected) = request.selected {
+                    let actual = first_pattern_state.as_ref().and_then(|state| state.selected);
+                    if actual != Some(expected) {
+                        failures.push(format!("selected was {actual:?}"));
+                    }
+                }
+                if let Some(expected) = request.expanded {
+                    let actual = first_pattern_state.as_ref().and_then(|state| {
+                        expanded_state(state.expand_collapse_state.as_deref())
+                    });
+                    if actual != Some(expected) {
+                        failures.push(format!("expanded was {actual:?}"));
+                    }
+                }
+                if let Some(expected) = &request.value {
+                    let actual = first_pattern_state
+                        .as_ref()
+                        .and_then(|state| state.value.as_deref());
+                    if actual != Some(expected.as_str()) {
+                        failures.push(format!("value was {actual:?}"));
+                    }
+                }
+                if let Some(needle) = &request.value_contains {
+                    let actual = first_pattern_state
+                        .as_ref()
+                        .and_then(|state| state.value.as_deref());
+                    if !contains_ci(actual, needle) {
+                        failures.push(format!("value did not contain {needle:?}"));
+                    }
+                }
+                if let Some(pattern) = &request.value_regex {
+                    let actual = first_pattern_state
+                        .as_ref()
+                        .and_then(|state| state.value.as_deref());
+                    if !regex_matches(actual, value_regex.as_ref()) {
+                        failures.push(format!("value did not match regex {pattern:?}"));
+                    }
+                }
+                if let Some(expected) = request.readonly {
+                    let actual = first_pattern_state
+                        .as_ref()
+                        .and_then(|state| state.value_readonly);
+                    if actual != Some(expected) {
+                        failures.push(format!("readonly was {actual:?}"));
+                    }
+                }
+                if let Some(expected) = request.editable {
+                    let actual = first_pattern_state
+                        .as_ref()
+                        .and_then(|state| state.value_readonly.map(|readonly| !readonly));
+                    if actual != Some(expected) {
+                        failures.push(format!("editable was {actual:?}"));
+                    }
+                }
+            }
+            if let Some(expected) = request.count {
+                if matches.len() != expected {
+                    failures.push(format!(
+                        "count was {}, expected exactly {}",
+                        matches.len(),
+                        expected
+                    ));
+                }
             }
             let failures_json = failures
                 .iter()
@@ -209,13 +523,30 @@ pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_
                 "expect": if absent { "absent" } else { "present" },
                 "exists": !absent,
                 "enabled": request.enabled,
+                "focused": request.focused,
+                "checked": request.checked,
+                "selected": request.selected,
+                "expanded": request.expanded,
                 "name": request.name,
                 "name_contains": request.name_contains,
+                "name_regex": request.name_regex,
+                "value": request.value,
+                "value_contains": request.value_contains,
+                "value_regex": request.value_regex,
+                "role": request.role,
+                "control_type_id": request.control_type_id,
+                "editable": request.editable,
+                "readonly": request.readonly,
+                "offscreen": request.offscreen,
+                "bounds": request.bounds,
+                "bounds_tolerance": request.bounds_tolerance,
+                "count": request.count,
             });
             let actual = serde_json::json!({
                 "exists": exists,
                 "match_count": matches.len(),
                 "first": matches.first(),
+                "first_pattern_state": first_pattern_state,
                 "failures": failures,
             });
             Ok(AssertionAttempt::new(
@@ -233,7 +564,8 @@ pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_
             .with_extra("match_count", Value::from(matches.len()))
             .with_extra("matches", serde_json::json!(matches))
             .with_extra("failures", Value::Array(failures_json))
-            .with_extra("snapshot_summary", snapshot_summary(&snapshot)))
+            .with_extra("snapshot_summary", snapshot_summary_value)
+            .with_diagnostics(diagnostics))
         },
     )
 }

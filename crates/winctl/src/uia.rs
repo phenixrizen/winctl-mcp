@@ -141,6 +141,22 @@ pub struct UiActionOutcome {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct UiElementPatternState {
+    pub value: Option<String>,
+    pub value_readonly: Option<bool>,
+    pub toggle_state: Option<String>,
+    pub selected: Option<bool>,
+    pub expand_collapse_state: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UiResolvedElementState {
+    pub element: UiElementInfo,
+    pub pattern_state: UiElementPatternState,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UiAutomationErrorCode {
@@ -331,6 +347,22 @@ pub fn ui_scroll_into_view_pattern(
     }
 }
 
+pub fn ui_resolved_element_state(
+    window: &WindowInfo,
+    target: &UiActionTarget,
+) -> Result<UiResolvedElementState, UiAutomationError> {
+    #[cfg(windows)]
+    {
+        windows_impl::resolved_element_state(window, target)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (window, target);
+        Err(unsupported_platform_error("uia.resolved_element_state"))
+    }
+}
+
 #[cfg(not(windows))]
 fn unsupported_platform_error(tool_name: &str) -> UiAutomationError {
     UiAutomationError {
@@ -507,7 +539,8 @@ mod windows_impl {
     use crate::uia::{
         control_type_name, find_ui_elements, ui_element_ref, UiActionOutcome, UiActionTarget,
         UiAutomationError, UiAutomationErrorCode, UiAutomationSnapshot, UiElementInfo,
-        UiExpandCollapseAction, UiOwnerWindow, UiRect, UiSelectionMode, UiToggleDesiredState,
+        UiElementPatternState, UiExpandCollapseAction, UiOwnerWindow, UiRect, UiSelectionMode,
+        UiResolvedElementState, UiToggleDesiredState,
     };
     use crate::WindowInfo;
 
@@ -875,6 +908,18 @@ mod windows_impl {
         )
     }
 
+    pub(super) fn resolved_element_state(
+        window: &WindowInfo,
+        target: &UiActionTarget,
+    ) -> Result<UiResolvedElementState, UiAutomationError> {
+        let session = AutomationSession::open(window)?;
+        let resolved = resolve_target(&session, window, target)?;
+        Ok(UiResolvedElementState {
+            element: resolved.info,
+            pattern_state: read_optional_pattern_state(&resolved.element),
+        })
+    }
+
     struct AutomationSession {
         _apartment: ComApartment,
         _automation: IUIAutomation,
@@ -1156,6 +1201,66 @@ mod windows_impl {
             code: UiAutomationErrorCode::PatternUnavailable,
             message: format!("{pattern_name} is not available on the target element: {error}"),
         })
+    }
+
+    fn read_optional_pattern_state(element: &IUIAutomationElement) -> UiElementPatternState {
+        let mut state = UiElementPatternState::default();
+
+        if let Ok(pattern) =
+            unsafe { element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
+        {
+            match unsafe { pattern.CurrentValue() } {
+                Ok(value) => state.value = Some(value.to_string()),
+                Err(error) => state
+                    .warnings
+                    .push(format!("ValuePattern.CurrentValue failed: {error}")),
+            }
+            match unsafe { pattern.CurrentIsReadOnly() } {
+                Ok(readonly) => state.value_readonly = Some(readonly.as_bool()),
+                Err(error) => state
+                    .warnings
+                    .push(format!("ValuePattern.CurrentIsReadOnly failed: {error}")),
+            }
+        }
+
+        if let Ok(pattern) = unsafe {
+            element.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
+        } {
+            match unsafe { pattern.CurrentToggleState() } {
+                Ok(value) => state.toggle_state = Some(toggle_state_name(value.0).to_owned()),
+                Err(error) => state
+                    .warnings
+                    .push(format!("TogglePattern.CurrentToggleState failed: {error}")),
+            }
+        }
+
+        if let Ok(pattern) = unsafe {
+            element.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
+                UIA_SelectionItemPatternId,
+            )
+        } {
+            match unsafe { pattern.CurrentIsSelected() } {
+                Ok(selected) => state.selected = Some(selected.as_bool()),
+                Err(error) => state
+                    .warnings
+                    .push(format!("SelectionItemPattern.CurrentIsSelected failed: {error}")),
+            }
+        }
+
+        if let Ok(pattern) = unsafe {
+            element.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
+                UIA_ExpandCollapsePatternId,
+            )
+        } {
+            match unsafe { pattern.CurrentExpandCollapseState() } {
+                Ok(value) => state.expand_collapse_state = Some(expand_state_name(value.0).to_owned()),
+                Err(error) => state
+                    .warnings
+                    .push(format!("ExpandCollapsePattern.CurrentExpandCollapseState failed: {error}")),
+            }
+        }
+
+        state
     }
 
     fn action_failed(action: &'static str) -> impl Fn(windows::core::Error) -> UiAutomationError {

@@ -5021,6 +5021,7 @@ dependencies = [
  "gif",
  "image",
  "include_dir",
+ "regex",
  "reqwest",
  "rmcp",
  "roxmltree",
