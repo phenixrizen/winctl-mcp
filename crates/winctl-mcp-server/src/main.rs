@@ -1116,6 +1116,14 @@ pub struct DialogInvokeButtonRequest {
     pub allow_non_dialog: bool,
 }
 
+/// Presence expectation shared by assertion tools.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, rmcp::schemars::JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AssertionExpect {
+    Present,
+    Absent,
+}
+
 /// Assert properties of a UI element.
 #[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct AssertElementRequest {
@@ -1137,10 +1145,19 @@ pub struct AssertElementRequest {
     pub name: Option<String>,
     /// Case-insensitive substring the element's name must contain for the assertion to pass.
     pub name_contains: Option<String>,
+    /// If true, invert the final assertion result after all predicates are evaluated.
+    #[serde(default)]
+    pub negate: bool,
+    /// Presence expectation for selector matches. `absent` asserts zero matches; `present` asserts at least one.
+    pub expect: Option<AssertionExpect>,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
 }
 
 /// Assert that text is visible somewhere in a bound window.
-#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct AssertTextVisibleRequest {
     /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
@@ -1150,10 +1167,19 @@ pub struct AssertTextVisibleRequest {
     pub max_depth: Option<usize>,
     /// Upper bound on the number of elements scanned; results are truncated beyond it.
     pub max_elements: Option<usize>,
+    /// If true, invert the final assertion result after matching text.
+    #[serde(default)]
+    pub negate: bool,
+    /// Presence expectation for the text. `absent` asserts the text is not visible.
+    pub expect: Option<AssertionExpect>,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
 }
 
 /// Assert the color of a pixel in an image or bound window.
-#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
 pub struct AssertPixelColorRequest {
     /// Path to an image file to sample. Provide either `image_path` or `bound_id`.
     pub image_path: Option<String>,
@@ -1167,6 +1193,13 @@ pub struct AssertPixelColorRequest {
     pub expected_rgb: Option<[u8; 3]>,
     /// Per-channel tolerance (0-255) allowed when comparing to `expected_rgb`.
     pub tolerance: Option<u8>,
+    /// If true, invert the final color comparison result.
+    #[serde(default)]
+    pub negate: bool,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
 }
 
 /// Assert how many windows match a selector.
@@ -1180,6 +1213,15 @@ pub struct AssertWindowCountRequest {
     pub min: Option<usize>,
     /// If set, assert the matching window count is at most this value.
     pub max: Option<usize>,
+    /// If true, invert the final assertion result after count predicates are evaluated.
+    #[serde(default)]
+    pub negate: bool,
+    /// Presence expectation for matching windows when no count predicate is supplied.
+    pub expect: Option<AssertionExpect>,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
 }
 
 /// Assert the clipboard's current text contents.
@@ -1191,6 +1233,13 @@ pub struct AssertClipboardRequest {
     pub contains: Option<String>,
     /// Upper bound on the number of clipboard characters read; comparison is performed against the truncated text.
     pub max_chars: Option<usize>,
+    /// If true, invert the final clipboard assertion result.
+    #[serde(default)]
+    pub negate: bool,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
 }
 
 /// Run OCR over a region of an image or bound window.

@@ -5,18 +5,140 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::{GenericImageView, ImageBuffer, Rgba};
+use serde_json::{Map, Value};
 use winctl::{find_ui_elements, flatten_ui_elements, ui_automation_snapshot};
 
 use crate::{
     AppState, AssertClipboardRequest, AssertElementRequest, AssertPixelColorRequest,
-    AssertTextVisibleRequest, AssertWindowCountRequest, CaptureCompareBaselineRequest,
-    CaptureOcrRegionRequest, CaptureReadTextRequest,
+    AssertTextVisibleRequest, AssertWindowCountRequest, AssertionExpect,
+    CaptureCompareBaselineRequest, CaptureOcrRegionRequest, CaptureReadTextRequest,
 };
 
 struct OcrOutput {
     provider: &'static str,
     text: String,
     words: Vec<serde_json::Value>,
+}
+
+struct AssertionAttempt {
+    passed: bool,
+    expected: Value,
+    actual: Value,
+    predicate: String,
+    target: Value,
+    diagnostics: Vec<Value>,
+    extra: Map<String, Value>,
+}
+
+impl AssertionAttempt {
+    fn new(
+        passed: bool,
+        predicate: impl Into<String>,
+        expected: Value,
+        actual: Value,
+        target: Value,
+    ) -> Self {
+        Self {
+            passed,
+            expected,
+            actual,
+            predicate: predicate.into(),
+            target,
+            diagnostics: Vec::new(),
+            extra: Map::new(),
+        }
+    }
+
+    fn with_diagnostics(mut self, diagnostics: Vec<Value>) -> Self {
+        self.diagnostics.extend(diagnostics);
+        self
+    }
+
+    fn with_extra(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.extra.insert(key.into(), value);
+        self
+    }
+}
+
+fn run_assertion<F>(
+    negate: bool,
+    timeout_ms: Option<u64>,
+    poll_interval_ms: Option<u64>,
+    mut evaluate: F,
+) -> serde_json::Value
+where
+    F: FnMut() -> Result<AssertionAttempt, serde_json::Value>,
+{
+    let started = Instant::now();
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(0));
+    let poll_interval = Duration::from_millis(poll_interval_ms.unwrap_or(100).max(10));
+    let mut attempts = 0u64;
+
+    loop {
+        attempts += 1;
+        let mut attempt = match evaluate() {
+            Ok(attempt) => attempt,
+            Err(error) => return error,
+        };
+        let raw_passed = attempt.passed;
+        let passed = if negate { !raw_passed } else { raw_passed };
+        if passed || started.elapsed() >= timeout {
+            attempt.passed = passed;
+            return assertion_response(attempt, negate, attempts, started.elapsed());
+        }
+        thread::sleep(poll_interval);
+    }
+}
+
+fn assertion_response(
+    attempt: AssertionAttempt,
+    negated: bool,
+    attempts: u64,
+    elapsed: Duration,
+) -> serde_json::Value {
+    let AssertionAttempt {
+        passed,
+        expected,
+        actual,
+        predicate,
+        target,
+        mut diagnostics,
+        extra,
+    } = attempt;
+    if attempts > 1 {
+        diagnostics.push(serde_json::json!({
+            "kind": "polling",
+            "attempts": attempts,
+        }));
+    }
+    let mut response = Map::new();
+    response.insert("ok".into(), Value::Bool(passed));
+    response.insert("passed".into(), Value::Bool(passed));
+    response.insert("negated".into(), Value::Bool(negated));
+    response.insert("expected".into(), expected);
+    response.insert("actual".into(), actual);
+    response.insert("predicate".into(), Value::String(predicate));
+    response.insert("target".into(), target);
+    response.insert(
+        "elapsed_ms".into(),
+        Value::from(elapsed.as_millis() as u64),
+    );
+    response.insert("diagnostics".into(), Value::Array(diagnostics));
+    if !passed {
+        response.insert(
+            "error".into(),
+            serde_json::json!({
+                "code": "assertion_failed",
+                "message": "assertion predicate did not pass",
+            }),
+        );
+    }
+    response.extend(extra);
+    Value::Object(response)
+}
+
+fn expect_absent(expect: Option<AssertionExpect>) -> bool {
+    matches!(expect, Some(AssertionExpect::Absent))
 }
 
 pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_json::Value {
@@ -26,59 +148,94 @@ pub fn assert_element(state: &AppState, request: AssertElementRequest) -> serde_
         selector = ?request.selector,
         "assert.element requested"
     );
-    let snapshot = match fresh_snapshot(
-        state,
-        &request.bound_id,
-        request.max_depth,
-        request.max_elements,
-    ) {
-        Ok(snapshot) => snapshot,
-        Err(error) => return error,
-    };
-    let matches = if let Some(element_ref) = &request.element_ref {
-        flatten_ui_elements(&snapshot.root)
-            .into_iter()
-            .filter(|element| element.element_ref == *element_ref)
-            .collect::<Vec<_>>()
-    } else if let Some(selector) = &request.selector {
-        find_ui_elements(&snapshot, selector)
-    } else {
-        return fail(
-            "uia_selector_required",
-            "element_ref or selector is required",
-            None,
-        );
-    };
-    let exists = !matches.is_empty();
-    let mut failures = Vec::new();
-    if request.exists.unwrap_or(true) != exists {
-        failures.push(format!("exists was {exists}"));
-    }
-    let first = matches.first().copied();
-    if let (Some(expected), Some(element)) = (request.enabled, first) {
-        if element.enabled != Some(expected) {
-            failures.push(format!("enabled was {:?}", element.enabled));
-        }
-    }
-    if let (Some(expected), Some(element)) = (&request.name, first) {
-        if element.name.as_deref() != Some(expected.as_str()) {
-            failures.push(format!("name was {:?}", element.name));
-        }
-    }
-    if let (Some(needle), Some(element)) = (&request.name_contains, first) {
-        if !contains_ci(element.name.as_deref(), needle) {
-            failures.push(format!("name did not contain {needle:?}"));
-        }
-    }
-    let passed = failures.is_empty();
-    serde_json::json!({
-        "ok": true,
-        "passed": passed,
-        "match_count": matches.len(),
-        "matches": matches,
-        "failures": failures,
-        "snapshot_summary": snapshot_summary(&snapshot),
-    })
+    run_assertion(
+        request.negate,
+        request.timeout_ms,
+        request.poll_interval_ms,
+        || {
+            let snapshot = fresh_snapshot(
+                state,
+                &request.bound_id,
+                request.max_depth,
+                request.max_elements,
+            )?;
+            let matches = if let Some(element_ref) = &request.element_ref {
+                flatten_ui_elements(&snapshot.root)
+                    .into_iter()
+                    .filter(|element| element.element_ref == *element_ref)
+                    .collect::<Vec<_>>()
+            } else if let Some(selector) = &request.selector {
+                find_ui_elements(&snapshot, selector)
+            } else {
+                return Err(fail(
+                    "uia_selector_required",
+                    "element_ref or selector is required",
+                    None,
+                ));
+            };
+            let exists = !matches.is_empty();
+            let absent = expect_absent(request.expect) || request.exists == Some(false);
+            let mut failures = Vec::new();
+            if absent {
+                if exists {
+                    failures.push(format!("expected absent, found {} match(es)", matches.len()));
+                }
+            } else {
+                if !exists {
+                    failures.push("expected present, found no matches".to_owned());
+                }
+                let first = matches.first().copied();
+                if let (Some(expected), Some(element)) = (request.enabled, first) {
+                    if element.enabled != Some(expected) {
+                        failures.push(format!("enabled was {:?}", element.enabled));
+                    }
+                }
+                if let (Some(expected), Some(element)) = (&request.name, first) {
+                    if element.name.as_deref() != Some(expected.as_str()) {
+                        failures.push(format!("name was {:?}", element.name));
+                    }
+                }
+                if let (Some(needle), Some(element)) = (&request.name_contains, first) {
+                    if !contains_ci(element.name.as_deref(), needle) {
+                        failures.push(format!("name did not contain {needle:?}"));
+                    }
+                }
+            }
+            let failures_json = failures
+                .iter()
+                .map(|failure| Value::String(failure.clone()))
+                .collect::<Vec<_>>();
+            let expected = serde_json::json!({
+                "expect": if absent { "absent" } else { "present" },
+                "exists": !absent,
+                "enabled": request.enabled,
+                "name": request.name,
+                "name_contains": request.name_contains,
+            });
+            let actual = serde_json::json!({
+                "exists": exists,
+                "match_count": matches.len(),
+                "first": matches.first(),
+                "failures": failures,
+            });
+            Ok(AssertionAttempt::new(
+                failures_json.is_empty(),
+                "all",
+                expected,
+                actual,
+                serde_json::json!({
+                    "kind": "uia_element",
+                    "bound_id": request.bound_id,
+                    "element_ref": request.element_ref,
+                    "selector": request.selector,
+                }),
+            )
+            .with_extra("match_count", Value::from(matches.len()))
+            .with_extra("matches", serde_json::json!(matches))
+            .with_extra("failures", Value::Array(failures_json))
+            .with_extra("snapshot_summary", snapshot_summary(&snapshot)))
+        },
+    )
 }
 
 pub fn assert_text_visible(
@@ -90,51 +247,86 @@ pub fn assert_text_visible(
         text = %request.text,
         "assert.text_visible requested"
     );
-    let window = match state.revalidate_bound_window(&request.bound_id) {
-        Ok(window) => window,
-        Err(error) => return serde_json::json!({"ok": false, "error": error}),
-    };
-    let mut matches = Vec::new();
-    if contains_ci(Some(&window.title), &request.text) {
-        matches.push(serde_json::json!({"source": "window_title", "text": window.title}));
-    }
-    if contains_ci(Some(&window.class_name), &request.text) {
-        matches.push(serde_json::json!({"source": "window_class", "text": window.class_name}));
-    }
-    match ui_automation_snapshot(
-        &window,
-        request.max_depth.unwrap_or(8),
-        request.max_elements.unwrap_or(2_000),
-    ) {
-        Ok(snapshot) => {
-            for element in flatten_ui_elements(&snapshot.root) {
-                if contains_ci(element.name.as_deref(), &request.text)
-                    || contains_ci(element.automation_id.as_deref(), &request.text)
-                    || contains_ci(element.class_name.as_deref(), &request.text)
-                {
-                    matches.push(serde_json::json!({
-                        "source": "uia",
-                        "element_ref": element.element_ref,
-                        "name": element.name,
-                        "automation_id": element.automation_id,
-                        "class_name": element.class_name,
+    run_assertion(
+        request.negate,
+        request.timeout_ms,
+        request.poll_interval_ms,
+        || {
+            let window = match state.revalidate_bound_window(&request.bound_id) {
+                Ok(window) => window,
+                Err(error) => return Err(serde_json::json!({"ok": false, "error": error})),
+            };
+            let mut matches = Vec::new();
+            if contains_ci(Some(&window.title), &request.text) {
+                matches.push(serde_json::json!({"source": "window_title", "text": window.title}));
+            }
+            if contains_ci(Some(&window.class_name), &request.text) {
+                matches
+                    .push(serde_json::json!({"source": "window_class", "text": window.class_name}));
+            }
+            let mut snapshot_summary_value = Value::Null;
+            let mut diagnostics = Vec::new();
+            let mut warnings = Vec::<String>::new();
+            match ui_automation_snapshot(
+                &window,
+                request.max_depth.unwrap_or(8),
+                request.max_elements.unwrap_or(2_000),
+            ) {
+                Ok(snapshot) => {
+                    for element in flatten_ui_elements(&snapshot.root) {
+                        if contains_ci(element.name.as_deref(), &request.text)
+                            || contains_ci(element.automation_id.as_deref(), &request.text)
+                            || contains_ci(element.class_name.as_deref(), &request.text)
+                        {
+                            matches.push(serde_json::json!({
+                                "source": "uia",
+                                "element_ref": element.element_ref,
+                                "name": element.name,
+                                "automation_id": element.automation_id,
+                                "class_name": element.class_name,
+                            }));
+                        }
+                    }
+                    snapshot_summary_value = snapshot_summary(&snapshot);
+                }
+                Err(error) => {
+                    let warning = format!("UI Automation snapshot unavailable: {}", error.message);
+                    warnings.push(warning.clone());
+                    diagnostics.push(serde_json::json!({
+                        "kind": "warning",
+                        "message": warning,
                     }));
                 }
             }
-            serde_json::json!({
-                "ok": true,
-                "passed": !matches.is_empty(),
-                "matches": matches,
-                "snapshot_summary": snapshot_summary(&snapshot),
-            })
-        }
-        Err(error) => serde_json::json!({
-            "ok": true,
-            "passed": !matches.is_empty(),
-            "matches": matches,
-            "warnings": [format!("UI Automation snapshot unavailable: {}", error.message)],
-        }),
-    }
+            let absent = expect_absent(request.expect);
+            let raw_passed = if absent {
+                matches.is_empty()
+            } else {
+                !matches.is_empty()
+            };
+            Ok(AssertionAttempt::new(
+                raw_passed,
+                "text_visible",
+                serde_json::json!({
+                    "expect": if absent { "absent" } else { "present" },
+                    "text": request.text,
+                }),
+                serde_json::json!({
+                    "visible": !matches.is_empty(),
+                    "match_count": matches.len(),
+                    "matches": matches,
+                }),
+                serde_json::json!({
+                    "kind": "bound_window_text",
+                    "bound_id": request.bound_id,
+                }),
+            )
+            .with_extra("matches", serde_json::json!(matches))
+            .with_extra("snapshot_summary", snapshot_summary_value)
+            .with_extra("warnings", serde_json::json!(warnings))
+            .with_diagnostics(diagnostics))
+        },
+    )
 }
 
 pub fn assert_pixel_color(state: &AppState, request: AssertPixelColorRequest) -> serde_json::Value {
@@ -146,99 +338,177 @@ pub fn assert_pixel_color(state: &AppState, request: AssertPixelColorRequest) ->
         expected_rgb = ?request.expected_rgb,
         "assert.pixel_color requested"
     );
-    let image_path = match resolve_image_path(state, request.image_path, request.bound_id) {
-        Ok(path) => path,
-        Err(error) => return error,
-    };
-    let image = match image::open(&image_path) {
-        Ok(image) => image,
-        Err(error) => return fail("image_open_failed", &format!("{error}"), Some(image_path)),
-    };
-    if request.x >= image.width() || request.y >= image.height() {
-        return fail(
-            "pixel_out_of_bounds",
-            "sample coordinate is outside the image",
-            Some(image_path),
-        );
-    }
-    let pixel = image.get_pixel(request.x, request.y).0;
-    let actual = [pixel[0], pixel[1], pixel[2]];
-    let tolerance = request.tolerance.unwrap_or(0);
-    let passed = request
-        .expected_rgb
-        .map(|expected| rgb_within_tolerance(actual, expected, tolerance))
-        .unwrap_or(true);
-    serde_json::json!({
-        "ok": true,
-        "passed": passed,
-        "image_path": image_path,
-        "x": request.x,
-        "y": request.y,
-        "actual_rgb": actual,
-        "expected_rgb": request.expected_rgb,
-        "tolerance": tolerance,
-    })
+    run_assertion(
+        request.negate,
+        request.timeout_ms,
+        request.poll_interval_ms,
+        || {
+            let image_path =
+                resolve_image_path(state, request.image_path.clone(), request.bound_id.clone())?;
+            let image = match image::open(&image_path) {
+                Ok(image) => image,
+                Err(error) => {
+                    return Err(fail(
+                        "image_open_failed",
+                        &format!("{error}"),
+                        Some(image_path),
+                    ))
+                }
+            };
+            if request.x >= image.width() || request.y >= image.height() {
+                return Err(fail(
+                    "pixel_out_of_bounds",
+                    "sample coordinate is outside the image",
+                    Some(image_path),
+                ));
+            }
+            let pixel = image.get_pixel(request.x, request.y).0;
+            let actual = [pixel[0], pixel[1], pixel[2]];
+            let tolerance = request.tolerance.unwrap_or(0);
+            let passed = request
+                .expected_rgb
+                .map(|expected| rgb_within_tolerance(actual, expected, tolerance))
+                .unwrap_or(true);
+            Ok(AssertionAttempt::new(
+                passed,
+                "pixel_color",
+                serde_json::json!({
+                    "rgb": request.expected_rgb,
+                    "tolerance": tolerance,
+                }),
+                serde_json::json!({
+                    "rgb": actual,
+                    "x": request.x,
+                    "y": request.y,
+                }),
+                serde_json::json!({
+                    "kind": "pixel",
+                    "image_path": image_path,
+                    "bound_id": request.bound_id,
+                    "x": request.x,
+                    "y": request.y,
+                }),
+            )
+            .with_extra("image_path", serde_json::json!(image_path))
+            .with_extra("x", Value::from(request.x))
+            .with_extra("y", Value::from(request.y))
+            .with_extra("actual_rgb", serde_json::json!(actual))
+            .with_extra("expected_rgb", serde_json::json!(request.expected_rgb))
+            .with_extra("tolerance", Value::from(tolerance)))
+        },
+    )
 }
 
 pub fn assert_window_count(request: AssertWindowCountRequest) -> serde_json::Value {
     tracing::info!(selector = ?request.selector, "assert.window_count requested");
-    let windows = winctl::list_windows();
-    let matches = winctl::find_windows(&request.selector, &windows);
-    let count = matches.len();
-    let mut failures = Vec::new();
-    if let Some(expected) = request.expected {
-        if count != expected {
-            failures.push(format!("count {count} did not equal {expected}"));
-        }
-    }
-    if let Some(min) = request.min {
-        if count < min {
-            failures.push(format!("count {count} was less than {min}"));
-        }
-    }
-    if let Some(max) = request.max {
-        if count > max {
-            failures.push(format!("count {count} was greater than {max}"));
-        }
-    }
-    serde_json::json!({
-        "ok": true,
-        "passed": failures.is_empty(),
-        "count": count,
-        "matches": matches,
-        "failures": failures,
-    })
+    run_assertion(
+        request.negate,
+        request.timeout_ms,
+        request.poll_interval_ms,
+        || {
+            let windows = winctl::list_windows();
+            let matches = winctl::find_windows(&request.selector, &windows);
+            let count = matches.len();
+            let mut failures = Vec::new();
+            if let Some(expected) = request.expected {
+                if count != expected {
+                    failures.push(format!("count {count} did not equal {expected}"));
+                }
+            }
+            if let Some(min) = request.min {
+                if count < min {
+                    failures.push(format!("count {count} was less than {min}"));
+                }
+            }
+            if let Some(max) = request.max {
+                if count > max {
+                    failures.push(format!("count {count} was greater than {max}"));
+                }
+            }
+            if request.expected.is_none() && request.min.is_none() && request.max.is_none() {
+                let absent = expect_absent(request.expect);
+                if absent && count != 0 {
+                    failures.push(format!("expected absent, found {count} match(es)"));
+                } else if !absent && count == 0 {
+                    failures.push("expected present, found no matches".to_owned());
+                }
+            }
+            let failures_json = failures
+                .iter()
+                .map(|failure| Value::String(failure.clone()))
+                .collect::<Vec<_>>();
+            Ok(AssertionAttempt::new(
+                failures_json.is_empty(),
+                "window_count",
+                serde_json::json!({
+                    "expected": request.expected,
+                    "min": request.min,
+                    "max": request.max,
+                    "expect": request.expect,
+                }),
+                serde_json::json!({"count": count}),
+                serde_json::json!({
+                    "kind": "window_selector",
+                    "selector": request.selector,
+                }),
+            )
+            .with_extra("count", Value::from(count))
+            .with_extra("matches", serde_json::json!(matches))
+            .with_extra("failures", Value::Array(failures_json)))
+        },
+    )
 }
 
 pub fn assert_clipboard(request: AssertClipboardRequest) -> serde_json::Value {
     tracing::info!("assert.clipboard requested");
-    let mut clipboard = match winctl::clipboard_read_text() {
-        Ok(clipboard) => clipboard,
-        Err(error) => return serde_json::json!({"ok": false, "error": error}),
-    };
-    if let (Some(text), Some(max_chars)) = (clipboard.text.as_mut(), request.max_chars) {
-        if text.chars().count() > max_chars {
-            *text = text.chars().take(max_chars).collect();
-        }
-    }
-    let text = clipboard.text.clone().unwrap_or_default();
-    let mut failures = Vec::new();
-    if let Some(expected) = &request.expected {
-        if &text != expected {
-            failures.push("clipboard text did not equal expected text".to_owned());
-        }
-    }
-    if let Some(contains) = &request.contains {
-        if !text.contains(contains) {
-            failures.push("clipboard text did not contain requested text".to_owned());
-        }
-    }
-    serde_json::json!({
-        "ok": true,
-        "passed": failures.is_empty(),
-        "clipboard": clipboard,
-        "failures": failures,
-    })
+    run_assertion(
+        request.negate,
+        request.timeout_ms,
+        request.poll_interval_ms,
+        || {
+            let mut clipboard = match winctl::clipboard_read_text() {
+                Ok(clipboard) => clipboard,
+                Err(error) => return Err(serde_json::json!({"ok": false, "error": error})),
+            };
+            if let (Some(text), Some(max_chars)) = (clipboard.text.as_mut(), request.max_chars) {
+                if text.chars().count() > max_chars {
+                    *text = text.chars().take(max_chars).collect();
+                }
+            }
+            let text = clipboard.text.clone().unwrap_or_default();
+            let mut failures = Vec::new();
+            if let Some(expected) = &request.expected {
+                if &text != expected {
+                    failures.push("clipboard text did not equal expected text".to_owned());
+                }
+            }
+            if let Some(contains) = &request.contains {
+                if !text.contains(contains) {
+                    failures.push("clipboard text did not contain requested text".to_owned());
+                }
+            }
+            let failures_json = failures
+                .iter()
+                .map(|failure| Value::String(failure.clone()))
+                .collect::<Vec<_>>();
+            Ok(AssertionAttempt::new(
+                failures_json.is_empty(),
+                "clipboard_text",
+                serde_json::json!({
+                    "expected": request.expected,
+                    "contains": request.contains,
+                    "max_chars": request.max_chars,
+                }),
+                serde_json::json!({
+                    "text_present": clipboard.text.is_some(),
+                    "char_count": text.chars().count(),
+                }),
+                serde_json::json!({"kind": "clipboard"}),
+            )
+            .with_extra("clipboard", serde_json::json!(clipboard))
+            .with_extra("failures", Value::Array(failures_json)))
+        },
+    )
 }
 
 pub fn capture_ocr_region(state: &AppState, request: CaptureOcrRegionRequest) -> serde_json::Value {
