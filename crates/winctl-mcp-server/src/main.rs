@@ -1,3 +1,4 @@
+mod observability;
 mod tools;
 
 use std::collections::HashMap;
@@ -10,7 +11,7 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -21,14 +22,21 @@ use axum::routing::{get, post};
 use axum::{Json as AxumJson, Router};
 use rmcp::schemars;
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, tool::Parameters},
-    model::{ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router,
+    handler::server::{
+        router::tool::ToolRouter,
+        tool::{Parameters, ToolCallContext},
+    },
+    model::{
+        CallToolRequestParam, CallToolResult, InitializeRequestParam, InitializeResult,
+        ListToolsResult, PaginatedRequestParam, ServerCapabilities, ServerInfo,
+    },
+    service::RequestContext,
+    tool, tool_router,
     transport::{
         stdio, streamable_http_server::session::local::LocalSessionManager,
         StreamableHttpServerConfig, StreamableHttpService,
     },
-    Json, ServerHandler, ServiceExt,
+    ErrorData as McpError, Json, RoleServer, ServerHandler, ServiceExt,
 };
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::fmt::MakeWriter;
@@ -52,6 +60,7 @@ pub struct AppState {
     pub recorder_runtime: Arc<Mutex<tools::recorder::RecorderRuntimeState>>,
     pub video_runtime: Arc<Mutex<tools::capture::VideoRuntimeState>>,
     pub control_runtime: Arc<Mutex<tools::control::ControlRuntimeState>>,
+    pub observability: Arc<observability::ServerObservabilityState>,
     launch_counter: Arc<AtomicU64>,
 }
 
@@ -164,6 +173,7 @@ impl AppState {
             ),
             video_runtime: Arc::new(Mutex::new(tools::capture::VideoRuntimeState::default())),
             control_runtime,
+            observability: Arc::new(observability::ServerObservabilityState::default()),
             launch_counter: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -1480,6 +1490,19 @@ fn default_true() -> bool {
 pub struct WinctlMcpServer {
     state: AppState,
     tool_router: ToolRouter<Self>,
+    connection: Arc<ConnectionRegistration>,
+}
+
+struct ConnectionRegistration {
+    observability: Arc<observability::ServerObservabilityState>,
+    connection_id: String,
+}
+
+impl Drop for ConnectionRegistration {
+    fn drop(&mut self) {
+        self.observability
+            .deregister_connection(&self.connection_id);
+    }
 }
 
 #[tool_router(router = tool_router)]
@@ -1489,9 +1512,18 @@ impl WinctlMcpServer {
     }
 
     pub fn with_state(state: AppState) -> Self {
+        Self::with_state_transport(state, "local")
+    }
+
+    fn with_state_transport(state: AppState, transport: &'static str) -> Self {
+        let connection_id = state.observability.register_connection(transport);
         Self {
-            state,
+            connection: Arc::new(ConnectionRegistration {
+                observability: state.observability.clone(),
+                connection_id,
+            }),
             tool_router: Self::tool_router(),
+            state,
         }
     }
 
@@ -3753,7 +3785,6 @@ impl Default for WinctlMcpServer {
     }
 }
 
-#[tool_handler(router = self.tool_router)]
 impl ServerHandler for WinctlMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -3783,6 +3814,71 @@ impl ServerHandler for WinctlMcpServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
+    }
+
+    fn initialize(
+        &self,
+        request: InitializeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+        let client_name = request.client_info.name.clone();
+        let client_version = request.client_info.version.clone();
+        self.state.observability.set_client_info(
+            &self.connection.connection_id,
+            client_name,
+            client_version,
+        );
+        if context.peer.peer_info().is_none() {
+            context.peer.set_peer_info(request);
+        }
+        std::future::ready(Ok(self.get_info()))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let tool_name = request.name.to_string();
+        let args = request
+            .arguments
+            .as_ref()
+            .map(|arguments| serde_json::Value::Object(arguments.clone()))
+            .unwrap_or_else(|| serde_json::json!({}));
+        let started_at_unix_ms = observability::now_unix_ms();
+        let started = Instant::now();
+        let context = ToolCallContext::new(self, request, context);
+        let result = self.tool_router.call(context).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+        let (ok, error_code, structured_result) = match &result {
+            Ok(result) => (
+                observability::call_tool_result_ok(result),
+                observability::call_tool_error_code(result),
+                result.structured_content.as_ref(),
+            ),
+            Err(error) => (false, Some(format!("{:?}", error.code)), None),
+        };
+        self.state
+            .observability
+            .record_request(observability::RequestRecord {
+                connection_id: &self.connection.connection_id,
+                tool_name: &tool_name,
+                started_at_unix_ms,
+                duration_ms,
+                ok,
+                error_code,
+                args: &args,
+                result: structured_result,
+            });
+        result
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
     }
 }
 
@@ -3869,7 +3965,7 @@ async fn run_mcp_stdio(state: AppState) -> anyhow::Result<()> {
         "winctl-mcp-server starting on stdio"
     );
     log_startup_diagnostics("stdio", None, &state);
-    let service = WinctlMcpServer::with_state(state)
+    let service = WinctlMcpServer::with_state_transport(state, "stdio")
         .serve(stdio())
         .await
         .context("failed to initialize MCP stdio service")?;
@@ -3897,7 +3993,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     let service = StreamableHttpService::new(
         {
             let state = state.clone();
-            move || Ok(WinctlMcpServer::with_state(state.clone()))
+            move || Ok(WinctlMcpServer::with_state_transport(state.clone(), "http"))
         },
         session_manager,
         StreamableHttpServerConfig {
@@ -4157,6 +4253,7 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
     let recording = tools::recorder::recorder_state(&state.app_state);
+    let observability = state.app_state.observability.snapshot();
     AxumJson(serde_json::json!({
         "ok": true,
         "service": "winctl-mcp-server",
@@ -4170,11 +4267,9 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
         "macro_results": macro_results,
         "control": control,
         "recording": recording,
-        "connected_clients": serde_json::Value::Null,
-        "recent_requests": [],
-        "warnings": [
-            "connected client and request-history tracking are not enabled yet"
-        ]
+        "connected_clients": observability.connected_clients,
+        "recent_requests": observability.recent_requests,
+        "warnings": []
     }))
 }
 
