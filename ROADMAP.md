@@ -300,7 +300,9 @@ Replace the dashboard's "connected client and request-history tracking are not e
 
 ## Phase 21: Assertion and Require Primitives
 
-**Status:** Planned.
+**Status:** Complete.
+
+Audit comments: Implemented the shared assertion contract, rich element/text/pixel/window/clipboard/process/dialog/file/registry/visual assertions, macro manifest descriptors/dispatch/replay handling, docs, and unit/Windows runtime coverage. Deferred `assert.a11y` and `assert.timing` because this phase marks them deferrable and they need separate accessibility contrast/tab-order and timing-metadata designs.
 
 Expand the assertion surface so a developer can fully describe "does my app work" in automated tests. Every assertion shares one model: a `negate`/`expect: present|absent` flag (so absence checks reuse the same tool), an optional `timeout_ms`/`poll_interval_ms` that turns the check into a require/wait-until (poll until it holds, fail on timeout — no separate wait tools), a uniform result `{ ok, passed, negated, expected, actual, predicate, target, elapsed_ms, diagnostics }`, non-mutating execution, targets resolved through the Phase 18 resolver, and a mirrored manifest assertion kind usable in both `preconditions` (fail-fast requires) and `assertions`.
 
