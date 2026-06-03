@@ -227,6 +227,8 @@ createApp({
         control: { query: '', page: 1, pageSize: 10 },
         catalog: { query: '', page: 1, pageSize: 12 },
         completions: { query: '', page: 1, pageSize: 10 },
+        clients: { query: '', page: 1, pageSize: 8 },
+        requests: { query: '', page: 1, pageSize: 12 },
         windows: { query: '', page: 1, pageSize: 10 },
         processes: { query: '', page: 1, pageSize: 10 },
         uia: { query: '', page: 1, pageSize: 12 },
@@ -236,6 +238,7 @@ createApp({
       tabs: [
         { id: 'overview', label: 'Overview' },
         { id: 'control', label: 'Control' },
+        { id: 'observability', label: 'Observability' },
         { id: 'recorder', label: 'Recorder' },
         { id: 'inspect', label: 'Inspect' },
         { id: 'artifacts', label: 'Artifacts' },
@@ -285,6 +288,12 @@ createApp({
     },
     macroResults() {
       return this.data?.macro_results?.results ?? [];
+    },
+    connectedClients() {
+      return this.data?.connected_clients ?? [];
+    },
+    recentRequests() {
+      return (this.data?.recent_requests ?? []).slice().reverse();
     },
     visualDiffs() {
       const diffs = [];
@@ -424,6 +433,27 @@ createApp({
     completionTableFields() {
       return ['run_id', 'result.manifest_title', 'result.status', 'result.finished_at'];
     },
+    clientTableFields() {
+      return [
+        'connection_id',
+        'name',
+        'version',
+        'transport',
+        'last_tool',
+        'request_count',
+      ];
+    },
+    requestTableFields() {
+      return [
+        'connection_id',
+        'tool_name',
+        'ok',
+        'error_code',
+        'summary.tool',
+        'summary.args',
+        'summary.result',
+      ];
+    },
     windowsTableFields() {
       return [
         'bound_id',
@@ -492,7 +522,7 @@ createApp({
         service: this.data?.service ?? 'winctl-mcp-server',
         version: this.data?.version ?? 'n/a',
         capture_dir: this.data?.capture_dir ?? 'n/a',
-        connected_clients: this.data?.connected_clients ?? null,
+        connected_clients: this.connectedClients,
         recent_requests: this.data?.recent_requests ?? [],
       };
     },
@@ -694,6 +724,27 @@ createApp({
     },
     badgeClass(value) {
       return value ? 'badge-success' : 'badge-ghost';
+    },
+    requestBadgeClass(request) {
+      return request.ok ? 'badge-success' : 'badge-error';
+    },
+    clientLabel(connectionId) {
+      const client = this.connectedClients.find((item) => item.connection_id === connectionId);
+      if (!client) return connectionId || 'unknown';
+      const name = client.name || client.connection_id;
+      return client.version ? `${name} ${client.version}` : name;
+    },
+    summaryPills(summary) {
+      const pills = [];
+      for (const section of ['args', 'result']) {
+        const value = summary?.[section];
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+        for (const [key, detail] of Object.entries(value)) {
+          if (detail == null || detail === '') continue;
+          pills.push(`${section}.${key}: ${compactValue(detail)}`);
+        }
+      }
+      return pills.slice(0, 10);
     },
     tableFilteredRows(key, rows, fields) {
       const query = this.tableState[key]?.query?.trim().toLowerCase() ?? '';
@@ -1267,6 +1318,113 @@ createApp({
               <button type="button" class="btn btn-xs" :disabled="tableMeta('control', controlEventRows, controlTableFields).page <= 1" @click="previousTablePage('control', controlEventRows, controlTableFields)">Previous</button>
               <span class="text-xs text-slate-500">Page {{ tableMeta('control', controlEventRows, controlTableFields).page }} of {{ tableMeta('control', controlEventRows, controlTableFields).totalPages }}</span>
               <button type="button" class="btn btn-xs" :disabled="tableMeta('control', controlEventRows, controlTableFields).page >= tableMeta('control', controlEventRows, controlTableFields).totalPages" @click="nextTablePage('control', controlEventRows, controlTableFields)">Next</button>
+            </div>
+          </section>
+        </section>
+
+        <section v-if="selectedTab === 'observability'" class="space-y-5">
+          <section class="winctl-card overflow-hidden">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+              <h2 class="text-sm font-semibold">Connected clients</h2>
+              <span class="badge badge-info badge-outline">{{ connectedClients.length }}</span>
+            </div>
+            <div class="winctl-table-toolbar">
+              <input
+                v-model="tableState.clients.query"
+                type="search"
+                placeholder="Search clients"
+                class="input input-sm input-bordered w-full sm:max-w-xs"
+                @input="resetTablePage('clients')"
+              />
+              <span class="text-xs text-slate-500">
+                Showing {{ tableMeta('clients', connectedClients, clientTableFields).start }}-{{ tableMeta('clients', connectedClients, clientTableFields).end }}
+                of {{ tableMeta('clients', connectedClients, clientTableFields).filtered }}
+              </span>
+            </div>
+            <div class="winctl-table-frame">
+              <table class="table winctl-table table-sm">
+                <thead>
+                  <tr><th>Client</th><th>Transport</th><th>Connected</th><th>Last seen</th><th>Requests</th><th>Last tool</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!tableMeta('clients', connectedClients, clientTableFields).filtered">
+                    <td colspan="6" class="py-8 text-center text-slate-500">{{ tableState.clients.query ? 'No matching clients' : 'No connected clients' }}</td>
+                  </tr>
+                  <tr v-for="client in tablePageRows('clients', connectedClients, clientTableFields)" :key="client.connection_id">
+                    <td>
+                      <div class="font-medium">{{ client.name || 'Uninitialized client' }}</div>
+                      <div class="winctl-code text-xs text-slate-500">{{ client.connection_id }}</div>
+                      <div class="text-xs text-slate-500">{{ client.version || 'unknown version' }}</div>
+                    </td>
+                    <td><span class="badge badge-ghost badge-sm">{{ client.transport }}</span></td>
+                    <td class="text-xs">{{ formatUnixMs(client.connected_at_unix_ms) }}</td>
+                    <td class="text-xs">{{ formatUnixMs(client.last_seen_unix_ms) }}</td>
+                    <td class="text-sm font-semibold">{{ client.request_count || 0 }}</td>
+                    <td class="winctl-code text-xs">{{ client.last_tool || 'n/a' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="winctl-table-footer">
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('clients', connectedClients, clientTableFields).page <= 1" @click="previousTablePage('clients', connectedClients, clientTableFields)">Previous</button>
+              <span class="text-xs text-slate-500">Page {{ tableMeta('clients', connectedClients, clientTableFields).page }} of {{ tableMeta('clients', connectedClients, clientTableFields).totalPages }}</span>
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('clients', connectedClients, clientTableFields).page >= tableMeta('clients', connectedClients, clientTableFields).totalPages" @click="nextTablePage('clients', connectedClients, clientTableFields)">Next</button>
+            </div>
+          </section>
+
+          <section class="winctl-card overflow-hidden">
+            <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+              <h2 class="text-sm font-semibold">Recent requests</h2>
+              <span class="badge badge-info badge-outline">{{ recentRequests.length }}</span>
+            </div>
+            <div class="winctl-table-toolbar">
+              <input
+                v-model="tableState.requests.query"
+                type="search"
+                placeholder="Search requests"
+                class="input input-sm input-bordered w-full sm:max-w-xs"
+                @input="resetTablePage('requests')"
+              />
+              <span class="text-xs text-slate-500">
+                Showing {{ tableMeta('requests', recentRequests, requestTableFields).start }}-{{ tableMeta('requests', recentRequests, requestTableFields).end }}
+                of {{ tableMeta('requests', recentRequests, requestTableFields).filtered }}
+              </span>
+            </div>
+            <div class="winctl-table-frame">
+              <table class="table winctl-table table-sm">
+                <thead>
+                  <tr><th>Time</th><th>Client</th><th>Tool</th><th>Duration</th><th>Status</th><th>Summary</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!tableMeta('requests', recentRequests, requestTableFields).filtered">
+                    <td colspan="6" class="py-8 text-center text-slate-500">{{ tableState.requests.query ? 'No matching requests' : 'No tool requests recorded' }}</td>
+                  </tr>
+                  <tr v-for="request in tablePageRows('requests', recentRequests, requestTableFields)" :key="request.id">
+                    <td class="text-xs">{{ formatUnixMs(request.started_at_unix_ms) }}</td>
+                    <td>
+                      <div class="text-xs font-medium">{{ clientLabel(request.connection_id) }}</div>
+                      <div class="winctl-code text-[11px] text-slate-500">{{ request.connection_id }}</div>
+                    </td>
+                    <td class="winctl-code text-xs">{{ request.tool_name }}</td>
+                    <td class="text-xs">{{ request.duration_ms }} ms</td>
+                    <td>
+                      <span class="badge badge-sm" :class="requestBadgeClass(request)">{{ request.ok ? 'ok' : 'failed' }}</span>
+                      <div v-if="request.error_code" class="winctl-code mt-1 text-[11px] text-slate-500">{{ request.error_code }}</div>
+                    </td>
+                    <td>
+                      <div class="flex flex-wrap gap-1">
+                        <span v-for="pill in summaryPills(request.summary)" :key="pill" class="badge badge-ghost badge-sm">{{ pill }}</span>
+                        <span v-if="!summaryPills(request.summary).length" class="text-xs text-slate-500">No redacted fields</span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="winctl-table-footer">
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('requests', recentRequests, requestTableFields).page <= 1" @click="previousTablePage('requests', recentRequests, requestTableFields)">Previous</button>
+              <span class="text-xs text-slate-500">Page {{ tableMeta('requests', recentRequests, requestTableFields).page }} of {{ tableMeta('requests', recentRequests, requestTableFields).totalPages }}</span>
+              <button type="button" class="btn btn-xs" :disabled="tableMeta('requests', recentRequests, requestTableFields).page >= tableMeta('requests', recentRequests, requestTableFields).totalPages" @click="nextTablePage('requests', recentRequests, requestTableFields)">Next</button>
             </div>
           </section>
         </section>
