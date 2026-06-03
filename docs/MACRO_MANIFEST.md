@@ -47,3 +47,9 @@ Coordinates are fallback metadata only. Coordinate fallback requires monitor, vi
 ## Validation
 
 The `winctl-macro` crate validates the manifest version, supported tool names, unique step IDs, target identity requirements, alias-before-bind mistakes, assertion safety, and coordinate fallback metadata. Target-bound steps without `target` or `args.bound_id` remain valid for legacy compatibility, but validation emits an `implicit_current_target` warning.
+
+## Assertions And Requires
+
+`preconditions` and `assertions` may use the Phase 21 `assert.*` tools. They are validated as non-mutating steps and can target the current or aliased bound window through the Phase 18 resolver.
+
+Every assertion returns the shared contract `{ ok, passed, negated, expected, actual, predicate, target, elapsed_ms, diagnostics }`. `timeout_ms` plus `poll_interval_ms` turns an assertion into a require/wait-until. Assertion failures return `ok: false`, so macro and test runs fail correctly. Assertion outputs redact compared clipboard text, typed text, file content, registry value data, and secrets.

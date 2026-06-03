@@ -1,5 +1,6 @@
 #![cfg(windows)]
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
@@ -86,6 +87,38 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
         .expect("bind should return bound_id")
         .to_owned();
 
+    let assert_window = harness
+        .call_tool(
+            "assert.window",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "title_contains": "runtime target",
+                "class_name": "WinctlRuntimeTarget",
+                "responsive": true,
+                "timeout_ms": 2000,
+                "poll_interval_ms": 100
+            }),
+        )
+        .await;
+    assert_ok("assert.window", &assert_window);
+    assert_eq!(assert_window["passed"], true);
+
+    let assert_process = harness
+        .call_tool(
+            "assert.process",
+            serde_json::json!({
+                "pid": pid,
+                "running": true,
+                "responsive": true,
+                "max_working_set_bytes": 512 * 1024 * 1024u64,
+                "timeout_ms": 2000,
+                "poll_interval_ms": 100
+            }),
+        )
+        .await;
+    assert_ok("assert.process", &assert_process);
+    assert_eq!(assert_process["passed"], true);
+
     let arm = harness
         .call_tool(
             "control.arm",
@@ -141,6 +174,26 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     assert!(
         status["match_count"].as_u64().unwrap_or_default() >= 1,
         "InvokePattern should update the target app status text: {status:#}"
+    );
+    let assert_text = harness
+        .call_tool(
+            "assert.text_visible",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "text_regex": "invoke=done",
+                "selector": {"role": "Text"},
+                "timeout_ms": 2000,
+                "poll_interval_ms": 100,
+                "max_depth": 12,
+                "max_elements": 4000
+            }),
+        )
+        .await;
+    assert_ok("assert.text_visible", &assert_text);
+    assert_eq!(assert_text["passed"], true);
+    assert!(
+        !assert_text.to_string().contains("invoke=done"),
+        "assert.text_visible should redact requested text: {assert_text:#}"
     );
 
     let set_value = harness
@@ -312,6 +365,23 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     assert_eq!(toggle_on["outcome"]["value"]["desired_state"], "on");
     assert_eq!(toggle_on["outcome"]["value"]["after_state"], "on");
     assert_eq!(toggle_on["outcome"]["value"]["toggle_count"], 1);
+    let assert_checked = harness
+        .call_tool(
+            "assert.element",
+            serde_json::json!({
+                "bound_id": bound_id,
+                "selector": {"name": "Toggle Choice", "role": "CheckBox"},
+                "checked": true,
+                "enabled": true,
+                "timeout_ms": 2000,
+                "poll_interval_ms": 100,
+                "max_depth": 12,
+                "max_elements": 4000
+            }),
+        )
+        .await;
+    assert_ok("assert.element checked", &assert_checked);
+    assert_eq!(assert_checked["passed"], true);
 
     let select = harness
         .call_tool(
@@ -402,6 +472,77 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
         "ScrollItemPattern.ScrollIntoView",
     );
     assert_eq!(scroll["outcome"]["after"]["offscreen"], false);
+
+    let file_path = std::env::temp_dir().join(format!("winctl-phase21-{pid}.txt"));
+    fs::write(&file_path, "phase21-file-token").expect("phase21 file fixture should write");
+    let assert_file = harness
+        .call_tool(
+            "assert.file",
+            serde_json::json!({
+                "path": file_path.to_string_lossy(),
+                "content_contains": "phase21-file-token",
+                "min_size_bytes": 1,
+                "timeout_ms": 2000,
+                "poll_interval_ms": 100
+            }),
+        )
+        .await;
+    assert_ok("assert.file", &assert_file);
+    assert_eq!(assert_file["passed"], true);
+    assert!(
+        !assert_file.to_string().contains("phase21-file-token"),
+        "assert.file must not echo compared file content: {assert_file:#}"
+    );
+
+    let assert_registry_absent = harness
+        .call_tool(
+            "assert.registry",
+            serde_json::json!({
+                "hive": "current_user",
+                "path": format!("Software\\\\winctl-mcp\\\\missing-phase21-{pid}"),
+                "name": "missing",
+                "expect": "absent"
+            }),
+        )
+        .await;
+    assert_ok("assert.registry absent", &assert_registry_absent);
+    assert_eq!(assert_registry_absent["passed"], true);
+
+    let image_path = std::env::temp_dir().join(format!("winctl-phase21-{pid}.ppm"));
+    let baseline_path = std::env::temp_dir().join(format!("winctl-phase21-baseline-{pid}.ppm"));
+    let ppm = b"P3\n1 1\n255\n255 0 0\n";
+    fs::write(&image_path, ppm).expect("phase21 actual image should write");
+    fs::write(&baseline_path, ppm).expect("phase21 baseline image should write");
+    let assert_pixel = harness
+        .call_tool(
+            "assert.pixel_color",
+            serde_json::json!({
+                "image_path": image_path.to_string_lossy(),
+                "x": 0,
+                "y": 0,
+                "expected_rgb": [255, 0, 0]
+            }),
+        )
+        .await;
+    assert_ok("assert.pixel_color", &assert_pixel);
+    assert_eq!(assert_pixel["passed"], true);
+    let assert_visual = harness
+        .call_tool(
+            "assert.visual_match",
+            serde_json::json!({
+                "actual_path": image_path.to_string_lossy(),
+                "baseline_path": baseline_path.to_string_lossy()
+            }),
+        )
+        .await;
+    assert_ok("assert.visual_match", &assert_visual);
+    assert_eq!(assert_visual["passed"], true);
+
+    let assert_no_dialog = harness
+        .call_tool("assert.no_dialog", serde_json::json!({}))
+        .await;
+    assert_ok("assert.no_dialog", &assert_no_dialog);
+    assert_eq!(assert_no_dialog["passed"], true);
 
     let ocr = harness
         .call_tool(
@@ -634,6 +775,21 @@ async fn windows_dialog_tools_invoke_message_box_button() {
     let pid = dialog["window"]["pid"]
         .as_u64()
         .expect("dialog should include pid") as u32;
+    let assert_dialog = harness
+        .call_tool(
+            "assert.dialog",
+            serde_json::json!({
+                "title_contains": "winctl dialog owner",
+                "button_names": ["OK"],
+                "timeout_ms": 2000,
+                "poll_interval_ms": 100,
+                "max_depth": 8,
+                "max_elements": 1000
+            }),
+        )
+        .await;
+    assert_ok("assert.dialog", &assert_dialog);
+    assert_eq!(assert_dialog["passed"], true);
 
     let arm = harness
         .call_tool(

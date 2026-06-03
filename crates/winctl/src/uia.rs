@@ -539,8 +539,8 @@ mod windows_impl {
     use crate::uia::{
         control_type_name, find_ui_elements, ui_element_ref, UiActionOutcome, UiActionTarget,
         UiAutomationError, UiAutomationErrorCode, UiAutomationSnapshot, UiElementInfo,
-        UiElementPatternState, UiExpandCollapseAction, UiOwnerWindow, UiRect, UiSelectionMode,
-        UiResolvedElementState, UiToggleDesiredState,
+        UiElementPatternState, UiExpandCollapseAction, UiOwnerWindow, UiRect,
+        UiResolvedElementState, UiSelectionMode, UiToggleDesiredState,
     };
     use crate::WindowInfo;
 
@@ -1241,9 +1241,9 @@ mod windows_impl {
         } {
             match unsafe { pattern.CurrentIsSelected() } {
                 Ok(selected) => state.selected = Some(selected.as_bool()),
-                Err(error) => state
-                    .warnings
-                    .push(format!("SelectionItemPattern.CurrentIsSelected failed: {error}")),
+                Err(error) => state.warnings.push(format!(
+                    "SelectionItemPattern.CurrentIsSelected failed: {error}"
+                )),
             }
         }
 
@@ -1253,10 +1253,12 @@ mod windows_impl {
             )
         } {
             match unsafe { pattern.CurrentExpandCollapseState() } {
-                Ok(value) => state.expand_collapse_state = Some(expand_state_name(value.0).to_owned()),
-                Err(error) => state
-                    .warnings
-                    .push(format!("ExpandCollapsePattern.CurrentExpandCollapseState failed: {error}")),
+                Ok(value) => {
+                    state.expand_collapse_state = Some(expand_state_name(value.0).to_owned())
+                }
+                Err(error) => state.warnings.push(format!(
+                    "ExpandCollapsePattern.CurrentExpandCollapseState failed: {error}"
+                )),
             }
         }
 

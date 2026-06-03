@@ -1193,8 +1193,14 @@ pub struct AssertElementRequest {
 pub struct AssertTextVisibleRequest {
     /// Stable bound-window id returned by `windows.bind`. Identity (HWND+PID+executable) is revalidated before the action; not a raw HWND or PID.
     pub bound_id: String,
-    /// The text that must be visible within the window for the assertion to pass.
-    pub text: String,
+    /// Literal text that must be visible within the selected window or element scope.
+    pub text: Option<String>,
+    /// Regular expression that must match visible text within the selected window or element scope.
+    pub text_regex: Option<String>,
+    /// Optional UI Automation element reference limiting the text assertion to one element.
+    pub element_ref: Option<String>,
+    /// Optional UI Automation selector limiting the text assertion to matching elements.
+    pub selector: Option<winctl::UiElementSelector>,
     /// Maximum depth of the UI Automation tree to traverse; deeper elements are omitted.
     pub max_depth: Option<usize>,
     /// Upper bound on the number of elements scanned; results are truncated beyond it.
@@ -1217,9 +1223,17 @@ pub struct AssertPixelColorRequest {
     pub image_path: Option<String>,
     /// Stable bound-window id returned by `windows.bind` to capture and sample. Provide either `image_path` or `bound_id`.
     pub bound_id: Option<String>,
-    /// X coordinate of the pixel to sample, in pixels within the image/window.
+    /// Optional UI Automation element reference; when set with `bound_id`, `x`/`y` are relative to that element's bounds.
+    pub element_ref: Option<String>,
+    /// Optional UI Automation selector; when set with `bound_id`, `x`/`y` are relative to the first matching element's bounds.
+    pub selector: Option<winctl::UiElementSelector>,
+    /// Maximum depth of the UI Automation tree to traverse when resolving an element scope.
+    pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements scanned when resolving an element scope.
+    pub max_elements: Option<usize>,
+    /// X coordinate of the pixel to sample, in pixels within the image/window or relative element scope.
     pub x: u32,
-    /// Y coordinate of the pixel to sample, in pixels within the image/window.
+    /// Y coordinate of the pixel to sample, in pixels within the image/window or relative element scope.
     pub y: u32,
     /// Expected pixel color as [R, G, B] (0-255 each).
     pub expected_rgb: Option<[u8; 3]>,
@@ -1266,6 +1280,242 @@ pub struct AssertClipboardRequest {
     /// Upper bound on the number of clipboard characters read; comparison is performed against the truncated text.
     pub max_chars: Option<usize>,
     /// If true, invert the final clipboard assertion result.
+    #[serde(default)]
+    pub negate: bool,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
+}
+
+/// Expected window show state for `assert.window`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, rmcp::schemars::JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AssertWindowState {
+    Minimized,
+    Maximized,
+    Normal,
+}
+
+/// Assert properties of a current window.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct AssertWindowRequest {
+    /// Stable bound-window id returned by `windows.bind`; preferred when asserting a known target.
+    pub bound_id: Option<String>,
+    /// Window selector to evaluate when `bound_id` is not supplied. This is read-only and does not bind.
+    pub selector: Option<WindowSelector>,
+    /// Presence expectation for the target window. `absent` asserts zero matches.
+    pub expect: Option<AssertionExpect>,
+    /// If true, invert the final assertion result after all predicates are evaluated.
+    #[serde(default)]
+    pub negate: bool,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
+    /// If set, assert whether the window is the foreground window.
+    pub foreground: Option<bool>,
+    /// If set, assert minimized/maximized/normal show state.
+    pub state: Option<AssertWindowState>,
+    /// Exact title the window must have.
+    pub title: Option<String>,
+    /// Case-insensitive substring the title must contain.
+    pub title_contains: Option<String>,
+    /// Regular expression the title must match.
+    pub title_regex: Option<String>,
+    /// Exact class name the window must have.
+    pub class_name: Option<String>,
+    /// Case-insensitive substring the class name must contain.
+    pub class_name_contains: Option<String>,
+    /// Regular expression the class name must match.
+    pub class_name_regex: Option<String>,
+    /// Expected left edge in virtual desktop coordinates.
+    pub x: Option<i32>,
+    /// Expected top edge in virtual desktop coordinates.
+    pub y: Option<i32>,
+    /// Expected window width in virtual desktop pixels.
+    pub width: Option<i32>,
+    /// Expected window height in virtual desktop pixels.
+    pub height: Option<i32>,
+    /// Pixel tolerance for x/y/width/height comparisons. Defaults to zero.
+    pub bounds_tolerance: Option<i32>,
+    /// If set, assert whether the window appears responsive/not hung.
+    pub responsive: Option<bool>,
+}
+
+/// Assert properties of a process.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct AssertProcessRequest {
+    /// Target process id (PID). Provide either `pid` or `launch_id`.
+    pub pid: Option<u32>,
+    /// MCP launch id returned by `process.launch`/`app.launch`. Provide either `pid` or `launch_id`.
+    pub launch_id: Option<String>,
+    /// Presence expectation for the process. `absent` asserts the process is no longer running.
+    pub expect: Option<AssertionExpect>,
+    /// If true, invert the final assertion result after all predicates are evaluated.
+    #[serde(default)]
+    pub negate: bool,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
+    /// If set, assert whether the process is currently running.
+    pub running: Option<bool>,
+    /// If set, assert whether the process has exited.
+    pub exited: Option<bool>,
+    /// Expected exit code when available from a tracked launch or process provider.
+    pub exit_code: Option<u32>,
+    /// If set, assert whether any current top-level process window is responsive.
+    pub responsive: Option<bool>,
+    /// Maximum allowed working set in bytes, using `process.metrics`.
+    pub max_working_set_bytes: Option<u64>,
+    /// Maximum allowed process handle count, using `process.metrics`.
+    pub max_handle_count: Option<u32>,
+    /// Maximum allowed GDI object count, using `process.metrics`.
+    pub max_gdi_objects: Option<u32>,
+    /// Maximum allowed USER object count, using `process.metrics`.
+    pub max_user_objects: Option<u32>,
+    /// If set, assert no crash/WER/Event Log error is found since this Unix millisecond marker.
+    pub crash_free_since_unix_ms: Option<u64>,
+}
+
+/// Assert that no native dialog is currently blocking automation.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct AssertNoDialogRequest {
+    /// Maximum depth of the UI Automation tree to scan per dialog.
+    pub max_depth: Option<usize>,
+    /// Upper bound on the number of UIA elements scanned per dialog.
+    pub max_elements: Option<usize>,
+    /// If true, include non-foreground dialog-like windows in the scan. Defaults to false.
+    #[serde(default)]
+    pub include_non_foreground: bool,
+    /// If true, invert the final no-dialog assertion result.
+    #[serde(default)]
+    pub negate: bool,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
+}
+
+/// Assert that a specific native dialog is present.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct AssertDialogRequest {
+    /// Presence expectation for the dialog. `absent` asserts no matching dialog is present.
+    pub expect: Option<AssertionExpect>,
+    /// If true, invert the final dialog assertion result.
+    #[serde(default)]
+    pub negate: bool,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
+    /// Maximum depth of the UI Automation tree to scan per dialog.
+    pub max_depth: Option<usize>,
+    /// Upper bound on the number of UIA elements scanned per dialog.
+    pub max_elements: Option<usize>,
+    /// If true, include non-foreground dialog-like windows in the scan. Defaults to false.
+    #[serde(default)]
+    pub include_non_foreground: bool,
+    /// Exact dialog title to match.
+    pub title: Option<String>,
+    /// Case-insensitive substring the dialog title must contain.
+    pub title_contains: Option<String>,
+    /// Regular expression the dialog title must match.
+    pub title_regex: Option<String>,
+    /// Case-insensitive text fragment expected somewhere in the dialog UIA tree.
+    pub text_contains: Option<String>,
+    /// Button names expected to be present in the dialog UIA tree.
+    #[serde(default)]
+    pub button_names: Vec<String>,
+}
+
+/// Assert a file under the configured filesystem allowlist.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct AssertFileRequest {
+    /// File path to assert. The path must be inside configured filesystem roots.
+    pub path: String,
+    /// Presence expectation for the file. `absent` asserts the path does not exist.
+    pub expect: Option<AssertionExpect>,
+    /// If true, invert the final file assertion result.
+    #[serde(default)]
+    pub negate: bool,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
+    /// Exact UTF-8 file content expected.
+    pub content: Option<String>,
+    /// UTF-8 substring expected in the file.
+    pub content_contains: Option<String>,
+    /// Regular expression expected to match UTF-8 file content.
+    pub content_regex: Option<String>,
+    /// Exact file size expected, in bytes.
+    pub size_bytes: Option<u64>,
+    /// Minimum file size expected, in bytes.
+    pub min_size_bytes: Option<u64>,
+    /// Maximum file size expected, in bytes.
+    pub max_size_bytes: Option<u64>,
+    /// Expected SHA-256 hex digest of the file bytes.
+    pub sha256: Option<String>,
+}
+
+/// Assert a registry value through the read-only registry provider.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct AssertRegistryRequest {
+    /// Registry hive, e.g. HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER.
+    pub hive: winctl::RegistryHive,
+    /// Registry key path within the hive.
+    pub path: String,
+    /// Value name to read. Omit or null to read the key's default value.
+    pub name: Option<String>,
+    /// Presence expectation for the registry value. `absent` asserts the value cannot be read.
+    pub expect: Option<AssertionExpect>,
+    /// If true, invert the final registry assertion result.
+    #[serde(default)]
+    pub negate: bool,
+    /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
+    pub timeout_ms: Option<u64>,
+    /// Delay between polling attempts, in milliseconds, when `timeout_ms` is set.
+    pub poll_interval_ms: Option<u64>,
+    /// Exact registry value data expected, compared as JSON.
+    pub value: Option<serde_json::Value>,
+    /// Expected registry value kind, e.g. `string`, `dword`, or `binary`.
+    pub kind: Option<String>,
+}
+
+/// Assert an image visually matches a baseline.
+#[derive(Debug, Clone, Serialize, Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct AssertVisualMatchRequest {
+    /// Path to the actual/captured image. Provide either `actual_path` or `bound_id`.
+    pub actual_path: Option<String>,
+    /// Stable bound-window id to capture for the actual image when `actual_path` is omitted.
+    pub bound_id: Option<String>,
+    /// Optional UI Automation element reference to crop from a bound-window screenshot before comparison.
+    pub element_ref: Option<String>,
+    /// Optional UI Automation selector to crop the first matching element from a bound-window screenshot before comparison.
+    pub selector: Option<winctl::UiElementSelector>,
+    /// Maximum depth of the UI Automation tree to traverse when resolving an element crop.
+    pub max_depth: Option<usize>,
+    /// Upper bound on the number of elements scanned when resolving an element crop.
+    pub max_elements: Option<usize>,
+    /// Optional crop x coordinate in actual image pixels after any element crop is applied.
+    pub x: Option<u32>,
+    /// Optional crop y coordinate in actual image pixels after any element crop is applied.
+    pub y: Option<u32>,
+    /// Optional crop width in actual image pixels.
+    pub width: Option<u32>,
+    /// Optional crop height in actual image pixels.
+    pub height: Option<u32>,
+    /// Path to the baseline/reference image.
+    pub baseline_path: String,
+    /// Per-channel tolerance (0-255) allowed when comparing pixels.
+    pub tolerance: Option<u8>,
+    /// Maximum number of differing pixels permitted before the assertion fails.
+    pub max_different_pixels: Option<u64>,
+    /// Optional path to write a visual diff image to.
+    pub diff_path: Option<String>,
+    /// If true, invert the final visual-match assertion result.
     #[serde(default)]
     pub negate: bool,
     /// Maximum time to poll for the assertion to pass, in milliseconds. Defaults to one immediate attempt.
@@ -2358,7 +2608,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.element",
-        description = "Assert UI Automation element conditions (`exists`, `enabled`, `name`, `name_contains`) for an element (by `element_ref` or `selector`) on a bound window. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns structured pass/fail for test assertions."
+        description = "Assert rich UI Automation element predicates (presence/absence, enabled/focused, checked/selected/expanded, name/value/role/control type, editable/readonly, offscreen, bounds, count) for an `element_ref` or selector on a revalidated bound window. Preconditions: requires `bound_id`; read-only and no armed session needed. Returns the shared assertion contract; compared ValuePattern text is redacted and assertion misses return `ok:false`."
     )]
     pub async fn assert_element(
         &self,
@@ -2374,7 +2624,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.text_visible",
-        description = "Assert that `text` is visible via the bound window's title/class or UI Automation tree. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns structured pass/fail for test assertions."
+        description = "Assert literal or regex text visibility in a revalidated bound window, optionally scoped to a UI Automation `element_ref` or selector. Preconditions: requires `bound_id`; read-only and no armed session needed. Returns the shared assertion contract with redacted requested text and source metadata; assertion misses return `ok:false` and poll when `timeout_ms` is set."
     )]
     pub async fn assert_text_visible(
         &self,
@@ -2390,7 +2640,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.pixel_color",
-        description = "Sample a pixel at (`x`,`y`) from an `image_path` or a freshly captured `bound_id` screenshot and optionally assert `expected_rgb` within per-channel `tolerance`. If `bound_id` is given the target must first be bound via `windows.bind`. Read-only (no armed session needed). Returns the sampled RGB and pass/fail."
+        description = "Sample a pixel at (`x`,`y`) from an `image_path`, a freshly captured `bound_id` screenshot, or a UIA element-scoped screenshot, then optionally assert `expected_rgb` within per-channel `tolerance`. Preconditions: element scope requires `bound_id`; read-only and no armed session needed. Returns the shared assertion contract with sample scope metadata; failures return `ok:false`."
     )]
     pub async fn assert_pixel_color(
         &self,
@@ -2406,7 +2656,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.window_count",
-        description = "Assert the count of current windows matching a `WindowSelector` against `expected`, `min`, and/or `max`. Read-only; no bound target or armed session needed. Returns the actual count and pass/fail for test assertions."
+        description = "Assert the count or presence/absence of current windows matching a `WindowSelector` against `expected`, `min`, and/or `max`. Preconditions: read-only discovery; no bound target or armed session needed. Returns the shared assertion contract and matching window diagnostics; assertion misses return `ok:false`."
     )]
     pub async fn assert_window_count(
         &self,
@@ -2421,7 +2671,7 @@ impl WinctlMcpServer {
 
     #[tool(
         name = "assert.clipboard",
-        description = "Assert the current clipboard text equals `expected` or contains `contains` (optionally truncated to `max_chars`). Read-only clipboard read; no armed session needed (does not write). Returns the assertion result for tests."
+        description = "Assert the current clipboard text equals `expected` or contains `contains` (optionally truncated to `max_chars`) without returning clipboard contents. Preconditions: read-only clipboard read; no armed session needed and clipboard write policy is not used. Returns the shared assertion contract with text presence/count only; assertion misses return `ok:false`."
     )]
     pub async fn assert_clipboard(
         &self,
@@ -2430,6 +2680,118 @@ impl WinctlMcpServer {
         let request = request.0;
         run_blocking_tool("assert.clipboard", move || {
             tools::assertions::assert_clipboard(request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.window",
+        description = "Assert read-only window predicates for a `bound_id` or `WindowSelector`: presence/absence, foreground, minimized/maximized/normal state, title/class exact/contains/regex, bounds tolerance, and responsiveness. Preconditions: use `bound_id` for strict known targets or a selector for discovery; no armed session needed. Returns the shared assertion contract and matching window metadata; assertion misses return `ok:false` and poll when `timeout_ms` is set."
+    )]
+    pub async fn assert_window(
+        &self,
+        request: Parameters<AssertWindowRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.window", move || {
+            tools::assertions::assert_window(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.process",
+        description = "Assert read-only process predicates for a `pid` or MCP `launch_id`: running/exited, responsiveness via owned windows, process.metrics resource ceilings, and crash-report cleanliness since a marker. Preconditions: no armed session needed; unavailable provider fields are explicit diagnostics, not fake success. Returns the shared assertion contract; assertion misses return `ok:false` and poll when `timeout_ms` is set."
+    )]
+    pub async fn assert_process(
+        &self,
+        request: Parameters<AssertProcessRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.process", move || {
+            tools::assertions::assert_process(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.no_dialog",
+        description = "Assert that no foreground/native dialog or UAC secure desktop is blocking automation, using the existing dialog detector. Preconditions: read-only and no armed session needed. Returns the shared assertion contract with dialog metadata; UAC secure desktop is reported as not automatable rather than clicked."
+    )]
+    pub async fn assert_no_dialog(
+        &self,
+        request: Parameters<AssertNoDialogRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.no_dialog", move || {
+            tools::assertions::assert_no_dialog(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.dialog",
+        description = "Assert a specific native dialog is present or absent by title/text/buttons, reusing dialogs.list/UIA snapshots. Preconditions: read-only and no armed session needed; it never invokes dialog buttons. Returns the shared assertion contract with matching dialog metadata and polls when `timeout_ms` is set."
+    )]
+    pub async fn assert_dialog(
+        &self,
+        request: Parameters<AssertDialogRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.dialog", move || {
+            tools::assertions::assert_dialog(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.file",
+        description = "Assert file presence, UTF-8 content exact/contains/regex, size, and SHA-256 under configured filesystem roots. Preconditions: path must be allowlisted by the same policy as filesystem.read; read-only and no armed session needed. Returns the shared assertion contract without echoing file contents."
+    )]
+    pub async fn assert_file(
+        &self,
+        request: Parameters<AssertFileRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.file", move || {
+            tools::assertions::assert_file(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.registry",
+        description = "Assert a registry value exists/absent or has expected kind/data using the existing read-only registry provider. Preconditions: read-only and no armed session needed; registry mutation policy is not used. Returns the shared assertion contract with value data redacted to kind/match status; provider failures needed by requested predicates fail closed."
+    )]
+    pub async fn assert_registry(
+        &self,
+        request: Parameters<AssertRegistryRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.registry", move || {
+            tools::assertions::assert_registry(&state, request)
+        })
+        .await
+    }
+
+    #[tool(
+        name = "assert.visual_match",
+        description = "Assert that an `actual_path`, freshly captured `bound_id` screenshot, region, or UIA element crop matches `baseline_path` within pixel tolerance, saving a diff artifact through capture.compare_baseline. Preconditions: element crops require `bound_id`; read-only capture/compare and no armed session needed. Returns the shared assertion contract and comparison artifact paths; `negate` asserts visual difference."
+    )]
+    pub async fn assert_visual_match(
+        &self,
+        request: Parameters<AssertVisualMatchRequest>,
+    ) -> Json<serde_json::Value> {
+        let state = self.state.clone();
+        let request = request.0;
+        run_blocking_tool("assert.visual_match", move || {
+            tools::assertions::assert_visual_match(&state, request)
         })
         .await
     }
@@ -5334,9 +5696,16 @@ mod tests {
                 "app.launch",
                 "artifact.export",
                 "assert.clipboard",
+                "assert.dialog",
                 "assert.element",
+                "assert.file",
+                "assert.no_dialog",
                 "assert.pixel_color",
+                "assert.process",
+                "assert.registry",
                 "assert.text_visible",
+                "assert.visual_match",
+                "assert.window",
                 "assert.window_count",
                 "browser.assert",
                 "browser.describe",

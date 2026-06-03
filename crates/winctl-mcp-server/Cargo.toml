@@ -22,6 +22,7 @@ toml.workspace = true
 image.workspace = true
 gif.workspace = true
 regex.workspace = true
+sha2.workspace = true
 include_dir = "0.7"
 winctl = { path = "../winctl" }
 winctl-macro = { path = "../winctl-macro" }

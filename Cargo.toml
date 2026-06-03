@@ -68,6 +68,7 @@ rmcp = { version = "0.5", features = ["server", "transport-io", "transport-worke
 regex = "1"
 roxmltree = "0.20"
 base64 = "0.22"
+sha2 = "0.10"
 image = "0.25"
 gif = "0.14"
 rusqlite = { version = "0.32", features = ["bundled"] }

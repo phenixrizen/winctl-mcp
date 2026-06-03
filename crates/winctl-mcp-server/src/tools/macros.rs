@@ -14,14 +14,18 @@ use winctl_macro::{
 use winctl_memory::{MemoryListRequest, RememberRequest};
 
 use crate::{
-    AppLaunchRequest, AppState, BoundIdRequest, BrowserAssertRequest, BrowserDescribeRequest,
-    BrowserExtractContentRequest, BrowserListRequest, BrowserWaitForNavigationRequest,
-    CaptureCompareBaselineRequest, CaptureOcrRegionRequest, CaptureReadTextRequest,
-    DisplayScreenshotRequest, MacroAbortRequest, MacroDryRunRequest, MacroExportResultRequest,
-    MacroGetRequest, MacroListRequest, MacroManifestRequest, MacroPromoteRequest, MacroRunRequest,
-    MacroRunStepRequest, ProcessDescribeRequest, ProcessKillRequest, UiFindRequest,
-    VideoStartRequest, VideoStopRequest, WaitForStateRequest, WaitForWindowRequest,
-    WindowImageChangeWaitRequest, WindowMoveRequest, WindowResizeRequest, WindowsForProcessRequest,
+    AppLaunchRequest, AppState, AssertClipboardRequest, AssertDialogRequest, AssertElementRequest,
+    AssertFileRequest, AssertNoDialogRequest, AssertPixelColorRequest, AssertProcessRequest,
+    AssertRegistryRequest, AssertTextVisibleRequest, AssertVisualMatchRequest,
+    AssertWindowCountRequest, AssertWindowRequest, BoundIdRequest, BrowserAssertRequest,
+    BrowserDescribeRequest, BrowserExtractContentRequest, BrowserListRequest,
+    BrowserWaitForNavigationRequest, CaptureCompareBaselineRequest, CaptureOcrRegionRequest,
+    CaptureReadTextRequest, DisplayScreenshotRequest, MacroAbortRequest, MacroDryRunRequest,
+    MacroExportResultRequest, MacroGetRequest, MacroListRequest, MacroManifestRequest,
+    MacroPromoteRequest, MacroRunRequest, MacroRunStepRequest, ProcessDescribeRequest,
+    ProcessKillRequest, UiFindRequest, VideoStartRequest, VideoStopRequest, WaitForStateRequest,
+    WaitForWindowRequest, WindowImageChangeWaitRequest, WindowMoveRequest, WindowResizeRequest,
+    WindowsForProcessRequest,
 };
 
 #[derive(Default)]
@@ -876,6 +880,9 @@ fn step_needs_bound_resolution(tool: &str, args: &Value) -> bool {
     }
     match tool {
         "capture.ocr_region" => !args_has_string(args, "image_path"),
+        "assert.pixel_color" => !args_has_string(args, "image_path"),
+        "assert.visual_match" => !args_has_string(args, "actual_path"),
+        "assert.window" => args.get("selector").is_none(),
         "macro.assert_image_checkpoint" => !args_has_string(args, "actual_path"),
         "macro.assert_text_checkpoint" => {
             !args_has_string(args, "actual_text") && !args_has_string(args, "image_path")
@@ -1244,6 +1251,54 @@ fn dispatch_tool(
         "capture.compare_baseline" => Ok(crate::tools::assertions::capture_compare_baseline(
             state,
             parse_args::<CaptureCompareBaselineRequest>(args)?,
+        )),
+        "assert.element" => Ok(crate::tools::assertions::assert_element(
+            state,
+            parse_args::<AssertElementRequest>(args)?,
+        )),
+        "assert.text_visible" => Ok(crate::tools::assertions::assert_text_visible(
+            state,
+            parse_args::<AssertTextVisibleRequest>(args)?,
+        )),
+        "assert.pixel_color" => Ok(crate::tools::assertions::assert_pixel_color(
+            state,
+            parse_args::<AssertPixelColorRequest>(args)?,
+        )),
+        "assert.window_count" => Ok(crate::tools::assertions::assert_window_count(parse_args::<
+            AssertWindowCountRequest,
+        >(
+            args
+        )?)),
+        "assert.clipboard" => Ok(crate::tools::assertions::assert_clipboard(parse_args::<
+            AssertClipboardRequest,
+        >(args)?)),
+        "assert.window" => Ok(crate::tools::assertions::assert_window(
+            state,
+            parse_args::<AssertWindowRequest>(args)?,
+        )),
+        "assert.process" => Ok(crate::tools::assertions::assert_process(
+            state,
+            parse_args::<AssertProcessRequest>(args)?,
+        )),
+        "assert.no_dialog" => Ok(crate::tools::assertions::assert_no_dialog(
+            state,
+            parse_args::<AssertNoDialogRequest>(args)?,
+        )),
+        "assert.dialog" => Ok(crate::tools::assertions::assert_dialog(
+            state,
+            parse_args::<AssertDialogRequest>(args)?,
+        )),
+        "assert.file" => Ok(crate::tools::assertions::assert_file(
+            state,
+            parse_args::<AssertFileRequest>(args)?,
+        )),
+        "assert.registry" => Ok(crate::tools::assertions::assert_registry(
+            state,
+            parse_args::<AssertRegistryRequest>(args)?,
+        )),
+        "assert.visual_match" => Ok(crate::tools::assertions::assert_visual_match(
+            state,
+            parse_args::<AssertVisualMatchRequest>(args)?,
         )),
         "capture.video_start" => Ok(crate::tools::capture::video_start(
             state,
@@ -1965,4 +2020,39 @@ fn policy_denied(code: &str, message: &str) -> serde_json::Value {
             "message": message,
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phase21_assertions_skip_bound_resolution_when_args_are_self_contained() {
+        assert!(!step_needs_bound_resolution(
+            "assert.pixel_color",
+            &serde_json::json!({ "image_path": "actual.ppm", "x": 0, "y": 0 })
+        ));
+        assert!(step_needs_bound_resolution(
+            "assert.pixel_color",
+            &serde_json::json!({ "x": 0, "y": 0 })
+        ));
+
+        assert!(!step_needs_bound_resolution(
+            "assert.visual_match",
+            &serde_json::json!({ "actual_path": "actual.ppm", "baseline_path": "base.ppm" })
+        ));
+        assert!(step_needs_bound_resolution(
+            "assert.visual_match",
+            &serde_json::json!({ "baseline_path": "base.ppm" })
+        ));
+
+        assert!(!step_needs_bound_resolution(
+            "assert.window",
+            &serde_json::json!({ "selector": { "title_contains": "Settings" } })
+        ));
+        assert!(step_needs_bound_resolution(
+            "assert.window",
+            &serde_json::json!({ "title_contains": "Settings" })
+        ));
+    }
 }

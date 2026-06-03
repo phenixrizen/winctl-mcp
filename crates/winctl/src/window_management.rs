@@ -159,6 +159,38 @@ pub fn foreground_diagnostics(
     ))
 }
 
+pub fn window_responsive(window: &WindowInfo) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::IsHungAppWindow;
+
+        Some(!unsafe { IsHungAppWindow(HWND(window.hwnd as *mut _)) }.as_bool())
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        None
+    }
+}
+
+pub fn window_maximized(window: &WindowInfo) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
+
+        Some(unsafe { IsZoomed(HWND(window.hwnd as *mut _)) }.as_bool())
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        None
+    }
+}
+
 fn show_window(
     window: &WindowInfo,
     action: WindowManagementAction,
