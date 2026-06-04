@@ -12,4 +12,6 @@ Description: Capture a screenshot of a bound window and return exact virtual des
 
 ## Notes
 
-The bound window is revalidated before capture. Screenshot responses include virtual desktop coordinates for the captured region.
+The bound window is revalidated before capture. Screenshot responses include virtual desktop coordinates for the captured region plus `provider` metadata.
+
+Windows Graphics Capture is the primary provider. When `WINCTL_CAPTURE_DXGI_FALLBACK=1` is set and Windows Graphics Capture fails, the server may use a visible-window GDI screen blit against the revalidated window rectangle. That fallback is opt-in and reflected with `provider: "gdi_screen_blt"` plus `fallback_from`.

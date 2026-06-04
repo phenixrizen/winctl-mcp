@@ -21,3 +21,5 @@ Description: Start recording a bound window or display to an animated GIF replay
 Window recordings revalidate the original HWND, PID, and executable identity before each frame. Display recordings capture the selected monitor. Only one video recording can be active per server session.
 
 The artifact is written under the capture directory in `videos/` as a GIF, with source PNG frames retained in a sibling frames directory for diagnostics. Source frames are captured at native size; the GIF is scaled to the configured frame cap so high-DPI or ultrawide displays do not produce oversized replay artifacts.
+
+Frame capture uses the screenshot providers. Windows Graphics Capture is primary; `WINCTL_CAPTURE_DXGI_FALLBACK=1` opts into fallback providers if the primary provider fails: DXGI Desktop Duplication for display capture and visible-window GDI screen blit for window capture.

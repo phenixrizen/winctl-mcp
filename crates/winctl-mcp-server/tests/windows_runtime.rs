@@ -544,6 +544,32 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
     assert_ok("assert.no_dialog", &assert_no_dialog);
     assert_eq!(assert_no_dialog["passed"], true);
 
+    let screenshot = harness
+        .call_tool(
+            "capture.screenshot_window",
+            serde_json::json!({
+                "bound_id": bound_id
+            }),
+        )
+        .await;
+    assert_ok("capture.screenshot_window", &screenshot);
+    let screenshot_provider = screenshot["screenshot"]["provider"]
+        .as_str()
+        .expect("screenshot should report capture provider");
+    assert!(
+        matches!(
+            screenshot_provider,
+            "windows_graphics_capture" | "dxgi_duplication" | "gdi_screen_blt"
+        ),
+        "unexpected screenshot provider: {screenshot:#}"
+    );
+    if matches!(screenshot_provider, "dxgi_duplication" | "gdi_screen_blt") {
+        assert!(
+            screenshot["screenshot"]["fallback_from"].is_string(),
+            "fallback capture should report the original provider failure: {screenshot:#}"
+        );
+    }
+
     let ocr = harness
         .call_tool(
             "capture.ocr_region",
@@ -889,6 +915,13 @@ async fn windows_video_capture_records_display_artifact() {
             >= 2,
         "video recording should capture multiple frames: {stop:#}"
     );
+    let providers = stop["recording"]["capture_providers"]
+        .as_array()
+        .expect("video summary should report capture providers");
+    assert!(
+        providers.iter().any(|value| value.as_str().is_some()),
+        "video summary should include at least one provider: {stop:#}"
+    );
     assert_eq!(stop["recording"]["format"], "gif");
     assert!(
         stop["recording"]["encoded_width"]
@@ -1218,6 +1251,7 @@ impl McpHarness {
             .arg("--log-file")
             .arg(log_path)
             .env("RUST_LOG", "info")
+            .env("WINCTL_CAPTURE_DXGI_FALLBACK", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
