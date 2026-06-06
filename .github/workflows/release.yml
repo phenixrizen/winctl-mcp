@@ -39,7 +39,7 @@ jobs:
       base_version: ${{ steps.version.outputs.base_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -57,7 +57,7 @@ jobs:
     environment: release
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -69,7 +69,7 @@ jobs:
           rustup target add $env:WINDOWS_TARGET
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -178,7 +178,7 @@ jobs:
           Get-Content $checksumPath
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: winctl-mcp-${{ needs.version.outputs.version }}-windows
           path: |
@@ -188,7 +188,7 @@ jobs:
           if-no-files-found: error
 
       - name: Generate provenance attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/*.zip

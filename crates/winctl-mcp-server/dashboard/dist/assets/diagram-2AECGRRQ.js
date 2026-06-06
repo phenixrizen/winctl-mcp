@@ -1,17 +1,17 @@
-import{b1 as k,a1 as E,a6 as R,b4 as I,a2 as F,b2 as _,b as l,b0 as D,t as z,s as y,a3 as b,S as G,aE as P,af as W,E as B}from"./mermaid.core.js";import{p as V}from"./chunk-4BX2VUAB.js";import{p as H}from"./wardley-L42UT6IY.js";import"./dashboard.js";var m={showLegend:!0,ticks:5,max:null,min:0,graticule:"circle"},C={axes:[],curves:[],options:m},x=structuredClone(C),j=G.radar,N=l(()=>y({...j,...b().radar}),"getConfig"),w=l(()=>x.axes,"getAxes"),U=l(()=>x.curves,"getCurves"),X=l(()=>x.options,"getOptions"),Y=l(a=>{x.axes=a.map(t=>({name:t.name,label:t.label??t.name}))},"setAxes"),Z=l(a=>{x.curves=a.map(t=>({name:t.name,label:t.label??t.name,entries:q(t.entries)}))},"setCurves"),q=l(a=>{if(a[0].axis==null)return a.map(e=>e.value);const t=w();if(t.length===0)throw new Error("Axes must be populated before curves for reference entries");return t.map(e=>{const r=a.find(s=>{var o;return((o=s.axis)==null?void 0:o.$refText)===e.name});if(r===void 0)throw new Error("Missing entry for axis "+e.label);return r.value})},"computeCurveEntries"),J=l(a=>{var e,r,s,o,i;const t=a.reduce((n,c)=>(n[c.name]=c,n),{});x.options={showLegend:((e=t.showLegend)==null?void 0:e.value)??m.showLegend,ticks:((r=t.ticks)==null?void 0:r.value)??m.ticks,max:((s=t.max)==null?void 0:s.value)??m.max,min:((o=t.min)==null?void 0:o.value)??m.min,graticule:((i=t.graticule)==null?void 0:i.value)??m.graticule}},"setOptions"),K=l(()=>{z(),x=structuredClone(C)},"clear"),$={getAxes:w,getCurves:U,getOptions:X,setAxes:Y,setCurves:Z,setOptions:J,getConfig:N,clear:K,setAccTitle:_,getAccTitle:F,setDiagramTitle:I,getDiagramTitle:R,getAccDescription:E,setAccDescription:k},Q=l(a=>{V(a,$);const{axes:t,curves:e,options:r}=a;$.setAxes(t),$.setCurves(e),$.setOptions(r)},"populate"),tt={parse:l(async a=>{const t=await H("radar",a);P.debug(t),Q(t)},"parse")},et=l((a,t,e,r)=>{const s=r.db,o=s.getAxes(),i=s.getCurves(),n=s.getOptions(),c=s.getConfig(),d=s.getDiagramTitle(),p=D(t),u=at(p,c),g=n.max??Math.max(...i.map(f=>Math.max(...f.entries))),h=n.min,v=Math.min(c.width,c.height)/2;rt(u,o,v,n.ticks,n.graticule),st(u,o,v,c),M(u,o,i,h,g,n.graticule,c),T(u,i,n.showLegend,c),u.append("text").attr("class","radarTitle").text(d).attr("x",0).attr("y",-c.height/2-c.marginTop)},"draw"),at=l((a,t)=>{const e=t.width+t.marginLeft+t.marginRight,r=t.height+t.marginTop+t.marginBottom,s={x:t.marginLeft+t.width/2,y:t.marginTop+t.height/2};return B(a,r,e,t.useMaxWidth??!0),a.attr("viewBox",`0 0 ${e} ${r}`),a.append("g").attr("transform",`translate(${s.x}, ${s.y})`)},"drawFrame"),rt=l((a,t,e,r,s)=>{if(s==="circle")for(let o=0;o<r;o++){const i=e*(o+1)/r;a.append("circle").attr("r",i).attr("class","radarGraticule")}else if(s==="polygon"){const o=t.length;for(let i=0;i<r;i++){const n=e*(i+1)/r,c=t.map((d,p)=>{const u=2*p*Math.PI/o-Math.PI/2,g=n*Math.cos(u),h=n*Math.sin(u);return`${g},${h}`}).join(" ");a.append("polygon").attr("points",c).attr("class","radarGraticule")}}},"drawGraticule"),st=l((a,t,e,r)=>{const s=t.length;for(let o=0;o<s;o++){const i=t[o].label,n=2*o*Math.PI/s-Math.PI/2;a.append("line").attr("x1",0).attr("y1",0).attr("x2",e*r.axisScaleFactor*Math.cos(n)).attr("y2",e*r.axisScaleFactor*Math.sin(n)).attr("class","radarAxisLine"),a.append("text").text(i).attr("x",e*r.axisLabelFactor*Math.cos(n)).attr("y",e*r.axisLabelFactor*Math.sin(n)).attr("class","radarAxisLabel")}},"drawAxes");function M(a,t,e,r,s,o,i){const n=t.length,c=Math.min(i.width,i.height)/2;e.forEach((d,p)=>{if(d.entries.length!==n)return;const u=d.entries.map((g,h)=>{const v=2*Math.PI*h/n-Math.PI/2,f=A(g,r,s,c),S=f*Math.cos(v),O=f*Math.sin(v);return{x:S,y:O}});o==="circle"?a.append("path").attr("d",L(u,i.curveTension)).attr("class",`radarCurve-${p}`):o==="polygon"&&a.append("polygon").attr("points",u.map(g=>`${g.x},${g.y}`).join(" ")).attr("class",`radarCurve-${p}`)})}l(M,"drawCurves");function A(a,t,e,r){const s=Math.min(Math.max(a,t),e);return r*(s-t)/(e-t)}l(A,"relativeRadius");function L(a,t){const e=a.length;let r=`M${a[0].x},${a[0].y}`;for(let s=0;s<e;s++){const o=a[(s-1+e)%e],i=a[s],n=a[(s+1)%e],c=a[(s+2)%e],d={x:i.x+(n.x-o.x)*t,y:i.y+(n.y-o.y)*t},p={x:n.x-(c.x-i.x)*t,y:n.y-(c.y-i.y)*t};r+=` C${d.x},${d.y} ${p.x},${p.y} ${n.x},${n.y}`}return`${r} Z`}l(L,"closedRoundCurve");function T(a,t,e,r){if(!e)return;const s=(r.width/2+r.marginRight)*3/4,o=-(r.height/2+r.marginTop)*3/4,i=20;t.forEach((n,c)=>{const d=a.append("g").attr("transform",`translate(${s}, ${o+c*i})`);d.append("rect").attr("width",12).attr("height",12).attr("class",`radarLegendBox-${c}`),d.append("text").attr("x",16).attr("y",0).attr("class","radarLegendText").text(n.label)})}l(T,"drawLegend");var nt={draw:et},ot=l((a,t)=>{let e="";for(let r=0;r<a.THEME_COLOR_LIMIT;r++){const s=a[`cScale${r}`];e+=`
+import{t as e}from"./mermaid-parser.core.js";import{g as t,h as n}from"./src.js";import{D as r,H as i,K as a,U as o,a as s,b as c,c as l,f as u,v as d,w as f,y as p}from"./chunk-CSCIHK7Q.js";import{i as m}from"./chunk-5ZQYHXKU.js";import{t as h}from"./chunk-WU5MYG2G.js";import{t as g}from"./chunk-4BX2VUAB.js";var _={showLegend:!0,ticks:5,max:null,min:0,graticule:`circle`},v={axes:[],curves:[],options:_},y=structuredClone(v),b=u.radar,x=n(()=>m({...b,...c().radar}),`getConfig`),S=n(()=>y.axes,`getAxes`),C=n(()=>y.curves,`getCurves`),w=n(()=>y.options,`getOptions`),T=n(e=>{y.axes=e.map(e=>({name:e.name,label:e.label??e.name}))},`setAxes`),E=n(e=>{y.curves=e.map(e=>({name:e.name,label:e.label??e.name,entries:D(e.entries)}))},`setCurves`),D=n(e=>{if(e[0].axis==null)return e.map(e=>e.value);let t=S();if(t.length===0)throw Error(`Axes must be populated before curves for reference entries`);return t.map(t=>{let n=e.find(e=>e.axis?.$refText===t.name);if(n===void 0)throw Error(`Missing entry for axis `+t.label);return n.value})},`computeCurveEntries`),O={getAxes:S,getCurves:C,getOptions:w,setAxes:T,setCurves:E,setOptions:n(e=>{let t=e.reduce((e,t)=>(e[t.name]=t,e),{});y.options={showLegend:t.showLegend?.value??_.showLegend,ticks:t.ticks?.value??_.ticks,max:t.max?.value??_.max,min:t.min?.value??_.min,graticule:t.graticule?.value??_.graticule}},`setOptions`),getConfig:x,clear:n(()=>{s(),y=structuredClone(v)},`clear`),setAccTitle:o,getAccTitle:p,setDiagramTitle:a,getDiagramTitle:f,getAccDescription:d,setAccDescription:i},k=n(e=>{g(e,O);let{axes:t,curves:n,options:r}=e;O.setAxes(t),O.setCurves(n),O.setOptions(r)},`populate`),A={parse:n(async n=>{let r=await e(`radar`,n);t.debug(r),k(r)},`parse`)},j=n((e,t,n,r)=>{let i=r.db,a=i.getAxes(),o=i.getCurves(),s=i.getOptions(),c=i.getConfig(),l=i.getDiagramTitle(),u=M(h(t),c),d=s.max??Math.max(...o.map(e=>Math.max(...e.entries))),f=s.min,p=Math.min(c.width,c.height)/2;N(u,a,p,s.ticks,s.graticule),P(u,a,p,c),F(u,a,o,f,d,s.graticule,c),R(u,o,s.showLegend,c),u.append(`text`).attr(`class`,`radarTitle`).text(l).attr(`x`,0).attr(`y`,-c.height/2-c.marginTop)},`draw`),M=n((e,t)=>{let n=t.width+t.marginLeft+t.marginRight,r=t.height+t.marginTop+t.marginBottom,i={x:t.marginLeft+t.width/2,y:t.marginTop+t.height/2};return l(e,r,n,t.useMaxWidth??!0),e.attr(`viewBox`,`0 0 ${n} ${r}`),e.append(`g`).attr(`transform`,`translate(${i.x}, ${i.y})`)},`drawFrame`),N=n((e,t,n,r,i)=>{if(i===`circle`)for(let t=0;t<r;t++){let i=n*(t+1)/r;e.append(`circle`).attr(`r`,i).attr(`class`,`radarGraticule`)}else if(i===`polygon`){let i=t.length;for(let a=0;a<r;a++){let o=n*(a+1)/r,s=t.map((e,t)=>{let n=2*t*Math.PI/i-Math.PI/2;return`${o*Math.cos(n)},${o*Math.sin(n)}`}).join(` `);e.append(`polygon`).attr(`points`,s).attr(`class`,`radarGraticule`)}}},`drawGraticule`),P=n((e,t,n,r)=>{let i=t.length;for(let a=0;a<i;a++){let o=t[a].label,s=2*a*Math.PI/i-Math.PI/2;e.append(`line`).attr(`x1`,0).attr(`y1`,0).attr(`x2`,n*r.axisScaleFactor*Math.cos(s)).attr(`y2`,n*r.axisScaleFactor*Math.sin(s)).attr(`class`,`radarAxisLine`),e.append(`text`).text(o).attr(`x`,n*r.axisLabelFactor*Math.cos(s)).attr(`y`,n*r.axisLabelFactor*Math.sin(s)).attr(`class`,`radarAxisLabel`)}},`drawAxes`);function F(e,t,n,r,i,a,o){let s=t.length,c=Math.min(o.width,o.height)/2;n.forEach((t,n)=>{if(t.entries.length!==s)return;let l=t.entries.map((e,t)=>{let n=2*Math.PI*t/s-Math.PI/2,a=I(e,r,i,c);return{x:a*Math.cos(n),y:a*Math.sin(n)}});a===`circle`?e.append(`path`).attr(`d`,L(l,o.curveTension)).attr(`class`,`radarCurve-${n}`):a===`polygon`&&e.append(`polygon`).attr(`points`,l.map(e=>`${e.x},${e.y}`).join(` `)).attr(`class`,`radarCurve-${n}`)})}n(F,`drawCurves`);function I(e,t,n,r){return r*(Math.min(Math.max(e,t),n)-t)/(n-t)}n(I,`relativeRadius`);function L(e,t){let n=e.length,r=`M${e[0].x},${e[0].y}`;for(let i=0;i<n;i++){let a=e[(i-1+n)%n],o=e[i],s=e[(i+1)%n],c=e[(i+2)%n],l={x:o.x+(s.x-a.x)*t,y:o.y+(s.y-a.y)*t},u={x:s.x-(c.x-o.x)*t,y:s.y-(c.y-o.y)*t};r+=` C${l.x},${l.y} ${u.x},${u.y} ${s.x},${s.y}`}return`${r} Z`}n(L,`closedRoundCurve`);function R(e,t,n,r){if(!n)return;let i=(r.width/2+r.marginRight)*3/4,a=-(r.height/2+r.marginTop)*3/4;t.forEach((t,n)=>{let r=e.append(`g`).attr(`transform`,`translate(${i}, ${a+n*20})`);r.append(`rect`).attr(`width`,12).attr(`height`,12).attr(`class`,`radarLegendBox-${n}`),r.append(`text`).attr(`x`,16).attr(`y`,0).attr(`class`,`radarLegendText`).text(t.label)})}n(R,`drawLegend`);var z={draw:j},B=n((e,t)=>{let n=``;for(let r=0;r<e.THEME_COLOR_LIMIT;r++){let i=e[`cScale${r}`];n+=`
 		.radarCurve-${r} {
-			color: ${s};
-			fill: ${s};
+			color: ${i};
+			fill: ${i};
 			fill-opacity: ${t.curveOpacity};
-			stroke: ${s};
+			stroke: ${i};
 			stroke-width: ${t.curveStrokeWidth};
 		}
 		.radarLegendBox-${r} {
-			fill: ${s};
+			fill: ${i};
 			fill-opacity: ${t.curveOpacity};
-			stroke: ${s};
+			stroke: ${i};
 		}
-		`}return e},"genIndexStyles"),it=l(a=>{const t=W(),e=b(),r=y(t,e.themeVariables),s=y(r.radar,a);return{themeVariables:r,radarOptions:s}},"buildRadarStyleOptions"),lt=l(({radar:a}={})=>{const{themeVariables:t,radarOptions:e}=it(a);return`
+		`}return n},`genIndexStyles`),V=n(e=>{let t=m(r(),c().themeVariables);return{themeVariables:t,radarOptions:m(t.radar,e)}},`buildRadarStyleOptions`),H={parser:A,db:O,renderer:z,styles:n(({radar:e}={})=>{let{themeVariables:t,radarOptions:n}=V(e);return`
 	.radarTitle {
 		font-size: ${t.fontSize};
 		color: ${t.titleColor};
@@ -19,25 +19,25 @@ import{b1 as k,a1 as E,a6 as R,b4 as I,a2 as F,b2 as _,b as l,b0 as D,t as z,s a
 		text-anchor: middle;
 	}
 	.radarAxisLine {
-		stroke: ${e.axisColor};
-		stroke-width: ${e.axisStrokeWidth};
+		stroke: ${n.axisColor};
+		stroke-width: ${n.axisStrokeWidth};
 	}
 	.radarAxisLabel {
 		dominant-baseline: middle;
 		text-anchor: middle;
-		font-size: ${e.axisLabelFontSize}px;
-		color: ${e.axisColor};
+		font-size: ${n.axisLabelFontSize}px;
+		color: ${n.axisColor};
 	}
 	.radarGraticule {
-		fill: ${e.graticuleColor};
-		fill-opacity: ${e.graticuleOpacity};
-		stroke: ${e.graticuleColor};
-		stroke-width: ${e.graticuleStrokeWidth};
+		fill: ${n.graticuleColor};
+		fill-opacity: ${n.graticuleOpacity};
+		stroke: ${n.graticuleColor};
+		stroke-width: ${n.graticuleStrokeWidth};
 	}
 	.radarLegendText {
 		text-anchor: start;
-		font-size: ${e.legendFontSize}px;
+		font-size: ${n.legendFontSize}px;
 		dominant-baseline: hanging;
 	}
-	${ot(t,e)}
-	`},"styles"),gt={parser:tt,db:$,renderer:nt,styles:lt};export{gt as diagram};
+	${B(t,n)}
+	`},`styles`)};export{H as diagram};

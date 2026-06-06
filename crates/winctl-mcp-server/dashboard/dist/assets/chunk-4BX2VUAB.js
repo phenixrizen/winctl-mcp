@@ -1,1 +1,1 @@
-import{b as l}from"./mermaid.core.js";function m(e,c){var i,t,o;e.accDescr&&((i=c.setAccDescription)==null||i.call(c,e.accDescr)),e.accTitle&&((t=c.setAccTitle)==null||t.call(c,e.accTitle)),e.title&&((o=c.setDiagramTitle)==null||o.call(c,e.title))}l(m,"populateCommonDb");export{m as p};
+import{h as e}from"./src.js";function t(e,t){e.accDescr&&t.setAccDescription?.(e.accDescr),e.accTitle&&t.setAccTitle?.(e.accTitle),e.title&&t.setDiagramTitle?.(e.title)}e(t,`populateCommonDb`);export{t};

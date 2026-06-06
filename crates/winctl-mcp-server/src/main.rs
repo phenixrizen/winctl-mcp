@@ -22,13 +22,10 @@ use axum::routing::{get, post};
 use axum::{Json as AxumJson, Router};
 use rmcp::schemars;
 use rmcp::{
-    handler::server::{
-        router::tool::ToolRouter,
-        tool::{Parameters, ToolCallContext},
-    },
+    handler::server::{router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters},
     model::{
-        CallToolRequestParam, CallToolResult, InitializeRequestParam, InitializeResult,
-        ListToolsResult, PaginatedRequestParam, ServerCapabilities, ServerInfo,
+        CallToolRequestParams, CallToolResult, InitializeRequestParams, InitializeResult,
+        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     tool, tool_router,
@@ -47,6 +44,31 @@ use winctl::{
     TypeTextRequest, WindowBindError, WindowControlError, WindowControlErrorCode, WindowIdentity,
     WindowInfo, WindowSelector,
 };
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+struct ToolJsonObject(serde_json::Value);
+
+impl schemars::JsonSchema for ToolJsonObject {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ToolJsonObject".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": true
+        })
+        .try_into()
+        .expect("static object schema is valid")
+    }
+}
+
+type ToolJson = Json<ToolJsonObject>;
+
+fn tool_json(value: serde_json::Value) -> ToolJson {
+    Json(ToolJsonObject(value))
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -1862,18 +1884,18 @@ impl WinctlMcpServer {
         name = "server.ping",
         description = "Return a minimal health response without touching Win32 APIs. Read-only; no bound target or armed session needed. Returns `{ok, pong}` to confirm the server is reachable; use it as a liveness probe before other calls."
     )]
-    pub async fn server_ping(&self) -> Json<serde_json::Value> {
+    pub async fn server_ping(&self) -> ToolJson {
         tracing::info!("server.ping requested");
-        Json(serde_json::json!({"ok": true, "pong": true}))
+        tool_json(serde_json::json!({"ok": true, "pong": true}))
     }
 
     #[tool(
         name = "server.config",
         description = "Return effective runtime configuration and security-policy diagnostics: capture paths, filesystem roots, mutation policy, network policy, memory settings, macro execution policy, and embedding metadata. Read-only; no bound target or armed session needed. Call after startup to confirm which mutation gates (clipboard/filesystem/registry) and roots are enabled before attempting gated operations."
     )]
-    pub async fn server_config(&self) -> Json<serde_json::Value> {
+    pub async fn server_config(&self) -> ToolJson {
         tracing::info!("server.config requested");
-        Json(serde_json::json!({
+        tool_json(serde_json::json!({
             "ok": true,
             "capture_dir": self.state.capture_dir.as_ref(),
             "policy": self.state.policy.as_ref(),
@@ -1889,7 +1911,7 @@ impl WinctlMcpServer {
         name = "control.state",
         description = "Return the desktop-control gate state (idle, armed, active, blocked, or revoked), active target identity, consent decision, recent in-memory control events, and durable audit-log entries. Read-only; no bound target or armed session needed. Use it to check whether control is armed before calling gated input/window/mutation tools."
     )]
-    pub async fn control_state(&self) -> Json<serde_json::Value> {
+    pub async fn control_state(&self) -> ToolJson {
         let state = self.state.clone();
         run_blocking_tool("control.state", move || {
             tools::control::control_state(&state)
@@ -1901,10 +1923,7 @@ impl WinctlMcpServer {
         name = "control.arm",
         description = "Arm the desktop-control gate for a session or bound target so subsequent control-gated tools (input.*, uia action tools, windows.focus/close, process.kill, registry/filesystem/clipboard mutation, macro.run, test.run) are permitted; pass an optional `bound_id`, `allow_for_ms`, and audit `reason`. This is the precondition every gated tool checks; arming clears emergency-stop state and records an auditable event. Itself not gated."
     )]
-    pub async fn control_arm(
-        &self,
-        request: Parameters<ControlArmRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn control_arm(&self, request: Parameters<ControlArmRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("control.arm", move || {
@@ -1917,10 +1936,7 @@ impl WinctlMcpServer {
         name = "control.consent",
         description = "Record an `allow_once`, `allow_session`, `deny`, or `revoke_session` consent decision for desktop-control actions, optionally scoped to a `session_id` or `bound_id`. Decisions are logged and surfaced through `control.state` for dashboard/tray display; use alongside `control.arm` to grant or withdraw control. Itself not gated."
     )]
-    pub async fn control_consent(
-        &self,
-        request: Parameters<ControlConsentRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn control_consent(&self, request: Parameters<ControlConsentRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("control.consent", move || {
@@ -1933,10 +1949,7 @@ impl WinctlMcpServer {
         name = "control.notify",
         description = "Record a pending desktop-control notification event (tool name, optional `bound_id`, `action_kind`, cancelable `countdown_ms`) for tray or dashboard display before a control action runs. The event is recorded even when no native toast provider is enabled. Read-only side effect; not gated."
     )]
-    pub async fn control_notify(
-        &self,
-        request: Parameters<ControlNotifyRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn control_notify(&self, request: Parameters<ControlNotifyRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("control.notify", move || {
@@ -1949,10 +1962,7 @@ impl WinctlMcpServer {
         name = "control.revoke",
         description = "Emergency-stop desktop control: fail-closed all sensitive control tools until rearmed. After this, gated tools return `control_consent_required` until `control.arm`/`control.consent` is called again. Itself not gated; use as the abort path."
     )]
-    pub async fn control_revoke(
-        &self,
-        request: Parameters<ControlRevokeRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn control_revoke(&self, request: Parameters<ControlRevokeRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("control.revoke", move || {
@@ -1968,7 +1978,7 @@ impl WinctlMcpServer {
     pub async fn control_emergency_stop(
         &self,
         request: Parameters<ControlRevokeRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("control.emergency_stop", move || {
@@ -1984,7 +1994,7 @@ impl WinctlMcpServer {
     pub async fn memory_remember(
         &self,
         request: Parameters<winctl_memory::RememberRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("memory.remember", move || {
@@ -2000,7 +2010,7 @@ impl WinctlMcpServer {
     pub async fn memory_search(
         &self,
         request: Parameters<winctl_memory::MemorySearchRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("memory.search", move || {
@@ -2016,7 +2026,7 @@ impl WinctlMcpServer {
     pub async fn memory_get(
         &self,
         request: Parameters<winctl_memory::MemoryIdRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("memory.get", move || {
@@ -2032,7 +2042,7 @@ impl WinctlMcpServer {
     pub async fn memory_update(
         &self,
         request: Parameters<winctl_memory::MemoryUpdateRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("memory.update", move || {
@@ -2048,7 +2058,7 @@ impl WinctlMcpServer {
     pub async fn memory_delete(
         &self,
         request: Parameters<winctl_memory::MemoryIdRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("memory.delete", move || {
@@ -2064,7 +2074,7 @@ impl WinctlMcpServer {
     pub async fn memory_list(
         &self,
         request: Parameters<winctl_memory::MemoryListRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("memory.list", move || {
@@ -2077,7 +2087,7 @@ impl WinctlMcpServer {
         name = "memory.reindex",
         description = "Rebuild the FTS5 and sqlite-vec indexes for the local memory database. No inputs. Use after manual database inspection or migration recovery; not gated."
     )]
-    pub async fn memory_reindex(&self) -> Json<serde_json::Value> {
+    pub async fn memory_reindex(&self) -> ToolJson {
         let state = self.state.clone();
         run_blocking_tool("memory.reindex", move || {
             tools::memory::memory_reindex(&state)
@@ -2089,10 +2099,7 @@ impl WinctlMcpServer {
         name = "secret.set",
         description = "Store or replace one encrypted secret by `name`, encrypting `value` immediately with the Windows current-user DPAPI provider. Preconditions: memory mutation policy must allow writes and the server must be running on Windows for DPAPI. Returns metadata only; never returns plaintext or ciphertext. Fails with a policy/provider error rather than writing an unsafe fallback."
     )]
-    pub async fn secret_set(
-        &self,
-        request: Parameters<SecretSetRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn secret_set(&self, request: Parameters<SecretSetRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("secret.set", move || {
@@ -2105,7 +2112,7 @@ impl WinctlMcpServer {
         name = "secret.list",
         description = "List encrypted secret metadata: names, descriptions, tags, provider, timestamps, and use counters only. Read-only; no desktop control or armed session needed. There is intentionally no `secret.get`; plaintext is decrypted only by the server-internal macro replay resolver."
     )]
-    pub async fn secret_list(&self) -> Json<serde_json::Value> {
+    pub async fn secret_list(&self) -> ToolJson {
         let state = self.state.clone();
         run_blocking_tool("secret.list", move || tools::secrets::secret_list(&state)).await
     }
@@ -2114,10 +2121,7 @@ impl WinctlMcpServer {
         name = "secret.delete",
         description = "Delete one encrypted secret by `name`. Preconditions: memory mutation policy must allow writes. Returns whether a row was removed and never exposes the secret value. Fails with policy or storage diagnostics."
     )]
-    pub async fn secret_delete(
-        &self,
-        request: Parameters<SecretDeleteRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn secret_delete(&self, request: Parameters<SecretDeleteRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("secret.delete", move || {
@@ -2130,10 +2134,7 @@ impl WinctlMcpServer {
         name = "macro.validate",
         description = "Validate a `winctl.macro.v1` manifest: schema version, tool names, target identity requirements, and coordinate-fallback metadata, without running anything. Read-only; not gated. Returns structured validation errors; run before `macro.dry_run`/`macro.run` to catch problems early."
     )]
-    pub async fn macro_validate(
-        &self,
-        request: Parameters<MacroManifestRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn macro_validate(&self, request: Parameters<MacroManifestRequest>) -> ToolJson {
         let request = request.0;
         run_blocking_tool("macro.validate", move || {
             tools::macros::macro_validate(request)
@@ -2145,10 +2146,7 @@ impl WinctlMcpServer {
         name = "macro.dry_run",
         description = "Build a dry-run execution plan for a macro manifest (passed inline as `manifest` or loaded from a `memory_id`) without performing any mutating UI action. Read-only; not gated. Returns the resolved per-step plan so you can preview ordering and targets before `macro.run`."
     )]
-    pub async fn macro_dry_run(
-        &self,
-        request: Parameters<MacroDryRunRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn macro_dry_run(&self, request: Parameters<MacroDryRunRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.dry_run", move || {
@@ -2161,7 +2159,7 @@ impl WinctlMcpServer {
         name = "macro.run",
         description = "Execute a macro manifest (inline `manifest` or `memory_id`) through the underlying MCP tools, revalidating each target identity before every control action; optional `max_steps` and run `video` capture. Requires an armed control session (`control.arm`); fails closed otherwise. Returns a `run_id` — fetch the structured result and artifacts with `macro.export_result`."
     )]
-    pub async fn macro_run(&self, request: Parameters<MacroRunRequest>) -> Json<serde_json::Value> {
+    pub async fn macro_run(&self, request: Parameters<MacroRunRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.run", move || {
@@ -2181,10 +2179,7 @@ impl WinctlMcpServer {
         name = "macro.run_step",
         description = "Execute a single macro step by `step_id` for stepwise debugging, with optional `context_json` carrying values such as `launch_id`, `pid`, and `bound_id`. Requires an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated before any control action."
     )]
-    pub async fn macro_run_step(
-        &self,
-        request: Parameters<MacroRunStepRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn macro_run_step(&self, request: Parameters<MacroRunStepRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.run_step", move || {
@@ -2204,10 +2199,7 @@ impl WinctlMcpServer {
         name = "macro.type_secret",
         description = "Resolve a named encrypted `secret_ref` server-side and type it into a revalidated `bound_id` via SendInput without returning plaintext, ciphertext, or typed length. Preconditions: the secret must exist in the DPAPI vault and desktop control must be armed (`control.arm`). Returns only `{ok, bound_id, typed_secret, replay}` on success; failures report missing secret, provider, control-gate, or target identity diagnostics."
     )]
-    pub async fn macro_type_secret(
-        &self,
-        request: Parameters<MacroTypeSecretRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn macro_type_secret(&self, request: Parameters<MacroTypeSecretRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -2228,10 +2220,7 @@ impl WinctlMcpServer {
         name = "macro.abort",
         description = "Request a safe abort of an active macro run identified by `run_id` (from `macro.run`). Read-only control signal; not itself gated. The run stops at the next safe step boundary; partial results remain retrievable via `macro.export_result`."
     )]
-    pub async fn macro_abort(
-        &self,
-        request: Parameters<MacroAbortRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn macro_abort(&self, request: Parameters<MacroAbortRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.abort", move || {
@@ -2244,10 +2233,7 @@ impl WinctlMcpServer {
         name = "macro.list",
         description = "List session-promoted macros and memory-backed macro items, with optional `kind`, `tags`, and `limit` filters. Read-only; not gated. Returns IDs usable with `macro.get`."
     )]
-    pub async fn macro_list(
-        &self,
-        request: Parameters<MacroListRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn macro_list(&self, request: Parameters<MacroListRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.list", move || {
@@ -2260,7 +2246,7 @@ impl WinctlMcpServer {
         name = "macro.get",
         description = "Get a promoted macro manifest by `id` (session macro ID or memory item ID, e.g. from `macro.list`). Read-only; not gated. Returns the full `winctl.macro.v1` manifest, ready to pass to `macro.dry_run`/`macro.run`."
     )]
-    pub async fn macro_get(&self, request: Parameters<MacroGetRequest>) -> Json<serde_json::Value> {
+    pub async fn macro_get(&self, request: Parameters<MacroGetRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.get", move || {
@@ -2273,10 +2259,7 @@ impl WinctlMcpServer {
         name = "macro.promote",
         description = "Promote a valid `winctl.macro.v1` manifest into the session registry and, when `remember` is true (default), into the local memory store. Not gated. Returns the promoted macro ID for later `macro.get`/`macro.run`."
     )]
-    pub async fn macro_promote(
-        &self,
-        request: Parameters<MacroPromoteRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn macro_promote(&self, request: Parameters<MacroPromoteRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.promote", move || {
@@ -2292,7 +2275,7 @@ impl WinctlMcpServer {
     pub async fn macro_export_result(
         &self,
         request: Parameters<MacroExportResultRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("macro.export_result", move || {
@@ -2305,10 +2288,7 @@ impl WinctlMcpServer {
         name = "uia.snapshot",
         description = "Capture the UI Automation tree of a window previously bound with `windows.bind`, with element roles, names, automation IDs, bounds, state, hierarchy, and stable `element_ref` values; tune with `max_depth` (default 8) and `max_elements` (default 2000). Requires `bound_id`. Read-only. To locate a SPECIFIC control prefer the targeted `uia.find` — a full snapshot can be large/token-heavy. The returned `element_ref`s feed `uia.find`/`uia.resolve` and the uia action tools."
     )]
-    pub async fn uia_snapshot(
-        &self,
-        request: Parameters<UiSnapshotRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn uia_snapshot(&self, request: Parameters<UiSnapshotRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("uia.snapshot", move || {
@@ -2321,7 +2301,7 @@ impl WinctlMcpServer {
         name = "uia.find",
         description = "Find UI Automation elements in a fresh snapshot of a bound window by semantic `selector` (name, role, automation_id, class_name, text_contains, include_offscreen). Requires `bound_id` from `windows.bind`. Read-only. PREFERRED way to locate controls: returns stable `element_ref`s to drive with the uia action tools (`uia.invoke`/`set_value`/`toggle`/`select`) — no coordinates and no screenshots needed. Only screenshot/OCR when a control is not in the UIA tree."
     )]
-    pub async fn uia_find(&self, request: Parameters<UiFindRequest>) -> Json<serde_json::Value> {
+    pub async fn uia_find(&self, request: Parameters<UiFindRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("uia.find", move || tools::uia::uia_find(&state, request)).await
@@ -2331,10 +2311,7 @@ impl WinctlMcpServer {
         name = "uia.resolve",
         description = "Revalidate an `element_ref` (from `uia.snapshot`/`uia.find`) against a current snapshot of the bound window. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Use to confirm an element still exists/resolves before acting; fails if the reference no longer matches."
     )]
-    pub async fn uia_resolve(
-        &self,
-        request: Parameters<UiResolveRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn uia_resolve(&self, request: Parameters<UiResolveRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("uia.resolve", move || {
@@ -2347,10 +2324,7 @@ impl WinctlMcpServer {
         name = "uia.invoke",
         description = "Invoke a UI Automation element (by `element_ref` or `selector`) via `InvokePattern` on a bound window, after revalidating its identity; coordinate fallback is returned only as a hint, not auto-clicked. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
-    pub async fn uia_invoke(
-        &self,
-        request: Parameters<UiElementActionRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn uia_invoke(&self, request: Parameters<UiElementActionRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -2371,10 +2345,7 @@ impl WinctlMcpServer {
         name = "uia.set_value",
         description = "Set text on a UI Automation element (by `element_ref` or `selector`) via `ValuePattern.SetValue`, returning before/after state diagnostics. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated before the write."
     )]
-    pub async fn uia_set_value(
-        &self,
-        request: Parameters<UiSetValueRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn uia_set_value(&self, request: Parameters<UiSetValueRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -2395,10 +2366,7 @@ impl WinctlMcpServer {
         name = "uia.get_value",
         description = "Read `ValuePattern.CurrentValue` from a UI Automation element (by `element_ref` or `selector`) after revalidating it. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns the current text/value of the element."
     )]
-    pub async fn uia_get_value(
-        &self,
-        request: Parameters<UiElementActionRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn uia_get_value(&self, request: Parameters<UiElementActionRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("uia.get_value", move || {
@@ -2411,10 +2379,7 @@ impl WinctlMcpServer {
         name = "uia.toggle",
         description = "Toggle a UI Automation element (by `element_ref` or `selector`) via `TogglePattern`, optionally to a `desired_state` (off/on/indeterminate). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated first; if no safe action path exists it fails closed rather than guessing."
     )]
-    pub async fn uia_toggle(
-        &self,
-        request: Parameters<UiElementActionRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn uia_toggle(&self, request: Parameters<UiElementActionRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -2438,7 +2403,7 @@ impl WinctlMcpServer {
     pub async fn uia_expand_collapse(
         &self,
         request: Parameters<UiElementActionRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -2459,10 +2424,7 @@ impl WinctlMcpServer {
         name = "uia.select",
         description = "Select a UI Automation element (by `element_ref` or `selector`) via `SelectionItemPattern`, with `mode` replace/add/remove (default replace). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Strict target resolution with identity revalidation; fails closed if no supported action path exists."
     )]
-    pub async fn uia_select(
-        &self,
-        request: Parameters<UiElementActionRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn uia_select(&self, request: Parameters<UiElementActionRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -2483,10 +2445,7 @@ impl WinctlMcpServer {
         name = "uia.set_focus",
         description = "Set keyboard focus on a UI Automation element (by `element_ref` or `selector`) via strict target resolution, with center-click fallback. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated before focusing."
     )]
-    pub async fn uia_set_focus(
-        &self,
-        request: Parameters<UiElementActionRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn uia_set_focus(&self, request: Parameters<UiElementActionRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -2507,10 +2466,7 @@ impl WinctlMcpServer {
         name = "uia.range_value",
         description = "Set a numeric `value` on a UI Automation range element (by `element_ref` or `selector`) via `RangeValuePattern` (sliders, progress, spinners). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Identity is revalidated first; fails closed if no supported action path exists."
     )]
-    pub async fn uia_range_value(
-        &self,
-        request: Parameters<UiRangeValueRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn uia_range_value(&self, request: Parameters<UiRangeValueRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -2534,7 +2490,7 @@ impl WinctlMcpServer {
     pub async fn uia_scroll_into_view(
         &self,
         request: Parameters<UiElementActionRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -2558,7 +2514,7 @@ impl WinctlMcpServer {
     pub async fn uia_wait_for_element(
         &self,
         request: Parameters<UiWaitForElementRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("uia.wait_for_element", move || {
@@ -2571,10 +2527,7 @@ impl WinctlMcpServer {
         name = "dialogs.list",
         description = "Enumerate the foreground native dialog, its UI Automation button candidates, and secure-desktop/UAC status; optional flags include non-foreground or non-dialog windows. Read-only; no bound target or armed session needed. Returns each button's `hwnd`, `pid`, name, and `element_ref` for `dialogs.invoke_button`."
     )]
-    pub async fn dialogs_list(
-        &self,
-        request: Parameters<DialogListRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn dialogs_list(&self, request: Parameters<DialogListRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("dialogs.list", move || {
@@ -2590,7 +2543,7 @@ impl WinctlMcpServer {
     pub async fn dialogs_invoke_button(
         &self,
         request: Parameters<DialogInvokeButtonRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("dialogs.invoke_button", move || {
@@ -2610,10 +2563,7 @@ impl WinctlMcpServer {
         name = "assert.element",
         description = "Assert rich UI Automation element predicates (presence/absence, enabled/focused, checked/selected/expanded, name/value/role/control type, editable/readonly, offscreen, bounds, count) for an `element_ref` or selector on a revalidated bound window. Preconditions: requires `bound_id`; read-only and no armed session needed. Returns the shared assertion contract; compared ValuePattern text is redacted and assertion misses return `ok:false`."
     )]
-    pub async fn assert_element(
-        &self,
-        request: Parameters<AssertElementRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn assert_element(&self, request: Parameters<AssertElementRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.element", move || {
@@ -2629,7 +2579,7 @@ impl WinctlMcpServer {
     pub async fn assert_text_visible(
         &self,
         request: Parameters<AssertTextVisibleRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.text_visible", move || {
@@ -2645,7 +2595,7 @@ impl WinctlMcpServer {
     pub async fn assert_pixel_color(
         &self,
         request: Parameters<AssertPixelColorRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.pixel_color", move || {
@@ -2661,7 +2611,7 @@ impl WinctlMcpServer {
     pub async fn assert_window_count(
         &self,
         request: Parameters<AssertWindowCountRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let request = request.0;
         run_blocking_tool("assert.window_count", move || {
             tools::assertions::assert_window_count(request)
@@ -2673,10 +2623,7 @@ impl WinctlMcpServer {
         name = "assert.clipboard",
         description = "Assert the current clipboard text equals `expected` or contains `contains` (optionally truncated to `max_chars`) without returning clipboard contents. Preconditions: read-only clipboard read; no armed session needed and clipboard write policy is not used. Returns the shared assertion contract with text presence/count only; assertion misses return `ok:false`."
     )]
-    pub async fn assert_clipboard(
-        &self,
-        request: Parameters<AssertClipboardRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn assert_clipboard(&self, request: Parameters<AssertClipboardRequest>) -> ToolJson {
         let request = request.0;
         run_blocking_tool("assert.clipboard", move || {
             tools::assertions::assert_clipboard(request)
@@ -2688,10 +2635,7 @@ impl WinctlMcpServer {
         name = "assert.window",
         description = "Assert read-only window predicates for a `bound_id` or `WindowSelector`: presence/absence, foreground, minimized/maximized/normal state, title/class exact/contains/regex, bounds tolerance, and responsiveness. Preconditions: use `bound_id` for strict known targets or a selector for discovery; no armed session needed. Returns the shared assertion contract and matching window metadata; assertion misses return `ok:false` and poll when `timeout_ms` is set."
     )]
-    pub async fn assert_window(
-        &self,
-        request: Parameters<AssertWindowRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn assert_window(&self, request: Parameters<AssertWindowRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.window", move || {
@@ -2704,10 +2648,7 @@ impl WinctlMcpServer {
         name = "assert.process",
         description = "Assert read-only process predicates for a `pid` or MCP `launch_id`: running/exited, responsiveness via owned windows, process.metrics resource ceilings, and crash-report cleanliness since a marker. Preconditions: no armed session needed; unavailable provider fields are explicit diagnostics, not fake success. Returns the shared assertion contract; assertion misses return `ok:false` and poll when `timeout_ms` is set."
     )]
-    pub async fn assert_process(
-        &self,
-        request: Parameters<AssertProcessRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn assert_process(&self, request: Parameters<AssertProcessRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.process", move || {
@@ -2720,10 +2661,7 @@ impl WinctlMcpServer {
         name = "assert.no_dialog",
         description = "Assert that no foreground/native dialog or UAC secure desktop is blocking automation, using the existing dialog detector. Preconditions: read-only and no armed session needed. Returns the shared assertion contract with dialog metadata; UAC secure desktop is reported as not automatable rather than clicked."
     )]
-    pub async fn assert_no_dialog(
-        &self,
-        request: Parameters<AssertNoDialogRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn assert_no_dialog(&self, request: Parameters<AssertNoDialogRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.no_dialog", move || {
@@ -2736,10 +2674,7 @@ impl WinctlMcpServer {
         name = "assert.dialog",
         description = "Assert a specific native dialog is present or absent by title/text/buttons, reusing dialogs.list/UIA snapshots. Preconditions: read-only and no armed session needed; it never invokes dialog buttons. Returns the shared assertion contract with matching dialog metadata and polls when `timeout_ms` is set."
     )]
-    pub async fn assert_dialog(
-        &self,
-        request: Parameters<AssertDialogRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn assert_dialog(&self, request: Parameters<AssertDialogRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.dialog", move || {
@@ -2752,10 +2687,7 @@ impl WinctlMcpServer {
         name = "assert.file",
         description = "Assert file presence, UTF-8 content exact/contains/regex, size, and SHA-256 under configured filesystem roots. Preconditions: path must be allowlisted by the same policy as filesystem.read; read-only and no armed session needed. Returns the shared assertion contract without echoing file contents."
     )]
-    pub async fn assert_file(
-        &self,
-        request: Parameters<AssertFileRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn assert_file(&self, request: Parameters<AssertFileRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.file", move || {
@@ -2768,10 +2700,7 @@ impl WinctlMcpServer {
         name = "assert.registry",
         description = "Assert a registry value exists/absent or has expected kind/data using the existing read-only registry provider. Preconditions: read-only and no armed session needed; registry mutation policy is not used. Returns the shared assertion contract with value data redacted to kind/match status; provider failures needed by requested predicates fail closed."
     )]
-    pub async fn assert_registry(
-        &self,
-        request: Parameters<AssertRegistryRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn assert_registry(&self, request: Parameters<AssertRegistryRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.registry", move || {
@@ -2787,7 +2716,7 @@ impl WinctlMcpServer {
     pub async fn assert_visual_match(
         &self,
         request: Parameters<AssertVisualMatchRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("assert.visual_match", move || {
@@ -2803,7 +2732,7 @@ impl WinctlMcpServer {
     pub async fn capture_ocr_region(
         &self,
         request: Parameters<CaptureOcrRegionRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("capture.ocr_region", move || {
@@ -2816,10 +2745,7 @@ impl WinctlMcpServer {
         name = "capture.read_text",
         description = "Extract readable text from a bound window via its UI Automation snapshot text surface (no OCR). Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Faster and more reliable than `capture.ocr_region` when text is exposed through accessibility."
     )]
-    pub async fn capture_read_text(
-        &self,
-        request: Parameters<CaptureReadTextRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn capture_read_text(&self, request: Parameters<CaptureReadTextRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("capture.read_text", move || {
@@ -2835,7 +2761,7 @@ impl WinctlMcpServer {
     pub async fn capture_compare_baseline(
         &self,
         request: Parameters<CaptureCompareBaselineRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("capture.compare_baseline", move || {
@@ -2848,7 +2774,7 @@ impl WinctlMcpServer {
         name = "build.run",
         description = "Run an allowlisted build tool (`cargo`, `dotnet`, `msbuild`, `cmake`, `ctest`) directly via `program`+`args` without cmd.exe/PowerShell, in optional `cwd`, bounded by `timeout_ms`. Not gated, but only allowlisted programs are accepted (arbitrary shell is rejected). Returns exit code, stdout/stderr, and timing diagnostics."
     )]
-    pub async fn build_run(&self, request: Parameters<BuildRunRequest>) -> Json<serde_json::Value> {
+    pub async fn build_run(&self, request: Parameters<BuildRunRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("build.run", move || {
@@ -2861,10 +2787,7 @@ impl WinctlMcpServer {
         name = "process.metrics",
         description = "Return native Windows resource counters (CPU, memory, handles, GDI, USER) for the process identified by `pid`. Read-only; no bound target or armed session needed. Fails if the PID does not exist or is inaccessible."
     )]
-    pub async fn process_metrics(
-        &self,
-        request: Parameters<ProcessMetricsRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn process_metrics(&self, request: Parameters<ProcessMetricsRequest>) -> ToolJson {
         let request = request.0;
         run_blocking_tool("process.metrics", move || {
             tools::diagnostics::process_metrics(request)
@@ -2879,7 +2802,7 @@ impl WinctlMcpServer {
     pub async fn diagnostics_crash_report(
         &self,
         request: Parameters<CrashReportRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("diagnostics.crash_report", move || {
@@ -2895,7 +2818,7 @@ impl WinctlMcpServer {
     pub async fn test_report_export(
         &self,
         request: Parameters<TestReportExportRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("test.report_export", move || {
@@ -2908,7 +2831,7 @@ impl WinctlMcpServer {
         name = "windows.list",
         description = "List visible, discoverable top-level windows with HWND, PID, executable, class, title, and virtual-desktop geometry. No inputs. Read-only; no bound target or armed session needed. Use as the starting point to identify a target, then narrow with `windows.find` and bind it with `windows.bind`."
     )]
-    pub async fn windows_list(&self) -> Json<serde_json::Value> {
+    pub async fn windows_list(&self) -> ToolJson {
         run_blocking_tool("windows.list", tools::windows::windows_list).await
     }
 
@@ -2916,10 +2839,7 @@ impl WinctlMcpServer {
         name = "windows.find",
         description = "Find windows matching a `WindowSelector` (id, hwnd, pid, process_name, exe-path/title/class filters, visibility/minimized/cloaked constraints) and return scored match diagnostics, without binding or controlling. Read-only; no armed session needed. Pick the best match and pass the same selector to `windows.bind` to obtain a `bound_id`."
     )]
-    pub async fn windows_find(
-        &self,
-        selector: Parameters<WindowSelector>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_find(&self, selector: Parameters<WindowSelector>) -> ToolJson {
         let selector = selector.0;
         run_blocking_tool("windows.find", move || {
             tools::windows::windows_find(selector)
@@ -2931,10 +2851,7 @@ impl WinctlMcpServer {
         name = "windows.bind",
         description = "Bind one window by stable identity (HWND+PID+executable) so later control/capture calls can revalidate it; pass a `WindowSelector` (ideally a strong one like hwnd/pid/process_name from `windows.find`). Read-only. Returns a `bound_id` required by nearly all window, input, uia, capture, and browser tools."
     )]
-    pub async fn windows_bind(
-        &self,
-        selector: Parameters<WindowSelector>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_bind(&self, selector: Parameters<WindowSelector>) -> ToolJson {
         let state = self.state.clone();
         let selector = selector.0;
         run_blocking_tool("windows.bind", move || {
@@ -2947,10 +2864,7 @@ impl WinctlMcpServer {
         name = "windows.describe",
         description = "Describe an existing bound window record by `bound_id` (from `windows.bind`): its identity, current geometry, and state. Read-only (no armed session needed). Fails if the `bound_id` is unknown."
     )]
-    pub async fn windows_describe(
-        &self,
-        request: Parameters<BoundIdRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_describe(&self, request: Parameters<BoundIdRequest>) -> ToolJson {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("windows.describe", move || {
@@ -2963,10 +2877,7 @@ impl WinctlMcpServer {
         name = "windows.focus",
         description = "Bring a bound window to the foreground after revalidating its HWND+PID+executable identity. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Fails closed if the window changed process or closed."
     )]
-    pub async fn windows_focus(
-        &self,
-        request: Parameters<BoundIdRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_focus(&self, request: Parameters<BoundIdRequest>) -> ToolJson {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("windows.focus", move || {
@@ -2989,7 +2900,7 @@ impl WinctlMcpServer {
     pub async fn windows_window_from_point(
         &self,
         request: Parameters<WindowFromPointRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let request = request.0;
         let state = self.state.clone();
         run_blocking_tool("windows.window_from_point", move || {
@@ -3007,7 +2918,7 @@ impl WinctlMcpServer {
         name = "windows.monitors",
         description = "List each monitor's geometry, DPI scale, primary flag, and the total virtual-desktop bounds. No inputs. Read-only; no armed session needed. Use to map `display_index` for `capture.screenshot_display` and to interpret virtual-desktop coordinates."
     )]
-    pub async fn windows_monitors(&self) -> Json<serde_json::Value> {
+    pub async fn windows_monitors(&self) -> ToolJson {
         run_blocking_tool("windows.monitors", tools::windows::windows_monitors).await
     }
 
@@ -3018,7 +2929,7 @@ impl WinctlMcpServer {
     pub async fn windows_wait_for_window(
         &self,
         request: Parameters<WaitForWindowRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("windows.wait_for_window", move || {
@@ -3034,7 +2945,7 @@ impl WinctlMcpServer {
     pub async fn windows_wait_for_state(
         &self,
         request: Parameters<WaitForStateRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("windows.wait_for_state", move || {
@@ -3047,10 +2958,7 @@ impl WinctlMcpServer {
         name = "windows.move",
         description = "Move a bound window to virtual-desktop (`x`,`y`) after revalidating its HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Window-mutation tool: fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
-    pub async fn windows_move(
-        &self,
-        request: Parameters<WindowMoveRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_move(&self, request: Parameters<WindowMoveRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("windows.move", move || {
@@ -3063,10 +2971,7 @@ impl WinctlMcpServer {
         name = "windows.resize",
         description = "Resize a bound window to `width`x`height` after revalidating its HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Window-mutation tool: fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
-    pub async fn windows_resize(
-        &self,
-        request: Parameters<WindowResizeRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_resize(&self, request: Parameters<WindowResizeRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("windows.resize", move || {
@@ -3079,10 +2984,7 @@ impl WinctlMcpServer {
         name = "windows.minimize",
         description = "Minimize a bound window after revalidating its stable HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
-    pub async fn windows_minimize(
-        &self,
-        request: Parameters<BoundIdRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_minimize(&self, request: Parameters<BoundIdRequest>) -> ToolJson {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("windows.minimize", move || {
@@ -3095,10 +2997,7 @@ impl WinctlMcpServer {
         name = "windows.maximize",
         description = "Maximize a bound window after revalidating its stable HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
-    pub async fn windows_maximize(
-        &self,
-        request: Parameters<BoundIdRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_maximize(&self, request: Parameters<BoundIdRequest>) -> ToolJson {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("windows.maximize", move || {
@@ -3111,10 +3010,7 @@ impl WinctlMcpServer {
         name = "windows.restore",
         description = "Restore a bound window from minimized/maximized to its normal state after revalidating its stable HWND+PID+executable identity. Requires `bound_id` from `windows.bind`. Fails closed if the window changed process or closed. (Not consent-gated, but identity-strict.)"
     )]
-    pub async fn windows_restore(
-        &self,
-        request: Parameters<BoundIdRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_restore(&self, request: Parameters<BoundIdRequest>) -> ToolJson {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("windows.restore", move || {
@@ -3127,10 +3023,7 @@ impl WinctlMcpServer {
         name = "windows.close",
         description = "Post `WM_CLOSE` to a bound window (a graceful close request, not a process kill) after revalidating its stable HWND+PID+executable identity. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Fails closed if the window changed process or closed."
     )]
-    pub async fn windows_close(
-        &self,
-        request: Parameters<BoundIdRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn windows_close(&self, request: Parameters<BoundIdRequest>) -> ToolJson {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("windows.close", move || {
@@ -3153,7 +3046,7 @@ impl WinctlMcpServer {
     pub async fn windows_foreground_diagnostics(
         &self,
         request: Parameters<BoundIdRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("windows.foreground_diagnostics", move || {
@@ -3169,7 +3062,7 @@ impl WinctlMcpServer {
     pub async fn windows_for_process(
         &self,
         request: Parameters<WindowsForProcessRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("windows.for_process", move || {
@@ -3182,10 +3075,7 @@ impl WinctlMcpServer {
         name = "app.launch",
         description = "Launch a target by `mode` (`executable`, `protocol`, `packaged_app`, or `start_menu`) plus `target`/`args`/`cwd`, with no shell concatenation; optionally `wait_for_window`. Not gated. Returns process/launch identifiers and any window candidates; for raw exe control prefer `process.launch` (which returns a tracked `pid`+`launch_id`)."
     )]
-    pub async fn app_launch(
-        &self,
-        request: Parameters<AppLaunchRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn app_launch(&self, request: Parameters<AppLaunchRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("app.launch", move || {
@@ -3198,10 +3088,7 @@ impl WinctlMcpServer {
         name = "browser.list",
         description = "List Chrome/Edge/Firefox processes and windows with explicit PID/HWND identity, filterable by `browser`, `pid`, `include_windows`, and `only_mcp_launched`. Read-only; no armed session needed. Use to locate a browser window, then `windows.bind` it for browser.* control/capture."
     )]
-    pub async fn browser_list(
-        &self,
-        request: Parameters<BrowserListRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn browser_list(&self, request: Parameters<BrowserListRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("browser.list", move || {
@@ -3214,10 +3101,7 @@ impl WinctlMcpServer {
         name = "browser.describe",
         description = "Describe one browser target identified by `bound_id`, `pid`, or `hwnd` (no tab-title matching), returning kind and identity metadata. Read-only; no armed session needed. If using `bound_id`, the window must first be bound via `windows.bind`."
     )]
-    pub async fn browser_describe(
-        &self,
-        request: Parameters<BrowserDescribeRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn browser_describe(&self, request: Parameters<BrowserDescribeRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("browser.describe", move || {
@@ -3233,7 +3117,7 @@ impl WinctlMcpServer {
     pub async fn browser_wait_for_navigation(
         &self,
         request: Parameters<BrowserWaitForNavigationRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("browser.wait_for_navigation", move || {
@@ -3246,10 +3130,7 @@ impl WinctlMcpServer {
         name = "browser.assert",
         description = "Assert expected `browser` kind and window `title_contains`/`class_name_contains` against a bound browser window, revalidating identity first. Requires `bound_id` from `windows.bind`. Read-only (no armed session needed). Returns structured pass/fail for tests."
     )]
-    pub async fn browser_assert(
-        &self,
-        request: Parameters<BrowserAssertRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn browser_assert(&self, request: Parameters<BrowserAssertRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("browser.assert", move || {
@@ -3265,7 +3146,7 @@ impl WinctlMcpServer {
     pub async fn browser_extract_content(
         &self,
         request: Parameters<BrowserExtractContentRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("browser.extract_content", move || {
@@ -3281,7 +3162,7 @@ impl WinctlMcpServer {
     pub async fn browser_screenshot_checkpoint(
         &self,
         request: Parameters<BrowserExtractContentRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("browser.screenshot_checkpoint", move || {
@@ -3294,10 +3175,7 @@ impl WinctlMcpServer {
         name = "clipboard.read",
         description = "Read the current Unicode clipboard text, optionally truncated to `max_chars`. Read-only; no bound target or armed session needed. Returns the text; pair with `clipboard.write` (which is mutation-gated) for round-trips."
     )]
-    pub async fn clipboard_read(
-        &self,
-        request: Parameters<ClipboardReadRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn clipboard_read(&self, request: Parameters<ClipboardReadRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("clipboard.read", move || {
@@ -3310,10 +3188,7 @@ impl WinctlMcpServer {
         name = "clipboard.write",
         description = "Write Unicode `text` to the clipboard. Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_CLIPBOARD_WRITE=1` is set in policy. Not included in macro replay."
     )]
-    pub async fn clipboard_write(
-        &self,
-        request: Parameters<ClipboardWriteRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn clipboard_write(&self, request: Parameters<ClipboardWriteRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("clipboard.write", move || {
@@ -3333,10 +3208,7 @@ impl WinctlMcpServer {
         name = "filesystem.read",
         description = "Read a UTF-8 file at `path` (under an allowlisted root: `WINCTL_FS_ROOTS`, capture dir, or temp), up to `max_bytes`. Read-only; no armed session needed. Binary files return `utf8: false` and omit text. Fails if the path is outside allowlisted roots."
     )]
-    pub async fn filesystem_read(
-        &self,
-        request: Parameters<FilesystemReadRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn filesystem_read(&self, request: Parameters<FilesystemReadRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("filesystem.read", move || {
@@ -3349,10 +3221,7 @@ impl WinctlMcpServer {
         name = "filesystem.list",
         description = "List files and directories under `path`, optionally `recursive`, up to `max_entries`. Read-only; no armed session needed. `path` must be under an allowlisted root (configure with `WINCTL_FS_ROOTS`); fails closed otherwise."
     )]
-    pub async fn filesystem_list(
-        &self,
-        request: Parameters<FilesystemListRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn filesystem_list(&self, request: Parameters<FilesystemListRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("filesystem.list", move || {
@@ -3368,7 +3237,7 @@ impl WinctlMcpServer {
     pub async fn filesystem_search(
         &self,
         request: Parameters<FilesystemSearchRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("filesystem.search", move || {
@@ -3381,10 +3250,7 @@ impl WinctlMcpServer {
         name = "filesystem.copy",
         description = "Copy a file `from`→`to` (optionally `overwrite`). Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_FILESYSTEM_MUTATION=1` and both paths are under allowlisted roots."
     )]
-    pub async fn filesystem_copy(
-        &self,
-        request: Parameters<FilesystemCopyRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn filesystem_copy(&self, request: Parameters<FilesystemCopyRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("filesystem.copy", move || {
@@ -3404,10 +3270,7 @@ impl WinctlMcpServer {
         name = "filesystem.move",
         description = "Move/rename a file `from`→`to` (optionally `overwrite`). Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_FILESYSTEM_MUTATION=1` and both paths are under allowlisted roots."
     )]
-    pub async fn filesystem_move(
-        &self,
-        request: Parameters<FilesystemMoveRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn filesystem_move(&self, request: Parameters<FilesystemMoveRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("filesystem.move", move || {
@@ -3430,7 +3293,7 @@ impl WinctlMcpServer {
     pub async fn filesystem_delete(
         &self,
         request: Parameters<FilesystemDeleteRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("filesystem.delete", move || {
@@ -3450,10 +3313,7 @@ impl WinctlMcpServer {
         name = "artifact.export",
         description = "Export a captured artifact from `source_path` to `destination_path`, or to the capture dir's `exports` folder when destination is omitted. Not gated, but an explicit destination must be under an allowlisted filesystem root. Returns the written path."
     )]
-    pub async fn artifact_export(
-        &self,
-        request: Parameters<ArtifactExportRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn artifact_export(&self, request: Parameters<ArtifactExportRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("artifact.export", move || {
@@ -3466,10 +3326,7 @@ impl WinctlMcpServer {
         name = "registry.list",
         description = "List registry subkeys (and optional value metadata when `include_values`) under `path` in `hive` (current_user/local_machine/classes_root/users/current_config). Read-only; no armed session needed. Registry mutation tools are separate and gated."
     )]
-    pub async fn registry_list(
-        &self,
-        request: Parameters<RegistryListRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn registry_list(&self, request: Parameters<RegistryListRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("registry.list", move || {
@@ -3482,10 +3339,7 @@ impl WinctlMcpServer {
         name = "registry.read",
         description = "Read one registry value `name` (empty/omitted for the default value) under `path` in `hive`. Read-only; no armed session needed. Returns the decoded value and kind; fails if the key/value is missing."
     )]
-    pub async fn registry_read(
-        &self,
-        request: Parameters<RegistryReadRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn registry_read(&self, request: Parameters<RegistryReadRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("registry.read", move || {
@@ -3498,10 +3352,7 @@ impl WinctlMcpServer {
         name = "registry.write",
         description = "Write a registry value (`hive`, `path`, `name`, typed `kind`+`data`). Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_REGISTRY_MUTATION=1`. Not included in macro replay."
     )]
-    pub async fn registry_write(
-        &self,
-        request: Parameters<RegistryWriteRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn registry_write(&self, request: Parameters<RegistryWriteRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("registry.write", move || {
@@ -3521,10 +3372,7 @@ impl WinctlMcpServer {
         name = "registry.delete",
         description = "Delete a single registry value `name` under `path` in `hive` (values only, never keys or trees). Requires an armed control session (`control.arm`); fails closed otherwise. Additionally denied unless `WINCTL_ENABLE_REGISTRY_MUTATION=1`."
     )]
-    pub async fn registry_delete(
-        &self,
-        request: Parameters<RegistryDeleteRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn registry_delete(&self, request: Parameters<RegistryDeleteRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("registry.delete", move || {
@@ -3547,7 +3395,7 @@ impl WinctlMcpServer {
     pub async fn notifications_list(
         &self,
         request: Parameters<NotificationsListRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("notifications.list", move || {
@@ -3563,7 +3411,7 @@ impl WinctlMcpServer {
     pub async fn process_diagnostics(
         &self,
         request: Parameters<ProcessDiagnosticsRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("process.diagnostics", move || {
@@ -3576,60 +3424,49 @@ impl WinctlMcpServer {
         name = "network.fetch",
         description = "Fetch an HTTP/HTTPS `url` (`method` GET/HEAD/POST, optional `headers`/`body`), bounded by server-capped `timeout_ms`/`max_bytes` and optional `follow_redirects`. Read-only; not gated. Private/loopback/link-local hosts are blocked unless `WINCTL_ALLOW_PRIVATE_NETWORK=1`; URLs with credentials are rejected."
     )]
-    pub async fn network_fetch(
-        &self,
-        request: Parameters<NetworkFetchRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn network_fetch(&self, request: Parameters<NetworkFetchRequest>) -> ToolJson {
         let request = request.0;
-        Json(tools::network::network_fetch(request, self.state.policy.allow_private_network).await)
+        tool_json(
+            tools::network::network_fetch(request, self.state.policy.allow_private_network).await,
+        )
     }
 
     #[tool(
         name = "network.scrape",
         description = "Fetch an HTTP/HTTPS `url` and extract its title, optional `include_links` hrefs, and optional `include_text` (tag-stripped text), under the same network policy as `network.fetch` (private hosts blocked unless `WINCTL_ALLOW_PRIVATE_NETWORK=1`). Read-only; not gated. Bounded by server-capped `timeout_ms`/`max_bytes`."
     )]
-    pub async fn network_scrape(
-        &self,
-        request: Parameters<NetworkScrapeRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn network_scrape(&self, request: Parameters<NetworkScrapeRequest>) -> ToolJson {
         let request = request.0;
-        Json(tools::network::network_scrape(request, self.state.policy.allow_private_network).await)
+        tool_json(
+            tools::network::network_scrape(request, self.state.policy.allow_private_network).await,
+        )
     }
 
     #[tool(
         name = "web.cdp.list_targets",
         description = "List Chrome DevTools Protocol targets (tabs/pages) from a loopback `debugger_url` such as `http://127.0.0.1:9222`. Read-only; no armed session needed. Requires the browser to be running with remote debugging on loopback. Returns `target_id`s for the other `web.*` CDP tools."
     )]
-    pub async fn web_cdp_list_targets(
-        &self,
-        request: Parameters<CdpEndpointRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn web_cdp_list_targets(&self, request: Parameters<CdpEndpointRequest>) -> ToolJson {
         let request = request.0;
-        Json(tools::web::cdp_list_targets(request).await)
+        tool_json(tools::web::cdp_list_targets(request).await)
     }
 
     #[tool(
         name = "web.cdp.evaluate",
         description = "Evaluate a JavaScript `expression` in a loopback CDP `target_id` (from `web.cdp.list_targets`) over WebSocket at `debugger_url`. Read-only side of the gate (not consent-gated), but loopback-only. Returns the evaluation result; fails if the debugger endpoint is unreachable or non-loopback."
     )]
-    pub async fn web_cdp_evaluate(
-        &self,
-        request: Parameters<CdpEvaluateRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn web_cdp_evaluate(&self, request: Parameters<CdpEvaluateRequest>) -> ToolJson {
         let request = request.0;
-        Json(tools::web::cdp_evaluate(request).await)
+        tool_json(tools::web::cdp_evaluate(request).await)
     }
 
     #[tool(
         name = "web.dom.snapshot",
         description = "Capture a DOM snapshot from a loopback CDP `target_id` (from `web.cdp.list_targets`) at `debugger_url`, optionally scoped by `selector`. Read-only; not gated, loopback-only. Returns the DOM tree; fails if the endpoint is unreachable or non-loopback."
     )]
-    pub async fn web_dom_snapshot(
-        &self,
-        request: Parameters<WebIntrospectionRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn web_dom_snapshot(&self, request: Parameters<WebIntrospectionRequest>) -> ToolJson {
         let request = request.0;
-        Json(tools::web::dom_snapshot(request).await)
+        tool_json(tools::web::dom_snapshot(request).await)
     }
 
     #[tool(
@@ -3639,9 +3476,9 @@ impl WinctlMcpServer {
     pub async fn web_network_events(
         &self,
         request: Parameters<WebIntrospectionRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let request = request.0;
-        Json(tools::web::network_events(request).await)
+        tool_json(tools::web::network_events(request).await)
     }
 
     #[tool(
@@ -3651,9 +3488,9 @@ impl WinctlMcpServer {
     pub async fn web_a11y_snapshot(
         &self,
         request: Parameters<WebIntrospectionRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let request = request.0;
-        Json(tools::web::a11y_snapshot(request).await)
+        tool_json(tools::web::a11y_snapshot(request).await)
     }
 
     #[tool(
@@ -3663,19 +3500,16 @@ impl WinctlMcpServer {
     pub async fn web_style_inspect(
         &self,
         request: Parameters<WebIntrospectionRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let request = request.0;
-        Json(tools::web::style_inspect(request).await)
+        tool_json(tools::web::style_inspect(request).await)
     }
 
     #[tool(
         name = "recorder.start",
         description = "Start a local recording session (`title`, optional `description`/`tags`/`app_identity`) that accumulates steps for export as a macro manifest. Not gated. Returns a session ID; append steps with `recorder.record_step`, then finish with `recorder.stop`/`recorder.export_manifest`."
     )]
-    pub async fn recorder_start(
-        &self,
-        request: Parameters<RecorderStartRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn recorder_start(&self, request: Parameters<RecorderStartRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("recorder.start", move || {
@@ -3691,7 +3525,7 @@ impl WinctlMcpServer {
     pub async fn recorder_record_step(
         &self,
         request: Parameters<RecorderRecordStepRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("recorder.record_step", move || {
@@ -3704,10 +3538,7 @@ impl WinctlMcpServer {
         name = "recorder.stop",
         description = "Stop the active recording session and return the generated `winctl.macro.v1` manifest; with `save_to_memory` true it is also stored if memory policy allows. Requires an active session from `recorder.start`. The returned manifest can be passed to `macro.validate`/`macro.run`."
     )]
-    pub async fn recorder_stop(
-        &self,
-        request: Parameters<RecorderStopRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn recorder_stop(&self, request: Parameters<RecorderStopRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("recorder.stop", move || {
@@ -3720,10 +3551,7 @@ impl WinctlMcpServer {
         name = "recorder.pause",
         description = "Pause or resume the active human recording session without executing desktop input. Not gated; the recorder is passive. Records a durable audit event and returns the updated session; fails when no recording is active."
     )]
-    pub async fn recorder_pause(
-        &self,
-        request: Parameters<RecorderPauseRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn recorder_pause(&self, request: Parameters<RecorderPauseRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("recorder.pause", move || {
@@ -3739,7 +3567,7 @@ impl WinctlMcpServer {
     pub async fn recorder_export_manifest(
         &self,
         request: Parameters<RecorderExportRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("recorder.export_manifest", move || {
@@ -3752,7 +3580,7 @@ impl WinctlMcpServer {
         name = "recorder.state",
         description = "Return active and completed local recording sessions and their step counts. No inputs. Read-only; not gated. Use to obtain `session_id`s for `recorder.export_manifest`."
     )]
-    pub async fn recorder_state(&self) -> Json<serde_json::Value> {
+    pub async fn recorder_state(&self) -> ToolJson {
         let state = self.state.clone();
         run_blocking_tool("recorder.state", move || {
             tools::recorder::recorder_state(&state)
@@ -3764,10 +3592,7 @@ impl WinctlMcpServer {
         name = "test.validate",
         description = "Validate a `winctl.test.v1` manifest and its aligned macro manifest (schema, tool names, identity/coordinate metadata) without running anything. Read-only; not gated. Returns structured validation errors; run before `test.dry_run`/`test.run`."
     )]
-    pub async fn test_validate(
-        &self,
-        request: Parameters<TestManifestRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn test_validate(&self, request: Parameters<TestManifestRequest>) -> ToolJson {
         let request = request.0;
         run_blocking_tool("test.validate", move || {
             tools::tests::test_validate(request)
@@ -3779,10 +3604,7 @@ impl WinctlMcpServer {
         name = "test.dry_run",
         description = "Build a dry-run plan for a `winctl.test.v1` manifest without mutating UI state. Read-only; not gated. Returns the resolved per-step plan so you can preview ordering and targets before `test.run`."
     )]
-    pub async fn test_dry_run(
-        &self,
-        request: Parameters<TestManifestRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn test_dry_run(&self, request: Parameters<TestManifestRequest>) -> ToolJson {
         let request = request.0;
         run_blocking_tool("test.dry_run", move || tools::tests::test_dry_run(request)).await
     }
@@ -3791,7 +3613,7 @@ impl WinctlMcpServer {
         name = "test.run",
         description = "Run a `winctl.test.v1` manifest through the macro execution engine, revalidating targets before control actions; optional `max_steps` and run `video`. Requires an armed control session (`control.arm`); fails closed otherwise. Returns a `run_id`; fetch results with `test.export_result` (or `test.report_export`)."
     )]
-    pub async fn test_run(&self, request: Parameters<TestRunRequest>) -> Json<serde_json::Value> {
+    pub async fn test_run(&self, request: Parameters<TestRunRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("test.run", move || {
@@ -3809,7 +3631,7 @@ impl WinctlMcpServer {
     pub async fn test_export_result(
         &self,
         request: Parameters<MacroExportResultRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("test.export_result", move || {
@@ -3822,10 +3644,7 @@ impl WinctlMcpServer {
         name = "process.launch",
         description = "Launch a Windows executable `exe` via `CreateProcessW` with optional `args`/`cwd`/`env`, optionally `wait_for_window` for visible PID-owned windows. Not gated. Returns the tracked `pid` and `launch_id` used by `process.kill`/`process.wait_for_exit`/`windows.wait_for_window`; the spawned process is owned by this session."
     )]
-    pub async fn process_launch(
-        &self,
-        request: Parameters<ProcessLaunchRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn process_launch(&self, request: Parameters<ProcessLaunchRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("process.launch", move || {
@@ -3838,10 +3657,7 @@ impl WinctlMcpServer {
         name = "process.list",
         description = "List Windows processes with metadata, filterable by `name_contains`/`exe_path_contains`, optionally with `include_windows` and `only_mcp_launched`. Read-only; no armed session needed. Returns PIDs and (when requested) owned windows for further binding/control."
     )]
-    pub async fn process_list(
-        &self,
-        request: Parameters<ProcessListRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn process_list(&self, request: Parameters<ProcessListRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("process.list", move || {
@@ -3854,10 +3670,7 @@ impl WinctlMcpServer {
         name = "process.describe",
         description = "Describe process `pid`: executable metadata, whether it is a tracked MCP-launched process, child processes, and top-level windows. Read-only; no armed session needed. Fails if the PID does not exist."
     )]
-    pub async fn process_describe(
-        &self,
-        request: Parameters<ProcessDescribeRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn process_describe(&self, request: Parameters<ProcessDescribeRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("process.describe", move || {
@@ -3870,10 +3683,7 @@ impl WinctlMcpServer {
         name = "process.kill",
         description = "Terminate a process identified by `pid` or `launch_id`, optionally `kill_tree` for its child tree — but only if it was launched and is tracked by this MCP session. Requires an armed control session (`control.arm`); fails closed otherwise. Refuses to kill untracked/arbitrary processes."
     )]
-    pub async fn process_kill(
-        &self,
-        request: Parameters<ProcessKillRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn process_kill(&self, request: Parameters<ProcessKillRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("process.kill", move || {
@@ -3896,7 +3706,7 @@ impl WinctlMcpServer {
     pub async fn process_wait_for_exit(
         &self,
         request: Parameters<ProcessWaitForExitRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("process.wait_for_exit", move || {
@@ -3909,7 +3719,7 @@ impl WinctlMcpServer {
         name = "input.click",
         description = "Click at (`x`,`y`) in the given `coordinate_space` on a bound window via SendInput, with identity revalidation and window-from-point preflight (optionally `fail_if_outside_bound`); `button` defaults to left. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
-    pub async fn input_click(&self, request: Parameters<ClickRequest>) -> Json<serde_json::Value> {
+    pub async fn input_click(&self, request: Parameters<ClickRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -3930,10 +3740,7 @@ impl WinctlMcpServer {
         name = "input.mouse_move",
         description = "Move the mouse to (`x`,`y`) in the given `coordinate_space` on a bound window via SendInput, with identity revalidation and point preflight (optionally `fail_if_outside_bound`). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
-    pub async fn input_mouse_move(
-        &self,
-        request: Parameters<MouseMoveRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn input_mouse_move(&self, request: Parameters<MouseMoveRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -3954,10 +3761,7 @@ impl WinctlMcpServer {
         name = "input.double_click",
         description = "Double-click at (`x`,`y`) in the given `coordinate_space` on a bound window via SendInput (optional `button`, `interval_ms`), with identity revalidation and point preflight (optionally `fail_if_outside_bound`). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
-    pub async fn input_double_click(
-        &self,
-        request: Parameters<DoubleClickRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn input_double_click(&self, request: Parameters<DoubleClickRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -3978,7 +3782,7 @@ impl WinctlMcpServer {
         name = "input.drag",
         description = "Drag from (`start_x`,`start_y`) to (`end_x`,`end_y`) in the given `coordinate_space` on a bound window via SendInput (optional `button`, `duration_ms`), with identity revalidation and point preflight on both points (optionally `fail_if_outside_bound`). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
-    pub async fn input_drag(&self, request: Parameters<DragRequest>) -> Json<serde_json::Value> {
+    pub async fn input_drag(&self, request: Parameters<DragRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -3999,10 +3803,7 @@ impl WinctlMcpServer {
         name = "input.scroll",
         description = "Scroll the wheel by `delta_x`/`delta_y` (default `delta_y` -120) at (`x`,`y`) in the given `coordinate_space` on a bound window via SendInput, with identity revalidation and point preflight (optionally `fail_if_outside_bound`). Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
-    pub async fn input_scroll(
-        &self,
-        request: Parameters<ScrollRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn input_scroll(&self, request: Parameters<ScrollRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -4023,7 +3824,7 @@ impl WinctlMcpServer {
         name = "input.key_down",
         description = "Focus a bound window and dispatch a virtual key-down for `key` (e.g. `ctrl`, `shift`, `enter`, `a`, `f5`) via SendInput after identity revalidation. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Pair with `input.key_up` to release held keys."
     )]
-    pub async fn input_key_down(&self, request: Parameters<KeyRequest>) -> Json<serde_json::Value> {
+    pub async fn input_key_down(&self, request: Parameters<KeyRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -4044,7 +3845,7 @@ impl WinctlMcpServer {
         name = "input.key_up",
         description = "Focus a bound window and dispatch a virtual key-up for `key` via SendInput after identity revalidation, releasing a key held by `input.key_down`. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
-    pub async fn input_key_up(&self, request: Parameters<KeyRequest>) -> Json<serde_json::Value> {
+    pub async fn input_key_up(&self, request: Parameters<KeyRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -4065,10 +3866,7 @@ impl WinctlMcpServer {
         name = "input.shortcut",
         description = "Focus a bound window and dispatch an ordered key chord `keys` (e.g. `[\"ctrl\",\"shift\",\"s\"]`) via SendInput after identity revalidation, optionally holding `hold_ms` before releasing in reverse order. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise."
     )]
-    pub async fn input_shortcut(
-        &self,
-        request: Parameters<ShortcutRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn input_shortcut(&self, request: Parameters<ShortcutRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -4089,7 +3887,7 @@ impl WinctlMcpServer {
         name = "input.delay",
         description = "Sleep for a bounded `duration_ms` and return timing metadata. No bound target; not gated. Used as an explicit pacing step inside macro/test replay manifests."
     )]
-    pub async fn input_delay(&self, request: Parameters<DelayRequest>) -> Json<serde_json::Value> {
+    pub async fn input_delay(&self, request: Parameters<DelayRequest>) -> ToolJson {
         let request = request.0;
         run_blocking_tool("input.delay", move || tools::input::input_delay(request)).await
     }
@@ -4098,10 +3896,7 @@ impl WinctlMcpServer {
         name = "input.type_text",
         description = "Focus a bound window and type Unicode `text` via SendInput after identity revalidation. Requires `bound_id` from `windows.bind` and an armed control session (`control.arm`); fails closed otherwise. Prefer `uia.set_value` when the target field exposes a ValuePattern."
     )]
-    pub async fn input_type_text(
-        &self,
-        request: Parameters<TypeTextRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn input_type_text(&self, request: Parameters<TypeTextRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         let bound_id = request.bound_id.clone();
@@ -4122,10 +3917,7 @@ impl WinctlMcpServer {
         name = "capture.screenshot_window",
         description = "Capture a PNG screenshot of a window previously bound with `windows.bind`. Read-only; identity is revalidated and fails closed if the window changed process or closed. Returns the artifact id and exact virtual-desktop region. Use mainly for VISUAL verification (`capture.compare_baseline`) — screenshots are slow and token-heavy, so to find or act on controls prefer `uia.find` + `uia.invoke` (structured, no pixels), and fall back to `capture.ocr_region` only when UIA cannot see the element."
     )]
-    pub async fn screenshot_window(
-        &self,
-        request: Parameters<BoundIdRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn screenshot_window(&self, request: Parameters<BoundIdRequest>) -> ToolJson {
         let state = self.state.clone();
         let bound_id = request.0.bound_id;
         run_blocking_tool("capture.screenshot_window", move || {
@@ -4141,7 +3933,7 @@ impl WinctlMcpServer {
     pub async fn screenshot_display(
         &self,
         request: Parameters<DisplayScreenshotRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let display_index = request.0.display_index;
         run_blocking_tool("capture.screenshot_display", move || {
@@ -4157,7 +3949,7 @@ impl WinctlMcpServer {
     pub async fn wait_for_window_image_change(
         &self,
         request: Parameters<WindowImageChangeWaitRequest>,
-    ) -> Json<serde_json::Value> {
+    ) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("capture.wait_for_window_image_change", move || {
@@ -4170,10 +3962,7 @@ impl WinctlMcpServer {
         name = "capture.video_start",
         description = "Start recording a bound window (`bound_id`) or a `display_index` (default 0) to an animated GIF, with clamped `frame_interval_ms`/`max_duration_ms` and frame-size caps. If `bound_id` is given the target must first be bound via `windows.bind`. Read-only (no armed session needed). Returns a `recording_id`; stop with `capture.video_stop`."
     )]
-    pub async fn video_start(
-        &self,
-        request: Parameters<VideoStartRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn video_start(&self, request: Parameters<VideoStartRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("capture.video_start", move || {
@@ -4186,10 +3975,7 @@ impl WinctlMcpServer {
         name = "capture.video_stop",
         description = "Stop a video recording (by `recording_id` from `capture.video_start`, or the active one if omitted) and finalize the GIF. Read-only (no armed session needed). Returns the replay artifact id and metadata; fails if there is no matching active recording."
     )]
-    pub async fn video_stop(
-        &self,
-        request: Parameters<VideoStopRequest>,
-    ) -> Json<serde_json::Value> {
+    pub async fn video_stop(&self, request: Parameters<VideoStopRequest>) -> ToolJson {
         let state = self.state.clone();
         let request = request.0;
         run_blocking_tool("capture.video_stop", move || {
@@ -4199,19 +3985,19 @@ impl WinctlMcpServer {
     }
 }
 
-async fn run_blocking_tool<F>(tool_name: &'static str, operation: F) -> Json<serde_json::Value>
+async fn run_blocking_tool<F>(tool_name: &'static str, operation: F) -> ToolJson
 where
     F: FnOnce() -> serde_json::Value + Send + 'static,
 {
     match tokio::task::spawn_blocking(operation).await {
-        Ok(value) => Json(value),
+        Ok(value) => tool_json(value),
         Err(error) => {
             tracing::error!(
                 tool_name = tool_name,
                 error = %error,
                 "blocking MCP tool task failed"
             );
-            Json(serde_json::json!({
+            tool_json(serde_json::json!({
                 "ok": false,
                 "error": {
                     "code": "internal_task_failed",
@@ -4230,38 +4016,37 @@ impl Default for WinctlMcpServer {
 
 impl ServerHandler for WinctlMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
-                concat!(
-                    "Strict, identity-validated Windows control. Typical flow: `windows.find` -> ",
-                    "`windows.bind` (returns bound_id) -> `control.arm` -> act -> verify. ",
-                    "All input/click/type, window focus/close, process.kill, registry/filesystem/",
-                    "clipboard mutation, and macro/test replay are gated: call `control.arm` first ",
-                    "or they fail closed (control_consent_required); `control.revoke`/",
-                    "`control.emergency_stop` stops control. ",
-                    "To interact with controls, PREFER UI Automation over pixels: `uia.find` to ",
-                    "locate (targeted; cheaper than a full `uia.snapshot`), then `uia.invoke`/",
-                    "`set_value`/`toggle`/`select`/`set_focus` to act by control pattern - no ",
-                    "coordinates, no screenshot, lowest cost. Use `capture.screenshot_window` only ",
-                    "for visual verification (screenshots are slow and token-heavy). Use ",
-                    "`capture.ocr_region`/`capture.read_text` only as a fallback to read text or ",
-                    "find controls UIA cannot expose (custom-rendered/canvas UIs); ",
-                    "`capture.ocr_region` returns screen-pixel `center` points usable with ",
-                    "`input.click`. Verify results with `uia.get_value`/`assert.*` rather than ",
-                    "screenshots. Read-only tools (windows.list/find/describe, *.list, uia.snapshot/",
-                    "find/resolve, assert.*, capture.*) need no armed session. Identity (HWND+PID+exe) ",
-                    "is revalidated before every action; if a call reports a stale target, re-bind.",
-                )
-                .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        let mut info = ServerInfo::default();
+        info.instructions = Some(
+            concat!(
+                "Strict, identity-validated Windows control. Typical flow: `windows.find` -> ",
+                "`windows.bind` (returns bound_id) -> `control.arm` -> act -> verify. ",
+                "All input/click/type, window focus/close, process.kill, registry/filesystem/",
+                "clipboard mutation, and macro/test replay are gated: call `control.arm` first ",
+                "or they fail closed (control_consent_required); `control.revoke`/",
+                "`control.emergency_stop` stops control. ",
+                "To interact with controls, PREFER UI Automation over pixels: `uia.find` to ",
+                "locate (targeted; cheaper than a full `uia.snapshot`), then `uia.invoke`/",
+                "`set_value`/`toggle`/`select`/`set_focus` to act by control pattern - no ",
+                "coordinates, no screenshot, lowest cost. Use `capture.screenshot_window` only ",
+                "for visual verification (screenshots are slow and token-heavy). Use ",
+                "`capture.ocr_region`/`capture.read_text` only as a fallback to read text or ",
+                "find controls UIA cannot expose (custom-rendered/canvas UIs); ",
+                "`capture.ocr_region` returns screen-pixel `center` points usable with ",
+                "`input.click`. Verify results with `uia.get_value`/`assert.*` rather than ",
+                "screenshots. Read-only tools (windows.list/find/describe, *.list, uia.snapshot/",
+                "find/resolve, assert.*, capture.*) need no armed session. Identity (HWND+PID+exe) ",
+                "is revalidated before every action; if a call reports a stale target, re-bind.",
+            )
+            .into(),
+        );
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info
     }
 
     fn initialize(
         &self,
-        request: InitializeRequestParam,
+        request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
         let client_name = request.client_info.name.clone();
@@ -4279,7 +4064,7 @@ impl ServerHandler for WinctlMcpServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let tool_name = request.name.to_string();
@@ -4318,7 +4103,7 @@ impl ServerHandler for WinctlMcpServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
@@ -4433,16 +4218,15 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     log_startup_diagnostics("http", Some(config.listen), &state);
 
     let session_manager = Arc::new(LocalSessionManager::default());
+    let mut http_config = StreamableHttpServerConfig::default();
+    http_config.sse_keep_alive = None;
     let service = StreamableHttpService::new(
         {
             let state = state.clone();
             move || Ok(WinctlMcpServer::with_state_transport(state.clone(), "http"))
         },
         session_manager,
-        StreamableHttpServerConfig {
-            sse_keep_alive: None,
-            ..Default::default()
-        },
+        http_config,
     );
     let auth_state = HttpAuthState {
         required_token: if config.auth_token.is_some() || !config.listen.ip().is_loopback() {

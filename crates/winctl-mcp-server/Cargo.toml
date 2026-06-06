@@ -30,7 +30,7 @@ winctl-memory = { path = "../winctl-memory" }
 zeroize.workspace = true
 
 [build-dependencies]
-comrak = { version = "0.31", default-features = false }
+comrak = { version = "0.52", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
