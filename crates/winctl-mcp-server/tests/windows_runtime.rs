@@ -1770,13 +1770,14 @@ async fn launch_crashing_target(target_exe: &PathBuf) -> u32 {
 }
 
 fn parse_first_sse_json(text: &str) -> Value {
-    let data = text
-        .lines()
-        .find_map(|line| line.strip_prefix("data:"))
-        .map(str::trim)
-        .unwrap_or_else(|| panic!("SSE response did not contain data: {text:?}"));
-    serde_json::from_str(data)
-        .unwrap_or_else(|error| panic!("SSE data was not JSON: {data:?}: {error}"))
+    // rmcp >= 1.7 prepends a SEP-1699 priming event (empty `data:` carrying the
+    // SSE id/retry reconnect hints). Skip empty data frames and take the first
+    // one that parses as JSON-RPC, matching spec-compliant SSE client behavior.
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data:").map(str::trim))
+        .filter(|data| !data.is_empty())
+        .find_map(|data| serde_json::from_str(data).ok())
+        .unwrap_or_else(|| panic!("SSE response did not contain JSON-RPC data: {text:?}"))
 }
 
 fn target_exe_path() -> PathBuf {
