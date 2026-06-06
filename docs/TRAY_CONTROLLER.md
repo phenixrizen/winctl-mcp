@@ -35,7 +35,15 @@ Start-Process "$base\bin\winctl-tray.exe" -ArgumentList @(
 )
 ```
 
-The tray icon starts the server if needed. Right-click the icon for Open Dashboard, Open Recorder, Copy MCP URL, Recording Toggle, Start, Stop, Restart, and Quit. Double-click opens the dashboard.
+The tray icon starts the server if needed. `open-dashboard` and `open-recorder` also start the server when the listener is not already accepting connections, which lets Start Menu shortcuts route through the controller rather than launching the server directly. Right-click the icon for Open Dashboard, Open Recorder, Copy MCP URL, Recording Toggle, Start, Stop, Restart, and Quit. Double-click opens the dashboard.
+
+The MSI installer creates these Start Menu shortcuts:
+
+| Shortcut | Command | Behavior |
+| --- | --- | --- |
+| `winctl-mcp Control` | `winctl-tray.exe run` | Starts the MCP server if needed and keeps the tray control app running. |
+| `winctl-mcp Dashboard` | `winctl-tray.exe open-dashboard` | Starts the MCP server if needed and opens the native dashboard window. |
+| `winctl-mcp Recorder` | `winctl-tray.exe open-recorder` | Starts the MCP server if needed and opens the native recorder window. |
 
 Open Dashboard launches a native WebView2 window through `wry`; it does not open the system browser. The WebView dashboard is enabled in the Windows MSVC build used for release packages. When the server config contains `[auth].token`, the tray reads that token and opens the dashboard with an authenticated local URL. MCP traffic still uses bearer-token auth on the `/mcp` endpoint.
 

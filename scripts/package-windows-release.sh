@@ -77,6 +77,7 @@ cp \
   scripts/diagnose-winctl-mcp.ps1 \
   scripts/build-windows-msi.ps1 \
   scripts/install-winctl-mcp.ps1 \
+  scripts/verify-windows-signatures.ps1 \
   "${dist_dir}/scripts/"
 
 cp examples/* "${dist_dir}/examples/"
