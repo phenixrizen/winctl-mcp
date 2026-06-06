@@ -19,6 +19,10 @@ pub struct ScreenshotResult {
     pub width: u32,
     pub height: u32,
     pub image_base64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -107,13 +111,20 @@ mod windows_impl {
     use std::error::Error;
     use std::ffi::c_void;
     use std::fs;
+    use std::mem::size_of;
     use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
     use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
+        GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        HGDIOBJ, SRCCOPY,
+    };
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
     use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
+    use windows_capture::dxgi_duplication_api::{DxgiDuplicationApi, Error as DxgiError};
     use windows_capture::encoder::ImageFormat;
     use windows_capture::frame::Frame;
     use windows_capture::graphics_capture_api::InternalCaptureControl;
@@ -125,6 +136,11 @@ mod windows_impl {
     use windows_capture::window::Window;
 
     use crate::{CaptureError, CaptureErrorCode, CaptureRegion, ScreenshotResult, WindowInfo};
+
+    const PROVIDER_WGC: &str = "windows_graphics_capture";
+    const PROVIDER_DXGI: &str = "dxgi_duplication";
+    const PROVIDER_GDI: &str = "gdi_screen_blt";
+    const DXGI_FALLBACK_ENV: &str = "WINCTL_CAPTURE_DXGI_FALLBACK";
 
     #[derive(Clone)]
     struct CaptureFlags {
@@ -168,7 +184,24 @@ mod windows_impl {
     ) -> Result<ScreenshotResult, CaptureError> {
         let _com = initialize_com_for_capture()?;
         let item = Window::from_raw_hwnd(window.hwnd as *mut c_void);
-        capture_once(item, output_path, region)
+        match capture_once(
+            item,
+            output_path.clone(),
+            region.clone(),
+            PROVIDER_WGC,
+            None,
+        ) {
+            Ok(screenshot) => Ok(screenshot),
+            Err(error) if dxgi_fallback_enabled() => {
+                tracing::warn!(
+                    error = %error.message,
+                    hwnd = %window.hwnd_hex,
+                    "Windows Graphics Capture window capture failed; trying opt-in GDI fallback"
+                );
+                capture_window_gdi(window, output_path, region, error.message)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) fn capture_display(
@@ -181,7 +214,29 @@ mod windows_impl {
             code: CaptureErrorCode::NoDisplay,
             message: format!("display index {display_index} is unavailable: {error}"),
         })?;
-        capture_once(item, output_path, region)
+        match capture_once(
+            item,
+            output_path.clone(),
+            region.clone(),
+            PROVIDER_WGC,
+            None,
+        ) {
+            Ok(screenshot) => Ok(screenshot),
+            Err(error) if dxgi_fallback_enabled() => {
+                tracing::warn!(
+                    error = %error.message,
+                    display_index = display_index,
+                    "Windows Graphics Capture display capture failed; trying opt-in DXGI fallback"
+                );
+                let monitor =
+                    Monitor::from_index(display_index + 1).map_err(|error| CaptureError {
+                        code: CaptureErrorCode::NoDisplay,
+                        message: format!("display index {display_index} is unavailable: {error}"),
+                    })?;
+                capture_monitor_dxgi(monitor, output_path, region, None, Some(error.message))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     struct ComApartment {
@@ -224,6 +279,8 @@ mod windows_impl {
         item: T,
         output_path: String,
         region: CaptureRegion,
+        provider: &str,
+        fallback_from: Option<String>,
     ) -> Result<ScreenshotResult, CaptureError>
     where
         T: TryInto<windows_capture::settings::GraphicsCaptureItemType>,
@@ -284,7 +341,194 @@ mod windows_impl {
             width,
             height,
             image_base64: None,
+            provider: Some(provider.to_owned()),
+            fallback_from,
         })
+    }
+
+    fn dxgi_fallback_enabled() -> bool {
+        std::env::var(DXGI_FALLBACK_ENV)
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false)
+    }
+
+    fn capture_window_gdi(
+        _window: &WindowInfo,
+        output_path: String,
+        region: CaptureRegion,
+        fallback_from: String,
+    ) -> Result<ScreenshotResult, CaptureError> {
+        ensure_parent_dir(&output_path)?;
+        let width = region.width.max(1);
+        let height = region.height.max(1);
+        let width_u32 = width as u32;
+        let height_u32 = height as u32;
+        let mut pixels = vec![0u8; width_u32 as usize * height_u32 as usize * 4];
+
+        unsafe {
+            let screen_dc = GetDC(None);
+            if screen_dc.is_invalid() {
+                return Err(gdi_error("GetDC failed"));
+            }
+            let memory_dc = CreateCompatibleDC(Some(screen_dc));
+            if memory_dc.is_invalid() {
+                ReleaseDC(None, screen_dc);
+                return Err(gdi_error("CreateCompatibleDC failed"));
+            }
+            let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+            if bitmap.is_invalid() {
+                let _ = DeleteDC(memory_dc);
+                ReleaseDC(None, screen_dc);
+                return Err(gdi_error("CreateCompatibleBitmap failed"));
+            }
+            let old_object = SelectObject(memory_dc, HGDIOBJ::from(bitmap));
+            let blit = BitBlt(
+                memory_dc,
+                0,
+                0,
+                width,
+                height,
+                Some(screen_dc),
+                region.x,
+                region.y,
+                SRCCOPY,
+            );
+            if let Err(error) = blit {
+                SelectObject(memory_dc, old_object);
+                let _ = DeleteObject(HGDIOBJ::from(bitmap));
+                let _ = DeleteDC(memory_dc);
+                ReleaseDC(None, screen_dc);
+                return Err(gdi_error(&format!("BitBlt failed: {error}")));
+            }
+
+            let mut bitmap_info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let copied = GetDIBits(
+                memory_dc,
+                bitmap,
+                0,
+                height_u32,
+                Some(pixels.as_mut_ptr().cast()),
+                &mut bitmap_info,
+                DIB_RGB_COLORS,
+            );
+
+            SelectObject(memory_dc, old_object);
+            let _ = DeleteObject(HGDIOBJ::from(bitmap));
+            let _ = DeleteDC(memory_dc);
+            ReleaseDC(None, screen_dc);
+
+            if copied == 0 {
+                return Err(gdi_error("GetDIBits failed"));
+            }
+        }
+
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            pixel[3] = 255;
+        }
+        image::save_buffer(
+            &output_path,
+            &pixels,
+            width_u32,
+            height_u32,
+            image::ColorType::Rgba8,
+        )
+        .map_err(|error| CaptureError {
+            code: CaptureErrorCode::IoFailed,
+            message: format!("failed to save GDI fallback capture: {error}"),
+        })?;
+
+        Ok(ScreenshotResult {
+            output_path,
+            region_virtual_desktop: region,
+            width: width_u32,
+            height: height_u32,
+            image_base64: None,
+            provider: Some(PROVIDER_GDI.to_owned()),
+            fallback_from: Some(fallback_from),
+        })
+    }
+
+    fn capture_monitor_dxgi(
+        monitor: Monitor,
+        output_path: String,
+        region: CaptureRegion,
+        crop: Option<(u32, u32, u32, u32)>,
+        fallback_from: Option<String>,
+    ) -> Result<ScreenshotResult, CaptureError> {
+        ensure_parent_dir(&output_path)?;
+        let mut duplication = DxgiDuplicationApi::new(monitor).map_err(dxgi_error)?;
+        let mut last_timeout = None;
+        for _ in 0..10 {
+            match duplication.acquire_next_frame(100) {
+                Ok(mut frame) => {
+                    let (width, height) = if let Some((start_x, start_y, end_x, end_y)) = crop {
+                        let mut buffer = frame
+                            .buffer_crop(start_x, start_y, end_x, end_y)
+                            .map_err(dxgi_error)?;
+                        let width = buffer.width();
+                        let height = buffer.height();
+                        buffer
+                            .save_as_image(&output_path, ImageFormat::Png)
+                            .map_err(dxgi_error)?;
+                        (width, height)
+                    } else {
+                        let width = frame.width();
+                        let height = frame.height();
+                        frame
+                            .save_as_image(&output_path, ImageFormat::Png)
+                            .map_err(dxgi_error)?;
+                        (width, height)
+                    };
+                    return Ok(ScreenshotResult {
+                        output_path,
+                        region_virtual_desktop: region,
+                        width,
+                        height,
+                        image_base64: None,
+                        provider: Some(PROVIDER_DXGI.to_owned()),
+                        fallback_from,
+                    });
+                }
+                Err(DxgiError::Timeout) => {
+                    last_timeout = Some(DxgiError::Timeout);
+                }
+                Err(error) => return Err(dxgi_error(error)),
+            }
+        }
+        Err(dxgi_error(
+            last_timeout.unwrap_or_else(|| DxgiError::Timeout),
+        ))
+    }
+
+    fn dxgi_error(error: DxgiError) -> CaptureError {
+        CaptureError {
+            code: CaptureErrorCode::CaptureFailed,
+            message: format!("DXGI duplication capture failed: {error}"),
+        }
+    }
+
+    fn gdi_error(message: &str) -> CaptureError {
+        CaptureError {
+            code: CaptureErrorCode::CaptureFailed,
+            message: format!("GDI fallback capture failed: {message}"),
+        }
     }
 
     fn ensure_parent_dir(path: &str) -> Result<(), CaptureError> {

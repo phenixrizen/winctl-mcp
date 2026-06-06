@@ -84,6 +84,10 @@ pub struct VideoRecordingSummary {
     pub encoded_height: Option<u32>,
     pub elapsed_ms: u64,
     pub format: String,
+    #[serde(default)]
+    pub capture_providers: Vec<String>,
+    #[serde(default)]
+    pub capture_fallbacks: Vec<serde_json::Value>,
     pub warnings: Vec<String>,
 }
 
@@ -485,6 +489,8 @@ pub fn video_stop(state: &AppState, request: VideoStopRequest) -> serde_json::Va
             encoded_height: None,
             elapsed_ms: 0,
             format: "gif".into(),
+            capture_providers: Vec::new(),
+            capture_fallbacks: Vec::new(),
             warnings: vec![format!(
                 "video recording thread panicked: {}",
                 panic_message(error)
@@ -577,6 +583,8 @@ fn run_video_recording(
 ) -> VideoRecordingSummary {
     let started = Instant::now();
     let mut frame_paths = Vec::new();
+    let mut capture_providers = Vec::new();
+    let mut capture_fallbacks = Vec::new();
     let mut warnings = Vec::new();
     let mut index = 0usize;
     while !stop.load(Ordering::SeqCst) && started.elapsed().as_millis() < max_duration_ms as u128 {
@@ -590,6 +598,18 @@ fn run_video_recording(
         };
         match capture_result {
             Ok(screenshot) => {
+                if let Some(provider) = &screenshot.provider {
+                    if !capture_providers.iter().any(|item| item == provider) {
+                        capture_providers.push(provider.clone());
+                    }
+                    if let Some(fallback_from) = &screenshot.fallback_from {
+                        capture_fallbacks.push(serde_json::json!({
+                            "frame_index": index,
+                            "from": fallback_from,
+                            "to": provider,
+                        }));
+                    }
+                }
                 frame_paths.push(PathBuf::from(screenshot.output_path));
                 index += 1;
             }
@@ -650,6 +670,8 @@ fn run_video_recording(
         encoded_height: encoded.as_ref().map(|info| info.height),
         elapsed_ms,
         format: "gif".into(),
+        capture_providers,
+        capture_fallbacks,
         warnings,
     }
 }

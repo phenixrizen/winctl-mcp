@@ -39,7 +39,7 @@ jobs:
       base_version: ${{ steps.version.outputs.base_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -57,7 +57,7 @@ jobs:
     environment: release
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -69,7 +69,7 @@ jobs:
           rustup target add $env:WINDOWS_TARGET
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -118,15 +118,23 @@ jobs:
           description: winctl-mcp Windows release binaries
           description-url: https://github.com/phenixrizen/winctl-mcp
 
+      - name: Verify signed Windows executables
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          .\scripts\verify-windows-signatures.ps1 `
+            "target\$env:WINDOWS_TARGET\release\winctl-mcp-server.exe" `
+            "target\$env:WINDOWS_TARGET\release\winctl-tray.exe"
+
       - name: Package release directory and zip
         shell: pwsh
         run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
           $version = "${{ needs.version.outputs.version }}"
           $dist = "dist/winctl-mcp-$version-windows-$env:WINDOWS_TARGET"
           bash scripts/package-windows-release.sh "$env:WINDOWS_TARGET" "release" "$dist" "$version"
-          scripts/build-windows-msi.ps1 -DistDir "$dist" -Version "$version" -OutputPath "dist\winctl-mcp-$version-windows-x64.msi"
+          .\scripts\build-windows-msi.ps1 -DistDir "$dist" -Version "$version" -OutputPath "dist\winctl-mcp-$version-windows-x64.msi"
           Compress-Archive -Path "$dist\*" -DestinationPath "dist\winctl-mcp-$version-windows-$env:WINDOWS_TARGET.zip" -Force
-          Copy-Item "$dist\CHECKSUMS.sha256" "dist\winctl-mcp-$version-windows-$env:WINDOWS_TARGET-CHECKSUMS.sha256" -Force
 
       - name: Sign Windows MSI
         uses: azure/artifact-signing-action@v2
@@ -142,8 +150,35 @@ jobs:
           description: winctl-mcp Windows MSI
           description-url: https://github.com/phenixrizen/winctl-mcp
 
+      - name: Verify signed Windows MSI
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          $version = "${{ needs.version.outputs.version }}"
+          .\scripts\verify-windows-signatures.ps1 "dist\winctl-mcp-$version-windows-x64.msi"
+
+      - name: Generate release checksums
+        shell: pwsh
+        run: |
+          $version = "${{ needs.version.outputs.version }}"
+          $assetNames = @(
+            "winctl-mcp-$version-windows-$env:WINDOWS_TARGET.zip",
+            "winctl-mcp-$version-windows-x64.msi"
+          )
+          $lines = foreach ($assetName in $assetNames) {
+            $assetPath = Join-Path "dist" $assetName
+            if (-not (Test-Path $assetPath)) {
+              throw "Release asset missing before checksum generation: $assetPath"
+            }
+            $hash = Get-FileHash -Path $assetPath -Algorithm SHA256
+            "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), $assetName
+          }
+          $checksumPath = "dist\winctl-mcp-$version-windows-$env:WINDOWS_TARGET-CHECKSUMS.sha256"
+          $lines | Set-Content -Path $checksumPath -Encoding ascii
+          Get-Content $checksumPath
+
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: winctl-mcp-${{ needs.version.outputs.version }}-windows
           path: |
@@ -153,7 +188,7 @@ jobs:
           if-no-files-found: error
 
       - name: Generate provenance attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/*.zip
@@ -183,7 +218,7 @@ jobs:
           Bump: ${{ needs.version.outputs.bump }}
           Base version: ${{ needs.version.outputs.base_version }}
 
-          Assets are built on Windows, signed with Azure Artifact Signing, and accompanied by SHA-256 checksums and GitHub provenance attestations.
+          Assets are built on Windows, signed with Azure Artifact Signing, verified before publishing, and accompanied by SHA-256 checksums and GitHub provenance attestations.
           "@ | Set-Content -Path release-notes.md -Encoding utf8
 
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null

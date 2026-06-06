@@ -12,6 +12,6 @@ Description: Stop the active video recording and return replay artifact metadata
 
 ## Notes
 
-Stopping joins the background capture worker, encodes the captured PNG frames into a GIF, and returns `recording.output_path`, `frames_dir`, `frame_count`, `encoded_width`, `encoded_height`, elapsed time, warnings, and target metadata.
+Stopping joins the background capture worker, encodes the captured PNG frames into a GIF, and returns `recording.output_path`, `frames_dir`, `frame_count`, `encoded_width`, `encoded_height`, elapsed time, warnings, target metadata, `capture_providers`, and any `capture_fallbacks`.
 
 Macro and test runs can request run-video capture with the `video` field on `macro.run` or `test.run`; the resulting video artifact is attached to the run result.

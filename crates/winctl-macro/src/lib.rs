@@ -824,6 +824,9 @@ fn args_has_bound_id(args: &Value) -> bool {
 fn tool_args_need_bound_window(tool: &str, args: &Value) -> bool {
     match tool {
         "capture.ocr_region" => !args_has_string(args, "image_path"),
+        "assert.pixel_color" => !args_has_string(args, "image_path"),
+        "assert.visual_match" => !args_has_string(args, "actual_path"),
+        "assert.window" => args.get("selector").is_none(),
         "macro.assert_image_checkpoint" => !args_has_string(args, "actual_path"),
         "macro.assert_text_checkpoint" => {
             !args_has_string(args, "actual_text") && !args_has_string(args, "image_path")
@@ -1274,6 +1277,90 @@ const SUPPORTED_TOOLS: &[ToolDescriptor] = &[
         produces_artifact: false,
     },
     ToolDescriptor {
+        name: "assert.element",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.text_visible",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.pixel_color",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.window_count",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.clipboard",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.window",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.process",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.no_dialog",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.dialog",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.file",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.registry",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: false,
+        produces_artifact: false,
+    },
+    ToolDescriptor {
+        name: "assert.visual_match",
+        category: "assertion",
+        mutates_ui: false,
+        requires_bound_window: true,
+        produces_artifact: true,
+    },
+    ToolDescriptor {
         name: "macro.assert_uia_element",
         category: "assertion",
         mutates_ui: false,
@@ -1493,6 +1580,62 @@ mod tests {
         let encoded = serde_json::to_string(&manifest).unwrap();
         assert!(encoded.contains("secret_ref"));
         assert!(!encoded.contains("password"));
+    }
+
+    #[test]
+    fn validator_accepts_phase21_assertions_as_non_mutating() {
+        let mut manifest = betty_manifest();
+        manifest.preconditions.push(MacroStep {
+            id: "require-main-window".into(),
+            tool: "assert.window".into(),
+            args: serde_json::json!({
+                "bound_id": "${bound_id}",
+                "title_contains": "Betty",
+                "timeout_ms": 5000
+            }),
+            target: Some(MacroTarget::Current),
+            timeout_ms: Some(5_000),
+            required: true,
+            continue_on_failure: false,
+            coordinate_fallback: None,
+            audit: StepAudit::default(),
+        });
+        manifest.assertions.push(MacroStep {
+            id: "assert-settings-file".into(),
+            tool: "assert.file".into(),
+            args: serde_json::json!({
+                "path": "C:\\\\Temp\\\\settings.json",
+                "content_contains": "secret-like text"
+            }),
+            target: None,
+            timeout_ms: None,
+            required: true,
+            continue_on_failure: false,
+            coordinate_fallback: None,
+            audit: StepAudit::default(),
+        });
+
+        for tool in [
+            "assert.element",
+            "assert.text_visible",
+            "assert.pixel_color",
+            "assert.window",
+            "assert.process",
+            "assert.no_dialog",
+            "assert.dialog",
+            "assert.file",
+            "assert.registry",
+            "assert.visual_match",
+        ] {
+            let descriptor = tool_descriptor(tool).expect("phase21 assertion tool should exist");
+            assert!(!descriptor.mutates_ui, "{tool} must be non-mutating");
+        }
+        let report = validate_manifest(&manifest);
+        assert!(
+            report.valid,
+            "expected Phase 21 assertion manifest to validate, got {:?}",
+            report.issues
+        );
     }
 
     #[test]

@@ -5,7 +5,8 @@ use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -336,6 +337,7 @@ fn print_status(config: &TrayConfig) -> anyhow::Result<()> {
 }
 
 fn open_dashboard(config: &TrayConfig) -> anyhow::Result<()> {
+    ensure_server_ready(config)?;
     let url = config.dashboard_url();
     #[cfg(windows)]
     {
@@ -349,6 +351,7 @@ fn open_dashboard(config: &TrayConfig) -> anyhow::Result<()> {
 }
 
 fn open_recorder(config: &TrayConfig) -> anyhow::Result<()> {
+    ensure_server_ready(config)?;
     let url = config.recorder_url();
     #[cfg(windows)]
     {
@@ -359,6 +362,33 @@ fn open_recorder(config: &TrayConfig) -> anyhow::Result<()> {
         println!("{url}");
     }
     Ok(())
+}
+
+fn ensure_server_ready(config: &TrayConfig) -> anyhow::Result<()> {
+    if server_listener_accepts(config.listen) {
+        return Ok(());
+    }
+    start_server(config)?;
+    let timeout = Duration::from_secs(10);
+    if wait_for_server_listener(config.listen, timeout) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "winctl-mcp-server did not accept connections on {} within {} ms",
+        config.listen,
+        timeout.as_millis()
+    )
+}
+
+fn wait_for_server_listener(listen: SocketAddr, timeout: Duration) -> bool {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if server_listener_accepts(listen) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    server_listener_accepts(listen)
 }
 
 #[cfg(windows)]
@@ -1221,6 +1251,15 @@ listen = "127.0.0.1:8765"
         let cli = Cli::parse([OsString::from("recording-toggle")]).unwrap();
         assert_eq!(cli.command, CommandMode::RecordingToggle);
         assert_eq!(cli.config.recorder_url(), "http://127.0.0.1:8765/recorder");
+    }
+
+    #[test]
+    fn parses_start_menu_shortcut_commands() {
+        let dashboard = Cli::parse([OsString::from("open-dashboard")]).unwrap();
+        assert_eq!(dashboard.command, CommandMode::OpenDashboard);
+
+        let recorder = Cli::parse([OsString::from("open-recorder")]).unwrap();
+        assert_eq!(recorder.command, CommandMode::OpenRecorder);
     }
 
     #[test]

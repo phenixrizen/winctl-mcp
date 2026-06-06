@@ -4,6 +4,13 @@ The typical driving loop: discover a window, bind it by stable identity, arm the
 consent gate, act through UI Automation, then verify — re-binding if a target
 goes stale.
 
+## Project Docs
+
+- [Server observability](SERVER_OBSERVABILITY.md) describes the dashboard
+  connected-client registry and redacted request-history payload.
+
+## Tools
+
 ```mermaid
 flowchart LR
     find["windows.find"] --> bind["windows.bind (bound_id)"]
@@ -18,11 +25,18 @@ flowchart LR
 | --- | --- | --- |
 | `winctl-mcp` | [`app.launch`](APP_LAUNCH.md) | Launch an executable, protocol handler, packaged app, or Start Menu app target without shell command concatenation. |
 | `winctl-mcp` | [`artifact.export`](ARTIFACT_EXPORT.md) | Export a captured artifact to the capture export directory or an allowlisted destination. |
-| `winctl-mcp` | [`assert.element`](ASSERT_ELEMENT.md) | Assert UI Automation element existence, enabled state, and name conditions. |
-| `winctl-mcp` | [`assert.text_visible`](ASSERT_TEXT_VISIBLE.md) | Assert text is visible through window metadata or the UI Automation tree. |
-| `winctl-mcp` | [`assert.pixel_color`](ASSERT_PIXEL_COLOR.md) | Sample an image or bound-window screenshot pixel and optionally assert expected RGB. |
+| `winctl-mcp` | [`assert.element`](ASSERT_ELEMENT.md) | Assert rich UI Automation element predicates against a revalidated bound window. |
+| `winctl-mcp` | [`assert.text_visible`](ASSERT_TEXT_VISIBLE.md) | Assert literal or regex text visibility through window metadata or scoped UI Automation. |
+| `winctl-mcp` | [`assert.pixel_color`](ASSERT_PIXEL_COLOR.md) | Sample an image, bound-window screenshot, or element-scoped screenshot pixel and assert RGB. |
 | `winctl-mcp` | [`assert.window_count`](ASSERT_WINDOW_COUNT.md) | Assert the number of current windows matching a selector. |
-| `winctl-mcp` | [`assert.clipboard`](ASSERT_CLIPBOARD.md) | Assert current clipboard text equals or contains expected text. |
+| `winctl-mcp` | [`assert.clipboard`](ASSERT_CLIPBOARD.md) | Assert current clipboard text without returning clipboard contents. |
+| `winctl-mcp` | [`assert.window`](ASSERT_WINDOW.md) | Assert read-only window predicates for a bound target or selector. |
+| `winctl-mcp` | [`assert.process`](ASSERT_PROCESS.md) | Assert process lifecycle, responsiveness, resource ceilings, and crash-cleanliness. |
+| `winctl-mcp` | [`assert.no_dialog`](ASSERT_NO_DIALOG.md) | Assert that no native dialog or secure-desktop prompt is blocking automation. |
+| `winctl-mcp` | [`assert.dialog`](ASSERT_DIALOG.md) | Assert a specific native dialog by title, text, and buttons without clicking it. |
+| `winctl-mcp` | [`assert.file`](ASSERT_FILE.md) | Assert allowlisted file presence, content predicates, size, and SHA-256 without echoing contents. |
+| `winctl-mcp` | [`assert.registry`](ASSERT_REGISTRY.md) | Assert a registry value exists, is absent, or matches expected kind/data without returning data. |
+| `winctl-mcp` | [`assert.visual_match`](ASSERT_VISUAL_MATCH.md) | Assert an image, window, region, or element crop matches a baseline with diff artifacts. |
 | `winctl-mcp` | [`browser.list`](BROWSER_LIST.md) | List Chrome, Edge, and Firefox process/window state with explicit PID/HWND identity metadata. |
 | `winctl-mcp` | [`browser.describe`](BROWSER_DESCRIBE.md) | Describe one browser target by bound window, PID, or HWND without tab-title selection. |
 | `winctl-mcp` | [`browser.wait_for_navigation`](BROWSER_WAIT_FOR_NAVIGATION.md) | Wait for a bound browser window title transition while revalidating browser PID/HWND/executable identity. |

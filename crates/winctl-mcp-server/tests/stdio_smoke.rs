@@ -266,6 +266,91 @@ async fn streamable_http_health_and_tool_listing_work() {
     assert!(tool_names.contains(&"process.launch"));
     assert!(tool_names.contains(&"windows.wait_for_window"));
 
+    let ping = post_mcp(
+        &client,
+        &base,
+        Some(&session_id),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "server.ping", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(ping["result"]["structuredContent"]["ok"], true);
+
+    let rejected_type = post_mcp(
+        &client,
+        &base,
+        Some(&session_id),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "input.type_text",
+                "arguments": {
+                    "bound_id": "hwnd:0x0000000000000001",
+                    "text": "do-not-leak-dashboard-text"
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(rejected_type["result"]["structuredContent"]["ok"], false);
+
+    let windows = post_mcp(
+        &client,
+        &base,
+        Some(&session_id),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "windows.list", "arguments": {}}
+        }),
+    )
+    .await;
+    assert!(windows["result"].is_object());
+
+    let dashboard_state: Value = client
+        .get(format!("{base}/dashboard/state"))
+        .send()
+        .await
+        .expect("dashboard state should respond after MCP calls")
+        .json()
+        .await
+        .expect("dashboard state should be JSON after MCP calls");
+    let clients = dashboard_state["connected_clients"]
+        .as_array()
+        .expect("connected_clients should be an array");
+    let smoke_client = clients
+        .iter()
+        .find(|client| client["name"] == "http-smoke")
+        .expect("dashboard state should show initialized client");
+    assert_eq!(smoke_client["version"], "0.1");
+    assert_eq!(smoke_client["transport"], "http");
+    assert_eq!(smoke_client["request_count"], 3);
+    assert_eq!(smoke_client["last_tool"], "windows.list");
+    let requests = dashboard_state["recent_requests"]
+        .as_array()
+        .expect("recent_requests should be an array");
+    assert!(
+        requests
+            .iter()
+            .any(|request| request["tool_name"] == "server.ping" && request["ok"] == true),
+        "request history should include server.ping"
+    );
+    let type_request = requests
+        .iter()
+        .find(|request| request["tool_name"] == "input.type_text")
+        .expect("request history should include rejected input.type_text");
+    assert_eq!(type_request["ok"], false);
+    let rendered_type_request = serde_json::to_string(type_request).unwrap();
+    assert!(!rendered_type_request.contains("do-not-leak-dashboard-text"));
+    assert!(!rendered_type_request.contains("\"text\""));
+
     assert!(
         child
             .try_wait()
@@ -390,13 +475,14 @@ async fn post_mcp(
 }
 
 fn parse_first_sse_json(text: &str) -> Value {
-    let data = text
-        .lines()
-        .find_map(|line| line.strip_prefix("data:"))
-        .map(str::trim)
-        .unwrap_or_else(|| panic!("SSE response did not contain data: {text:?}"));
-    serde_json::from_str(data)
-        .unwrap_or_else(|error| panic!("SSE data was not JSON: {data:?}: {error}"))
+    // rmcp >= 1.7 prepends a SEP-1699 priming event (empty `data:` carrying the
+    // SSE id/retry reconnect hints). Skip empty data frames and take the first
+    // one that parses as JSON-RPC, matching spec-compliant SSE client behavior.
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data:").map(str::trim))
+        .filter(|data| !data.is_empty())
+        .find_map(|data| serde_json::from_str(data).ok())
+        .unwrap_or_else(|| panic!("SSE response did not contain JSON-RPC data: {text:?}"))
 }
 
 fn temp_path(name: &str) -> PathBuf {

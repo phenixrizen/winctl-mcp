@@ -21,6 +21,8 @@ roxmltree.workspace = true
 toml.workspace = true
 image.workspace = true
 gif.workspace = true
+regex.workspace = true
+sha2.workspace = true
 include_dir = "0.7"
 winctl = { path = "../winctl" }
 winctl-macro = { path = "../winctl-macro" }
@@ -28,7 +30,7 @@ winctl-memory = { path = "../winctl-memory" }
 zeroize.workspace = true
 
 [build-dependencies]
-comrak = { version = "0.31", default-features = false }
+comrak = { version = "0.52", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

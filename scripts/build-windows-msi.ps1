@@ -173,7 +173,9 @@ try {
     Add-DirectoryComponentGroup -Builder $builder -GroupId "ScriptsFiles" -DirectoryId "SCRIPTSDIR" -Files $scriptsFiles -DistRoot $dist
 
     [void]$builder.AppendLine('    <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Guid="{4E7DFA08-5C72-4FB5-8E05-7961F0464AA2}">')
-    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpTrayShortcut" Name="winctl-mcp Tray" Target="[BINDIR]winctl-tray.exe" Arguments="run" WorkingDirectory="BINDIR" />')
+    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpControlShortcut" Name="winctl-mcp Control" Description="Start the winctl-mcp local control app and MCP server." Target="[BINDIR]winctl-tray.exe" Arguments="run" WorkingDirectory="BINDIR" />')
+    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpDashboardShortcut" Name="winctl-mcp Dashboard" Description="Start the MCP server if needed and open the dashboard." Target="[BINDIR]winctl-tray.exe" Arguments="open-dashboard" WorkingDirectory="BINDIR" />')
+    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpRecorderShortcut" Name="winctl-mcp Recorder" Description="Start the MCP server if needed and open the recorder." Target="[BINDIR]winctl-tray.exe" Arguments="open-recorder" WorkingDirectory="BINDIR" />')
     [void]$builder.AppendLine('      <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />')
     [void]$builder.AppendLine('      <RegistryValue Root="HKLM" Key="Software\winctl-mcp" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />')
     [void]$builder.AppendLine('    </Component>')

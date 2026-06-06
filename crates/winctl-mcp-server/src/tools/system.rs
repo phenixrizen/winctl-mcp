@@ -613,7 +613,7 @@ pub fn process_diagnostics(
     })
 }
 
-fn resolve_allowed_existing_path(
+pub(crate) fn resolve_allowed_existing_path(
     state: &AppState,
     path: &str,
 ) -> Result<PathBuf, serde_json::Value> {
@@ -624,7 +624,10 @@ fn resolve_allowed_existing_path(
     Ok(canonical)
 }
 
-fn resolve_allowed_write_path(state: &AppState, path: &str) -> Result<PathBuf, serde_json::Value> {
+pub(crate) fn resolve_allowed_write_path(
+    state: &AppState,
+    path: &str,
+) -> Result<PathBuf, serde_json::Value> {
     let path = PathBuf::from(path);
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let parent = fs::canonicalize(parent)
