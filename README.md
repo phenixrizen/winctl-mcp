@@ -44,7 +44,7 @@ Build a Windows package with binaries, docs, scripts, examples, version metadata
 make package-win
 ```
 
-Run packaging from Windows/MSVC or through CI. Published end-user packages should use the MSVC build, signed release binaries, and the MSI/ZIP assets produced by CI. End users should not need Rust, WSL, MSYS2, MinGW, or PowerShell execution-policy workarounds.
+Run packaging from Windows/MSVC or through CI. Published end-user packages should use the MSVC build, signed release binaries, and the MSI/ZIP assets produced by CI. The MSI installs Start Menu shortcuts through the no-console `winctl-launcher.exe` entrypoint. End users should not need Rust, WSL, MSYS2, MinGW, or PowerShell execution-policy workarounds.
 
 Install or update from the package on Windows:
 

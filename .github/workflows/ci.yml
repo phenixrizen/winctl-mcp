@@ -80,4 +80,4 @@ jobs:
 
       - name: Run Windows runtime integration tests
         shell: pwsh
-        run: cargo test --workspace --target $env:WINDOWS_TARGET -- --nocapture
+        run: cargo test --workspace --target $env:WINDOWS_TARGET -- --nocapture --test-threads=1

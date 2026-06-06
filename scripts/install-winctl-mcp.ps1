@@ -116,6 +116,7 @@ max_steps = 200
 
 $serverExe = Join-Path $binDir "winctl-mcp-server.exe"
 $trayExe = Join-Path $binDir "winctl-tray.exe"
+$launcherExe = Join-Path $binDir "winctl-launcher.exe"
 
 Write-Host "Installed winctl-mcp to $InstallDir"
 Write-Host "Config: $configPath"
@@ -126,4 +127,7 @@ Write-Host "  Invoke-RestMethod http://$Listen/healthz"
 if (Test-Path $trayExe) {
     Write-Host "Tray/controller:"
     Write-Host "  `"$trayExe`" status"
+    if (Test-Path $launcherExe) {
+        Write-Host "  `"$launcherExe`" run"
+    }
 }

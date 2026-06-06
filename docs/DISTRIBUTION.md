@@ -21,6 +21,7 @@ The package is written to `dist/winctl-mcp-<version>-windows-<target>/` and cont
 | --- | --- |
 | `bin/winctl-mcp-server.exe` | MCP server binary. |
 | `bin/winctl-tray.exe` | Optional local controller binary. |
+| `bin/winctl-launcher.exe` | No-console Windows launcher used by Start Menu shortcuts. |
 | `docs/` | Operational docs copied into the package. |
 | `examples/` | Client and server config examples. |
 | `scripts/` | Install, diagnose, and integration helper scripts. |
@@ -28,7 +29,7 @@ The package is written to `dist/winctl-mcp-<version>-windows-<target>/` and cont
 | `RELEASE.json` | Machine-readable release metadata. |
 | `CHECKSUMS.sha256` | SHA-256 checksums for every packaged file. |
 
-Release builds also produce `winctl-mcp-<version>-windows-x64.msi` with WiX. The MSI installs the MSVC-built binaries/docs under `Program Files\winctl-mcp` and adds Start Menu shortcuts for `winctl-mcp Control`, `winctl-mcp Dashboard`, and `winctl-mcp Recorder`. Each shortcut routes through `winctl-tray.exe`; the Control shortcut keeps the tray app running, while Dashboard and Recorder start the MCP server if needed before opening their native WebView windows.
+Release builds also produce `winctl-mcp-<version>-windows-x64.msi` with WiX. The MSI installs the MSVC-built binaries/docs under `Program Files\winctl-mcp` and adds Start Menu shortcuts for `winctl Control`, `winctl Dashboard`, and `winctl Recorder`. Each shortcut routes through `winctl-launcher.exe` so Explorer does not open a console window; the launcher then starts `winctl-tray.exe`. The Control shortcut keeps the tray app running, while Dashboard and Recorder start the MCP server if needed before opening their native WebView windows.
 
 ## Install or Update
 
@@ -95,7 +96,8 @@ The release workflow does not store these values in repository files. After Azur
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\verify-windows-signatures.ps1 `
   .\bin\winctl-mcp-server.exe `
-  .\bin\winctl-tray.exe
+  .\bin\winctl-tray.exe `
+  .\bin\winctl-launcher.exe
 ```
 
 For the MSI asset:

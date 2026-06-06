@@ -1,6 +1,5 @@
 use std::ffi::OsString;
 use std::fs;
-#[cfg(windows)]
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
@@ -13,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 fn main() {
     if let Err(error) = run() {
+        append_tray_log(&format!("fatal error: {error:#}"));
         eprintln!("winctl-tray: {error:#}");
         std::process::exit(1);
     }
@@ -85,10 +85,7 @@ struct TrayStatus {
 
 impl Default for TrayConfig {
     fn default() -> Self {
-        let data_dir = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("winctl-mcp");
+        let data_dir = app_data_dir();
         let server_exe = std::env::current_exe()
             .ok()
             .and_then(|path| {
@@ -108,6 +105,44 @@ impl Default for TrayConfig {
             pid_file: data_dir.join("winctl-mcp-server.pid"),
         }
     }
+}
+
+fn app_data_dir() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("winctl-mcp")
+}
+
+fn append_tray_log(message: &str) {
+    let dir = app_data_dir();
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let path = dir.join("tray.log");
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let sanitized = sanitize_log_message(message);
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{timestamp} {sanitized}");
+    }
+}
+
+fn sanitize_log_message(message: &str) -> String {
+    let mut output = String::with_capacity(message.len());
+    let mut remaining = message;
+    while let Some(index) = remaining.find("token=") {
+        output.push_str(&remaining[..index + "token=".len()]);
+        output.push_str("<redacted>");
+        let after_token = &remaining[index + "token=".len()..];
+        let end = after_token
+            .find(|character: char| {
+                matches!(character, '&' | '"' | '\'' | '`' | ')' | ' ' | '\r' | '\n')
+            })
+            .unwrap_or(after_token.len());
+        remaining = &after_token[end..];
+    }
+    output.push_str(remaining);
+    output
 }
 
 impl TrayConfig {
@@ -448,11 +483,12 @@ fn run_dashboard_webview(url: &str) -> anyhow::Result<()> {
     use winit::event::WindowEvent;
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::window::{Window, WindowId};
-    use wry::{WebView, WebViewBuilder};
+    use wry::{WebContext, WebView, WebViewBuilder};
 
     struct DashboardWebviewApp {
         url: String,
         window: Option<Window>,
+        web_context: Option<WebContext>,
         webview: Option<WebView>,
         startup_error: Option<anyhow::Error>,
     }
@@ -464,7 +500,7 @@ fn run_dashboard_webview(url: &str) -> anyhow::Result<()> {
             }
 
             let attributes = Window::default_attributes()
-                .with_title("winctl-mcp dashboard")
+                .with_title("winctl Dashboard")
                 .with_inner_size(LogicalSize::new(1180.0, 820.0))
                 .with_min_inner_size(LogicalSize::new(860.0, 620.0));
             let window = match event_loop.create_window(attributes) {
@@ -475,7 +511,20 @@ fn run_dashboard_webview(url: &str) -> anyhow::Result<()> {
                     return;
                 }
             };
-            let webview = match WebViewBuilder::new().with_url(&self.url).build(&window) {
+            let data_dir = app_data_dir().join("webview");
+            if let Err(error) = fs::create_dir_all(&data_dir) {
+                self.startup_error = Some(anyhow::Error::new(error).context(format!(
+                    "failed to create dashboard WebView data directory {}",
+                    data_dir.display()
+                )));
+                event_loop.exit();
+                return;
+            }
+            let mut web_context = WebContext::new(Some(data_dir));
+            let webview = match WebViewBuilder::new_with_web_context(&mut web_context)
+                .with_url(&self.url)
+                .build(&window)
+            {
                 Ok(webview) => webview,
                 Err(error) => {
                     self.startup_error = Some(anyhow::Error::new(error));
@@ -484,6 +533,7 @@ fn run_dashboard_webview(url: &str) -> anyhow::Result<()> {
                 }
             };
             self.window = Some(window);
+            self.web_context = Some(web_context);
             self.webview = Some(webview);
         }
 
@@ -505,6 +555,7 @@ fn run_dashboard_webview(url: &str) -> anyhow::Result<()> {
     let mut app = DashboardWebviewApp {
         url: url.to_string(),
         window: None,
+        web_context: None,
         webview: None,
         startup_error: None,
     };
@@ -1260,6 +1311,16 @@ listen = "127.0.0.1:8765"
 
         let recorder = Cli::parse([OsString::from("open-recorder")]).unwrap();
         assert_eq!(recorder.command, CommandMode::OpenRecorder);
+    }
+
+    #[test]
+    fn redacts_dashboard_tokens_in_logs() {
+        let sanitized =
+            sanitize_log_message("failed at http://127.0.0.1:8765/dashboard?token=secret&x=1");
+        assert_eq!(
+            sanitized,
+            "failed at http://127.0.0.1:8765/dashboard?token=<redacted>&x=1"
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@ version="${4:?version is required}"
 
 server_bin="target/${target}/${profile}/winctl-mcp-server.exe"
 tray_bin="target/${target}/${profile}/winctl-tray.exe"
+launcher_bin="target/${target}/${profile}/winctl-launcher.exe"
 
 if [[ ! -f "${server_bin}" ]]; then
   echo "missing server binary: ${server_bin}" >&2
@@ -32,11 +33,16 @@ mkdir -p \
   "${dist_dir}/exports"
 
 cp "${server_bin}" "${dist_dir}/bin/"
-if [[ -f "${tray_bin}" ]]; then
-  cp "${tray_bin}" "${dist_dir}/bin/"
-else
-  echo "warning: tray binary not found: ${tray_bin}" >&2
+if [[ ! -f "${tray_bin}" ]]; then
+  echo "missing tray binary: ${tray_bin}" >&2
+  exit 1
 fi
+if [[ ! -f "${launcher_bin}" ]]; then
+  echo "missing launcher binary: ${launcher_bin}" >&2
+  exit 1
+fi
+cp "${tray_bin}" "${dist_dir}/bin/"
+cp "${launcher_bin}" "${dist_dir}/bin/"
 
 webview2_arch="x64"
 case "${target}" in
@@ -104,11 +110,13 @@ cat > "${dist_dir}/RELEASE.json" <<EOF
   "built_at_utc": "${built_at_utc}",
   "binaries": [
     "bin/winctl-mcp-server.exe",
-    "bin/winctl-tray.exe"
+    "bin/winctl-tray.exe",
+    "bin/winctl-launcher.exe"
   ],
   "entrypoints": {
     "http": "winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765",
     "stdio": "winctl-mcp-server.exe serve --transport stdio",
+    "control": "winctl-launcher.exe run",
     "self_test": "winctl-mcp-server.exe self-test windows-list"
   },
   "docs": [
