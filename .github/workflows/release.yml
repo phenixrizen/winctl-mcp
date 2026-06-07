@@ -124,7 +124,8 @@ jobs:
           Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
           .\scripts\verify-windows-signatures.ps1 `
             "target\$env:WINDOWS_TARGET\release\winctl-mcp-server.exe" `
-            "target\$env:WINDOWS_TARGET\release\winctl-tray.exe"
+            "target\$env:WINDOWS_TARGET\release\winctl-tray.exe" `
+            "target\$env:WINDOWS_TARGET\release\winctl-launcher.exe"
 
       - name: Package release directory and zip
         shell: pwsh

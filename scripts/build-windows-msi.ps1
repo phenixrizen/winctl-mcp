@@ -46,6 +46,27 @@ function ConvertTo-WixSource {
     return $Path.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace('"', "&quot;")
 }
 
+function Resolve-NativePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $resolved = Resolve-Path $Path
+    if (-not [string]::IsNullOrWhiteSpace($resolved.ProviderPath)) {
+        return $resolved.ProviderPath
+    }
+    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($resolved.Path)
+}
+
+function ConvertTo-NativeUnresolvedPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $unresolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    $providerPrefix = "Microsoft.PowerShell.Core\FileSystem::"
+    if ($unresolved.StartsWith($providerPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $unresolved.Substring($providerPrefix.Length)
+    }
+    return $unresolved
+}
+
 function Get-RelativePathCompat {
     param(
         [Parameter(Mandatory = $true)]
@@ -54,8 +75,8 @@ function Get-RelativePathCompat {
         [string]$Path
     )
 
-    $baseFull = (Resolve-Path $BasePath).Path.Replace('\', '/').TrimEnd('/') + '/'
-    $pathFull = (Resolve-Path $Path).Path.Replace('\', '/')
+    $baseFull = (Resolve-NativePath $BasePath).Replace('\', '/').TrimEnd('/') + '/'
+    $pathFull = (Resolve-NativePath $Path).Replace('\', '/')
     if (-not $pathFull.StartsWith($baseFull, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Path is not under base path: $Path"
     }
@@ -100,7 +121,7 @@ $temp = Join-Path ([System.IO.Path]::GetTempPath()) "winctl-mcp-msi-$([Guid]::Ne
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
 
 try {
-    $sourceDist = (Resolve-Path $DistDir).Path
+    $sourceDist = Resolve-NativePath $DistDir
     $dist = $sourceDist
     if ($sourceDist.StartsWith("\\")) {
         $dist = Join-Path $temp "dist"
@@ -113,11 +134,18 @@ try {
     if (-not (Test-Path (Join-Path $dist "bin\winctl-tray.exe"))) {
         throw "MSI source is missing bin\winctl-tray.exe: $dist"
     }
+    if (-not (Test-Path (Join-Path $dist "bin\winctl-launcher.exe"))) {
+        throw "MSI source is missing bin\winctl-launcher.exe: $dist"
+    }
+    $iconPath = Join-Path $dist "assets\winctl.ico"
+    if (-not (Test-Path $iconPath)) {
+        throw "MSI source is missing assets\winctl.ico: $dist"
+    }
 
     if ([string]::IsNullOrWhiteSpace($OutputPath)) {
         $OutputPath = Join-Path (Split-Path -Parent $sourceDist) "winctl-mcp-$Version-windows-x64.msi"
     }
-    $requestedOutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
+    $requestedOutputPath = ConvertTo-NativeUnresolvedPath $OutputPath
     $buildOutputPath = $requestedOutputPath
     if ($requestedOutputPath.StartsWith("\\")) {
         $buildOutputPath = Join-Path $temp ([System.IO.Path]::GetFileName($requestedOutputPath))
@@ -125,13 +153,18 @@ try {
 
     $wxs = Join-Path $temp "Product.wxs"
     $upgradeCode = "{8E08F85A-B6A8-47A7-90DB-F5B7B2D8BA09}"
+    $productName = "winctl MCP"
+    $manufacturer = "RockSolid Labs, Inc"
+    $iconSource = ConvertTo-WixSource $iconPath
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.AppendLine('<?xml version="1.0" encoding="UTF-8"?>')
     [void]$builder.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
-    [void]$builder.AppendLine("  <Package Name=`"winctl-mcp`" Manufacturer=`"phenixrizen`" Version=`"$productVersion`" UpgradeCode=`"$upgradeCode`" Scope=`"perMachine`">")
+    [void]$builder.AppendLine("  <Package Name=`"$productName`" Manufacturer=`"$manufacturer`" Version=`"$productVersion`" UpgradeCode=`"$upgradeCode`" Scope=`"perMachine`">")
     [void]$builder.AppendLine('    <MajorUpgrade DowngradeErrorMessage="A newer version of winctl-mcp is already installed." />')
     [void]$builder.AppendLine('    <MediaTemplate EmbedCab="yes" />')
-    [void]$builder.AppendLine('    <Feature Id="Main" Title="winctl-mcp" Level="1">')
+    [void]$builder.AppendLine("    <Icon Id=`"WinctlIcon.ico`" SourceFile=`"$iconSource`" />")
+    [void]$builder.AppendLine('    <Property Id="ARPPRODUCTICON" Value="WinctlIcon.ico" />')
+    [void]$builder.AppendLine("    <Feature Id=`"Main`" Title=`"$productName`" Level=`"1`">")
     [void]$builder.AppendLine('      <ComponentGroupRef Id="RootFiles" />')
     [void]$builder.AppendLine('      <ComponentGroupRef Id="AssetsFiles" />')
     [void]$builder.AppendLine('      <ComponentGroupRef Id="BrandAssetsFiles" />')
@@ -153,7 +186,7 @@ try {
     [void]$builder.AppendLine('      </Directory>')
     [void]$builder.AppendLine('    </StandardDirectory>')
     [void]$builder.AppendLine('    <StandardDirectory Id="ProgramMenuFolder">')
-    [void]$builder.AppendLine('      <Directory Id="ApplicationProgramsFolder" Name="winctl-mcp" />')
+    [void]$builder.AppendLine('      <Directory Id="ApplicationProgramsFolder" Name="winctl" />')
     [void]$builder.AppendLine('    </StandardDirectory>')
 
     $rootFiles = @(Get-ChildItem -Path $dist -File)
@@ -173,9 +206,9 @@ try {
     Add-DirectoryComponentGroup -Builder $builder -GroupId "ScriptsFiles" -DirectoryId "SCRIPTSDIR" -Files $scriptsFiles -DistRoot $dist
 
     [void]$builder.AppendLine('    <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Guid="{4E7DFA08-5C72-4FB5-8E05-7961F0464AA2}">')
-    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpControlShortcut" Name="winctl-mcp Control" Description="Start the winctl-mcp local control app and MCP server." Target="[BINDIR]winctl-tray.exe" Arguments="run" WorkingDirectory="BINDIR" />')
-    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpDashboardShortcut" Name="winctl-mcp Dashboard" Description="Start the MCP server if needed and open the dashboard." Target="[BINDIR]winctl-tray.exe" Arguments="open-dashboard" WorkingDirectory="BINDIR" />')
-    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpRecorderShortcut" Name="winctl-mcp Recorder" Description="Start the MCP server if needed and open the recorder." Target="[BINDIR]winctl-tray.exe" Arguments="open-recorder" WorkingDirectory="BINDIR" />')
+    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpControlShortcut" Name="winctl Control" Description="Start the winctl local control app and MCP server." Target="[BINDIR]winctl-launcher.exe" Arguments="run" WorkingDirectory="BINDIR" Icon="WinctlIcon.ico" IconIndex="0" />')
+    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpDashboardShortcut" Name="winctl Dashboard" Description="Start the MCP server if needed and open the dashboard." Target="[BINDIR]winctl-launcher.exe" Arguments="open-dashboard" WorkingDirectory="BINDIR" Icon="WinctlIcon.ico" IconIndex="0" />')
+    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpRecorderShortcut" Name="winctl Recorder" Description="Start the MCP server if needed and open the recorder." Target="[BINDIR]winctl-launcher.exe" Arguments="open-recorder" WorkingDirectory="BINDIR" Icon="WinctlIcon.ico" IconIndex="0" />')
     [void]$builder.AppendLine('      <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />')
     [void]$builder.AppendLine('      <RegistryValue Root="HKLM" Key="Software\winctl-mcp" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />')
     [void]$builder.AppendLine('    </Component>')
