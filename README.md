@@ -6,6 +6,8 @@
 
 Reliable Windows MCP control server in Rust, with strict bound-window identity checks before focus, input, and capture actions.
 
+Sponsored by [RockSolid Labs, Inc.](https://github.com/rocksolidlabs).
+
 ## Inspiration
 
 This project takes inspiration from [CursorTouch/Windows-MCP](https://github.com/CursorTouch/Windows-MCP/) as an example of broad Windows automation through MCP, while focusing on strict, auditable control of known Windows app targets.
