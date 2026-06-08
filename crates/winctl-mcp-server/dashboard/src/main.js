@@ -82,6 +82,7 @@ const DASHBOARD_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'control', label: 'Control' },
   { id: 'observability', label: 'Observability' },
+  { id: 'connect', label: 'Connect' },
   { id: 'recorder', label: 'Recorder' },
   { id: 'inspect', label: 'Inspect' },
   { id: 'artifacts', label: 'Artifacts' },
@@ -108,6 +109,14 @@ setFavicon(icon32Url);
 
 function authHeaders() {
   return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
+function jsonSnippet(value) {
+  return JSON.stringify(value, null, 2);
+}
+
+function psSingleQuote(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
 }
 
 function formatUnixMs(value) {
@@ -242,6 +251,16 @@ createApp({
       collapsedDocGroups: {},
       expandedItems: {},
       deletingId: null,
+      connectState: null,
+      connectLoading: false,
+      connectError: null,
+      connectTokenLabel: '',
+      connectTokenBusy: false,
+      connectTokenValue: '',
+      connectTokenMetadata: null,
+      connectDashboardTokenVisible: false,
+      connectMode: 'http',
+      copiedConnectId: '',
       rawEditor: null,
       rawMonaco: null,
       rawEditorLoading: false,
@@ -488,6 +507,170 @@ createApp({
     uiaTableFields() {
       return ['name', 'role', 'automation_id', 'class_name', 'element_ref'];
     },
+    connectMcpUrl() {
+      return this.connectState?.mcp_url ?? `${window.location.origin}/mcp`;
+    },
+    connectServerExe() {
+      return this.connectState?.server_exe ?? 'winctl-mcp-server.exe';
+    },
+    connectStdioArgs() {
+      return ['serve', '--transport', 'stdio'];
+    },
+    connectTokens() {
+      return this.connectState?.tokens ?? [];
+    },
+    connectExampleToken() {
+      return this.connectTokenValue || authToken || '<token>';
+    },
+    currentDashboardToken() {
+      return authToken || '';
+    },
+    connectAuthHeader() {
+      return `Bearer ${this.connectExampleToken}`;
+    },
+    connectExamples() {
+      if (this.connectMode === 'stdio') return this.connectStdioExamples;
+      const url = this.connectMcpUrl;
+      const token = this.connectExampleToken;
+      const authHeader = this.connectAuthHeader;
+      const codexConfig = `[mcp_servers.winctl-mcp]
+url = "${url}"
+http_headers = { Authorization = "${authHeader}" }
+tool_timeout_sec = 120.0`;
+      const cursorConfig = jsonSnippet({
+        mcpServers: {
+          'winctl-mcp': {
+            url,
+            headers: { Authorization: authHeader },
+          },
+        },
+      });
+      const copilotConfig = jsonSnippet({
+        servers: {
+          'winctl-mcp': {
+            type: 'http',
+            url,
+            headers: { Authorization: authHeader },
+          },
+        },
+      });
+      const copilotAdd = jsonSnippet({
+        name: 'winctl-mcp',
+        type: 'http',
+        url,
+        headers: { Authorization: authHeader },
+      });
+      return [
+        {
+          id: 'codex',
+          title: 'Codex',
+          path: '~/.codex/config.toml',
+          command: `$env:WINCTL_MCP_TOKEN = ${psSingleQuote(token)}
+codex mcp add winctl-mcp --url ${psSingleQuote(url)} --bearer-token-env-var WINCTL_MCP_TOKEN`,
+          config: codexConfig,
+        },
+        {
+          id: 'claude-code',
+          title: 'Claude Code',
+          path: 'project or user MCP config',
+          command: `claude mcp add --transport http winctl-mcp ${psSingleQuote(url)} --header ${psSingleQuote(`Authorization: ${authHeader}`)}`,
+          config: jsonSnippet({
+            type: 'http',
+            url,
+            headers: { Authorization: authHeader },
+          }),
+        },
+        {
+          id: 'cursor',
+          title: 'Cursor',
+          path: '.cursor/mcp.json',
+          command: `New-Item -ItemType Directory -Force .cursor
+Set-Content -Path .cursor\\mcp.json -Value @'
+${cursorConfig}
+'@`,
+          config: cursorConfig,
+        },
+        {
+          id: 'github-copilot',
+          title: 'GitHub Copilot',
+          path: '.vscode/mcp.json',
+          command: `code --add-mcp ${psSingleQuote(copilotAdd)}`,
+          config: copilotConfig,
+        },
+      ];
+    },
+    connectStdioExamples() {
+      const command = this.connectServerExe;
+      const args = this.connectStdioArgs;
+      const codexConfig = `[mcp_servers.winctl-mcp]
+command = "${command.replaceAll('\\', '\\\\')}"
+args = ${jsonSnippet(args)}
+tool_timeout_sec = 120.0`;
+      const claudeConfig = jsonSnippet({
+        mcpServers: {
+          'winctl-mcp': {
+            command,
+            args,
+          },
+        },
+      });
+      const cursorConfig = jsonSnippet({
+        mcpServers: {
+          'winctl-mcp': {
+            command,
+            args,
+          },
+        },
+      });
+      const copilotConfig = jsonSnippet({
+        servers: {
+          'winctl-mcp': {
+            type: 'stdio',
+            command,
+            args,
+          },
+        },
+      });
+      const copilotAdd = jsonSnippet({
+        name: 'winctl-mcp',
+        command,
+        args,
+      });
+      const cliArgs = args.map(psSingleQuote).join(' ');
+      return [
+        {
+          id: 'codex-stdio',
+          title: 'Codex',
+          path: '~/.codex/config.toml',
+          command: `codex mcp add winctl-mcp -- ${psSingleQuote(command)} ${cliArgs}`,
+          config: codexConfig,
+        },
+        {
+          id: 'claude-code-stdio',
+          title: 'Claude Code',
+          path: 'Claude MCP config',
+          command: `claude mcp add winctl-mcp -- ${psSingleQuote(command)} ${cliArgs}`,
+          config: claudeConfig,
+        },
+        {
+          id: 'cursor-stdio',
+          title: 'Cursor',
+          path: '.cursor/mcp.json',
+          command: `New-Item -ItemType Directory -Force .cursor
+Set-Content -Path .cursor\\mcp.json -Value @'
+${cursorConfig}
+'@`,
+          config: cursorConfig,
+        },
+        {
+          id: 'github-copilot-stdio',
+          title: 'GitHub Copilot',
+          path: '.vscode/mcp.json',
+          command: `code --add-mcp ${psSingleQuote(copilotAdd)}`,
+          config: copilotConfig,
+        },
+      ];
+    },
     uiaElements() {
       const root = this.uiaSnapshot?.snapshot?.root;
       if (!root) return [];
@@ -615,6 +798,7 @@ createApp({
   },
   watch: {
     async selectedTab(tab) {
+      if (tab === 'connect') await this.loadConnect();
       if (tab === 'docs') {
         await this.loadDocs();
         await this.renderMermaid();
@@ -630,6 +814,7 @@ createApp({
   },
   mounted() {
     this.loadState();
+    if (this.selectedTab === 'connect') this.loadConnect();
     window.addEventListener('resize', this.layoutRawEditor);
     this.intervalId = window.setInterval(() => {
       if (this.autoRefresh) this.loadState({ quiet: true });
@@ -659,6 +844,78 @@ createApp({
         this.loading = false;
         this.refreshing = false;
       }
+    },
+    async loadConnect() {
+      this.connectLoading = true;
+      this.connectError = null;
+      try {
+        const response = await fetch('/dashboard/connect', {
+          cache: 'no-store',
+          headers: authHeaders(),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        this.connectState = await response.json();
+      } catch (error) {
+        this.connectError = String(error);
+      } finally {
+        this.connectLoading = false;
+      }
+    },
+    async connectPost(path, body) {
+      this.connectTokenBusy = true;
+      this.connectError = null;
+      try {
+        const response = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(body ?? {}),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.error?.message ?? `HTTP ${response.status}`);
+        }
+        if (payload.tokens) {
+          this.connectState = { ...(this.connectState ?? {}), tokens: payload.tokens };
+        }
+        return payload;
+      } catch (error) {
+        this.connectError = String(error);
+        return null;
+      } finally {
+        this.connectTokenBusy = false;
+      }
+    },
+    async createConnectToken() {
+      const payload = await this.connectPost('/dashboard/connect/token', {
+        label: this.connectTokenLabel || null,
+      });
+      if (!payload) return;
+      this.connectTokenValue = payload.token ?? '';
+      this.connectTokenMetadata = payload.metadata ?? null;
+      this.connectTokenLabel = '';
+    },
+    async revealConnectToken(token) {
+      const payload = await this.connectPost('/dashboard/connect/token/reveal', { id: token.id });
+      if (!payload) return;
+      this.connectTokenValue = payload.token ?? '';
+      this.connectTokenMetadata = payload.metadata ?? token;
+    },
+    async revokeConnectToken(token) {
+      const confirmed = window.confirm(`Revoke ${token.label || token.id}? Active clients using it will stop connecting.`);
+      if (!confirmed) return;
+      const payload = await this.connectPost('/dashboard/connect/token/revoke', { id: token.id });
+      if (!payload) return;
+      if (this.connectTokenMetadata?.id === token.id) {
+        this.connectTokenValue = '';
+        this.connectTokenMetadata = null;
+      }
+    },
+    async copyConnectText(id, text) {
+      await navigator.clipboard?.writeText(text).catch(() => {});
+      this.copiedConnectId = id;
+      window.setTimeout(() => {
+        if (this.copiedConnectId === id) this.copiedConnectId = '';
+      }, 1600);
     },
     async renderRawEditor() {
       await this.$nextTick();
@@ -1444,6 +1701,167 @@ createApp({
               <button type="button" class="btn btn-xs" :disabled="tableMeta('requests', recentRequests, requestTableFields).page >= tableMeta('requests', recentRequests, requestTableFields).totalPages" @click="nextTablePage('requests', recentRequests, requestTableFields)">Next</button>
             </div>
           </section>
+        </section>
+
+        <section v-if="selectedTab === 'connect'" class="space-y-5">
+          <div class="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+            <section class="winctl-card">
+              <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+                <h2 class="text-sm font-semibold">MCP endpoint</h2>
+                <button type="button" class="btn btn-xs" :disabled="connectLoading" @click="loadConnect">Refresh</button>
+              </div>
+              <dl class="divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
+                  <dt class="text-slate-500">URL</dt>
+                  <dd class="flex min-w-0 items-center gap-2">
+                    <code class="winctl-code min-w-0 break-all text-xs">{{ connectMcpUrl }}</code>
+                    <button type="button" class="btn btn-xs shrink-0" @click="copyConnectText('mcp-url', connectMcpUrl)">
+                      {{ copiedConnectId === 'mcp-url' ? 'Copied' : 'Copy' }}
+                    </button>
+                  </dd>
+                </div>
+                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
+                  <dt class="text-slate-500">Auth</dt>
+                  <dd>
+                    <span class="badge badge-sm" :class="connectState?.auth_required ? 'badge-warning' : 'badge-ghost'">
+                      {{ connectState?.auth_required ? 'Bearer token required' : 'Loopback auth optional' }}
+                    </span>
+                  </dd>
+                </div>
+                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
+                  <dt class="text-slate-500">Dashboard token</dt>
+                  <dd>
+                    <div v-if="currentDashboardToken" class="flex min-w-0 flex-wrap items-center gap-2">
+                      <code class="winctl-code max-w-full break-all rounded bg-base-200 px-2 py-1 text-xs">
+                        {{ connectDashboardTokenVisible ? currentDashboardToken : '••••••••••••••••••••••••' }}
+                      </code>
+                      <button type="button" class="btn btn-xs" @click="connectDashboardTokenVisible = !connectDashboardTokenVisible">
+                        {{ connectDashboardTokenVisible ? 'Hide' : 'Show' }}
+                      </button>
+                      <button type="button" class="btn btn-xs" @click="copyConnectText('dashboard-token', currentDashboardToken)">
+                        {{ copiedConnectId === 'dashboard-token' ? 'Copied' : 'Copy' }}
+                      </button>
+                    </div>
+                    <span v-else class="text-xs text-slate-500">No dashboard token in this browser session</span>
+                  </dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="winctl-card overflow-hidden">
+              <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+                <h2 class="text-sm font-semibold">Tokens</h2>
+                <span class="badge badge-info badge-outline">{{ connectTokens.length }}</span>
+              </div>
+              <div class="space-y-4 p-4">
+                <div class="flex flex-col gap-2 sm:flex-row">
+                  <input
+                    v-model="connectTokenLabel"
+                    type="text"
+                    class="input input-sm input-bordered flex-1"
+                    placeholder="Token label"
+                    @keyup.enter="createConnectToken"
+                  />
+                  <button type="button" class="btn btn-sm btn-info" :disabled="connectTokenBusy" @click="createConnectToken">Add token</button>
+                </div>
+                <div v-if="connectState && !connectState.auth_required" class="alert alert-warning text-sm">
+                  <span>This loopback server is not enforcing tokens. Restart HTTP with <code class="winctl-code">--auth-token</code> to require bearer auth from startup.</span>
+                </div>
+                <div v-if="connectError" class="alert alert-error text-sm">{{ connectError }}</div>
+                <div v-if="connectTokenValue" class="rounded-lg border border-[#06d6a0]/40 bg-[#06d6a0]/10 p-3">
+                  <div class="mb-2 flex items-center justify-between gap-3">
+                    <span class="text-sm font-semibold">{{ connectTokenMetadata?.label || 'Token' }}</span>
+                    <button type="button" class="btn btn-xs" @click="copyConnectText('revealed-token', connectTokenValue)">
+                      {{ copiedConnectId === 'revealed-token' ? 'Copied' : 'Copy token' }}
+                    </button>
+                  </div>
+                  <code class="winctl-code block break-all text-xs">{{ connectTokenValue }}</code>
+                </div>
+                <div class="winctl-table-frame rounded-lg border border-slate-200 dark:border-slate-700">
+                  <table class="table winctl-table table-sm">
+                    <thead>
+                      <tr><th>Label</th><th>Created</th><th>Last used</th><th>Uses</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr v-if="!connectTokens.length">
+                        <td colspan="5" class="py-8 text-center text-slate-500">No active tokens</td>
+                      </tr>
+                      <tr v-for="token in connectTokens" :key="token.id">
+                        <td>
+                          <div class="font-medium">{{ token.label }}</div>
+                          <div class="winctl-code text-xs text-slate-500">{{ token.id }}</div>
+                          <span v-if="token.startup" class="badge badge-xs badge-ghost">startup</span>
+                        </td>
+                        <td class="text-xs">{{ formatUnixMs(token.created_at_unix_ms) }}</td>
+                        <td class="text-xs">{{ formatUnixMs(token.last_used_at_unix_ms) }}</td>
+                        <td class="text-sm font-semibold">{{ token.use_count || 0 }}</td>
+                        <td>
+                          <div class="flex flex-wrap gap-1">
+                            <button type="button" class="btn btn-xs" :disabled="connectTokenBusy" @click="revealConnectToken(token)">Reveal</button>
+                            <button type="button" class="btn btn-xs btn-ghost text-error" :disabled="connectTokenBusy" @click="revokeConnectToken(token)">Revoke</button>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <section class="winctl-card">
+            <div class="winctl-card-header flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 class="text-sm font-semibold">Client setup</h2>
+                <div class="text-xs text-slate-500">
+                  {{ connectMode === 'http' ? 'HTTP connects clients to this running dashboard server.' : 'Stdio starts a separate MCP server process; dashboard features remain on HTTP.' }}
+                </div>
+              </div>
+              <div class="join">
+                <button
+                  type="button"
+                  class="btn btn-sm join-item"
+                  :class="connectMode === 'http' ? 'btn-info' : 'btn-ghost'"
+                  @click="connectMode = 'http'"
+                >HTTP recommended</button>
+                <button
+                  type="button"
+                  class="btn btn-sm join-item"
+                  :class="connectMode === 'stdio' ? 'btn-info' : 'btn-ghost'"
+                  @click="connectMode = 'stdio'"
+                >Stdio fallback</button>
+              </div>
+            </div>
+          </section>
+
+          <div class="grid gap-5 xl:grid-cols-2">
+            <section v-for="example in connectExamples" :key="example.id" class="winctl-card overflow-hidden">
+              <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+                <div>
+                  <h2 class="text-sm font-semibold">{{ example.title }}</h2>
+                  <div class="winctl-code text-xs text-slate-500">{{ example.path }}</div>
+                </div>
+                <div class="flex gap-1">
+                  <button type="button" class="btn btn-xs" @click="copyConnectText(example.id + ':config', example.config)">
+                    {{ copiedConnectId === example.id + ':config' ? 'Copied' : 'Copy config' }}
+                  </button>
+                  <button type="button" class="btn btn-xs" @click="copyConnectText(example.id + ':command', example.command)">
+                    {{ copiedConnectId === example.id + ':command' ? 'Copied' : 'Copy command' }}
+                  </button>
+                </div>
+              </div>
+              <div class="grid gap-3 p-4">
+                <div>
+                  <div class="mb-1 text-xs font-bold uppercase text-slate-500">Config</div>
+                  <pre class="winctl-code overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-[#e6edf6]"><code>{{ example.config }}</code></pre>
+                </div>
+                <div>
+                  <div class="mb-1 text-xs font-bold uppercase text-slate-500">Command</div>
+                  <pre class="winctl-code overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-[#e6edf6]"><code>{{ example.command }}</code></pre>
+                </div>
+              </div>
+            </section>
+          </div>
         </section>
 
         <section v-if="selectedTab === 'recorder'" class="space-y-5">
