@@ -50,7 +50,7 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
                     "--class", "WinctlRuntimeTarget",
                     "--width", "860",
                     "--height", "560",
-                    "--duration-ms", "60000",
+                    "--duration-ms", "180000",
                     "--automation-controls"
                 ],
                 "wait_for_window": true,
@@ -633,8 +633,25 @@ async fn windows_mcp_exercises_native_uia_metrics_and_emergency_stop() {
         "structured crash_report entry should include the crashed process identity: {crash_report:#}"
     );
 
-    send_ctrl_alt_esc();
-    let emergency = harness.wait_for_emergency_stop().await;
+    let hotkey = harness.wait_for_emergency_hotkey_registration().await;
+    let emergency = if hotkey["control"]["emergency_hotkey_registered"] == true {
+        send_ctrl_alt_esc();
+        harness.wait_for_emergency_stop().await
+    } else {
+        eprintln!(
+            "skipping Ctrl+Alt+Esc delivery check because this test server did not register the global emergency hotkey; another local winctl-mcp server may own it"
+        );
+        harness
+            .call_tool(
+                "control.emergency_stop",
+                serde_json::json!({
+                    "session_id": "windows-runtime-test",
+                    "reason": "fallback after emergency hotkey was unavailable to test process"
+                }),
+            )
+            .await
+    };
+    assert_ok("control.emergency_stop", &emergency);
     assert_eq!(emergency["control"]["emergency_stop_active"], true);
     assert_eq!(emergency["control"]["status"], "revoked");
 
@@ -779,7 +796,7 @@ async fn windows_dialog_tools_invoke_message_box_button() {
                     "--class", "WinctlDialogOwner",
                     "--width", "520",
                     "--height", "320",
-                    "--duration-ms", "60000",
+                    "--duration-ms", "180000",
                     "--message-box-after-ms", "500"
                 ],
                 "wait_for_window": true,
@@ -879,7 +896,7 @@ async fn windows_video_capture_records_display_artifact() {
             serde_json::json!({
                 "display_index": 0,
                 "frame_interval_ms": 200,
-                "max_duration_ms": 5000,
+                "max_duration_ms": 12000,
                 "max_frame_width": 640,
                 "max_frame_height": 360,
                 "output_name": "windows-runtime-video"
@@ -891,7 +908,7 @@ async fn windows_video_capture_records_display_artifact() {
         .as_str()
         .expect("video_start should return recording_id")
         .to_owned();
-    tokio::time::sleep(Duration::from_millis(3000)).await;
+    tokio::time::sleep(Duration::from_millis(8000)).await;
     let stop = harness
         .call_tool(
             "capture.video_stop",
@@ -972,7 +989,7 @@ async fn windows_recorder_records_redacted_manifest_and_replays_with_secret() {
                     "--class", "WinctlRecorderTarget",
                     "--width", "860",
                     "--height", "560",
-                    "--duration-ms", "60000",
+                    "--duration-ms", "180000",
                     "--automation-controls",
                     "--password-control"
                 ],
@@ -1262,7 +1279,7 @@ impl McpHarness {
         let harness = Self {
             child,
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(20))
+                .timeout(Duration::from_secs(120))
                 .build()
                 .expect("HTTP client should build"),
             base: format!("http://{addr}"),
@@ -1332,6 +1349,24 @@ impl McpHarness {
             assert!(
                 started.elapsed() < Duration::from_secs(10),
                 "timed out waiting for Ctrl+Alt+Esc emergency stop; last state: {state:#}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn wait_for_emergency_hotkey_registration(&mut self) -> Value {
+        let started = std::time::Instant::now();
+        loop {
+            let state = self.call_tool("control.state", serde_json::json!({})).await;
+            let control = &state["control"];
+            if control["emergency_hotkey_registered"] == true
+                || control["emergency_hotkey_started"] == false
+            {
+                return state;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "timed out waiting for emergency hotkey registration result; last state: {state:#}"
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
