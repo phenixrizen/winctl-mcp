@@ -4766,7 +4766,7 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
     AxumJson(serde_json::json!({
         "ok": true,
         "service": "winctl-mcp-server",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": build_version(),
         "capture_dir": state.app_state.capture_dir.as_ref(),
         "policy": state.app_state.policy.as_ref(),
         "bound_windows": bound,
@@ -4780,6 +4780,13 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
         "recent_requests": observability.recent_requests,
         "warnings": []
     }))
+}
+
+fn build_version() -> &'static str {
+    match option_env!("WINCTL_BUILD_VERSION") {
+        Some(version) if !version.is_empty() => version,
+        _ => env!("CARGO_PKG_VERSION"),
+    }
 }
 
 async fn dashboard_uia_json(
@@ -6215,6 +6222,16 @@ mod tests {
             .expect("created token should revoke");
         assert_eq!(revoked.id, created.metadata.id);
         assert!(!registry.authorize(&created.token));
+    }
+
+    #[test]
+    fn build_version_uses_release_override_when_present() {
+        let expected = std::env::var("WINCTL_BUILD_VERSION")
+            .ok()
+            .filter(|version| !version.is_empty())
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+
+        assert_eq!(build_version(), expected.as_str());
     }
 
     #[test]

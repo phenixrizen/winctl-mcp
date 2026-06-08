@@ -55,6 +55,8 @@ jobs:
     if: needs.version.outputs.should_release == 'true'
     runs-on: windows-2022
     environment: release
+    env:
+      WINCTL_BUILD_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
