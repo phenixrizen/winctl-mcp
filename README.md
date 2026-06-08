@@ -88,7 +88,7 @@ MCP client examples for Codex, Claude Desktop, and generic Streamable HTTP clien
 
 With HTTP transport, the local diagnostic dashboard is available at `/dashboard`. See [docs/DASHBOARD.md](docs/DASHBOARD.md).
 
-The recorder UI is available at `/recorder` and records MCP tool steps into macro manifests. See [docs/RECORDER.md](docs/RECORDER.md).
+The recorder UI is the Recorder tab in the local dashboard and records MCP tool steps into macro manifests. See [docs/RECORDER.md](docs/RECORDER.md).
 
 Test manifests use `winctl.test.v1` and run through the macro engine. See [docs/TEST_MANIFEST.md](docs/TEST_MANIFEST.md).
 

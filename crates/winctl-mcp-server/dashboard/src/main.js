@@ -78,6 +78,23 @@ if (urlToken) {
 }
 const authToken = urlToken || sessionStorage.getItem('winctl.dashboard.token');
 
+const DASHBOARD_TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'control', label: 'Control' },
+  { id: 'observability', label: 'Observability' },
+  { id: 'recorder', label: 'Recorder' },
+  { id: 'inspect', label: 'Inspect' },
+  { id: 'artifacts', label: 'Artifacts' },
+  { id: 'catalog', label: 'Catalog' },
+  { id: 'windows', label: 'Windows' },
+  { id: 'processes', label: 'Processes' },
+  { id: 'memory', label: 'Memory' },
+  { id: 'docs', label: 'Docs' },
+  { id: 'raw', label: 'Raw' },
+];
+const requestedTab = params.get('tab');
+const initialTab = DASHBOARD_TABS.some((tab) => tab.id === requestedTab) ? requestedTab : 'overview';
+
 function setFavicon(href) {
   const existing = document.querySelector('link[rel="icon"]');
   const link = existing || document.createElement('link');
@@ -207,7 +224,7 @@ createApp({
       loading: true,
       refreshing: false,
       error: null,
-      selectedTab: 'overview',
+      selectedTab: initialTab,
       selectedBoundId: '',
       selectedDiffIndex: 0,
       uiaSnapshot: null,
@@ -248,20 +265,7 @@ createApp({
         memory: { query: '', page: 1, pageSize: 8 },
         macros: { query: '', page: 1, pageSize: 8 },
       },
-      tabs: [
-        { id: 'overview', label: 'Overview' },
-        { id: 'control', label: 'Control' },
-        { id: 'observability', label: 'Observability' },
-        { id: 'recorder', label: 'Recorder' },
-        { id: 'inspect', label: 'Inspect' },
-        { id: 'artifacts', label: 'Artifacts' },
-        { id: 'catalog', label: 'Catalog' },
-        { id: 'windows', label: 'Windows' },
-        { id: 'processes', label: 'Processes' },
-        { id: 'memory', label: 'Memory' },
-        { id: 'docs', label: 'Docs' },
-        { id: 'raw', label: 'Raw' },
-      ],
+      tabs: DASHBOARD_TABS,
     };
   },
   computed: {

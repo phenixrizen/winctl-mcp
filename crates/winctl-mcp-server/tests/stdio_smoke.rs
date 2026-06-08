@@ -204,10 +204,18 @@ async fn streamable_http_health_and_tool_listing_work() {
         .get(format!("{base}/recorder"))
         .send()
         .await
-        .expect("recorder should respond");
+        .expect("recorder redirect should respond");
     assert_eq!(recorder.status(), reqwest::StatusCode::OK);
+    assert_eq!(recorder.url().path(), "/dashboard");
+    assert_eq!(recorder.url().query(), Some("tab=recorder"));
     let recorder_body = recorder.text().await.expect("recorder body");
-    assert!(recorder_body.contains("winctl-mcp recorder"));
+    assert!(recorder_body.contains("winctl-mcp dashboard"));
+    let recorder_state = client
+        .get(format!("{base}/recorder/state"))
+        .send()
+        .await
+        .expect("legacy recorder state route should respond");
+    assert_eq!(recorder_state.status(), reqwest::StatusCode::NOT_FOUND);
 
     let init = post_mcp(
         &client,

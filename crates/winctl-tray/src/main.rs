@@ -154,6 +154,14 @@ impl TrayConfig {
         if let Some(url) = &self.dashboard_url_override {
             return url.clone();
         }
+        self.dashboard_base_url()
+    }
+
+    fn recorder_url(&self) -> String {
+        self.dashboard_url_with_tab("recorder")
+    }
+
+    fn dashboard_base_url(&self) -> String {
         match &self.auth_token {
             Some(token) if !token.is_empty() => format!(
                 "http://{}/dashboard?token={}",
@@ -164,15 +172,12 @@ impl TrayConfig {
         }
     }
 
-    fn recorder_url(&self) -> String {
-        match &self.auth_token {
-            Some(token) if !token.is_empty() => format!(
-                "http://{}/recorder?token={}",
-                self.listen,
-                percent_encode_query_value(token)
-            ),
-            _ => format!("http://{}/recorder", self.listen),
-        }
+    fn dashboard_url_with_tab(&self, tab: &str) -> String {
+        let base = self
+            .dashboard_url_override
+            .clone()
+            .unwrap_or_else(|| self.dashboard_base_url());
+        append_query_param(base, "tab", tab)
     }
 
     fn apply_config_file_defaults(&mut self) -> anyhow::Result<()> {
@@ -212,6 +217,23 @@ fn percent_encode_query_value(value: &str) -> String {
         }
     }
     encoded
+}
+
+fn append_query_param(mut url: String, name: &str, value: &str) -> String {
+    let separator = if url.contains('?') {
+        if url.ends_with('?') || url.ends_with('&') {
+            ""
+        } else {
+            "&"
+        }
+    } else {
+        "?"
+    };
+    url.push_str(separator);
+    url.push_str(name);
+    url.push('=');
+    url.push_str(&percent_encode_query_value(value));
+    url
 }
 
 #[cfg(windows)]
@@ -1325,7 +1347,10 @@ listen = "127.0.0.1:8765"
     fn parses_recorder_shortcuts() {
         let cli = Cli::parse([OsString::from("recording-toggle")]).unwrap();
         assert_eq!(cli.command, CommandMode::RecordingToggle);
-        assert_eq!(cli.config.recorder_url(), "http://127.0.0.1:8765/recorder");
+        assert_eq!(
+            cli.config.recorder_url(),
+            "http://127.0.0.1:8765/dashboard?tab=recorder"
+        );
     }
 
     #[test]
@@ -1404,6 +1429,10 @@ token = "s e+cret?"
         assert_eq!(
             cli.config.dashboard_url(),
             "http://172.26.16.1:8765/dashboard?token=s%20e%2Bcret%3F"
+        );
+        assert_eq!(
+            cli.config.recorder_url(),
+            "http://172.26.16.1:8765/dashboard?token=s%20e%2Bcret%3F&tab=recorder"
         );
         let _ = fs::remove_file(path);
     }
