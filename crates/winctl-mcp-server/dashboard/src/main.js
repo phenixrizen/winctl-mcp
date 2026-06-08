@@ -2,6 +2,7 @@ import { createApp, markRaw } from 'vue/dist/vue.esm-bundler.js';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import './styles.css';
+import icon32Url from '../../../../assets/brand/winctl-icon-32.png';
 import logoUrl from '../../../../assets/brand/winctl-logo.svg';
 
 // Mermaid is heavy and only needed when a doc actually renders a diagram, so it is
@@ -76,6 +77,17 @@ if (urlToken) {
   sessionStorage.setItem('winctl.dashboard.token', urlToken);
 }
 const authToken = urlToken || sessionStorage.getItem('winctl.dashboard.token');
+
+function setFavicon(href) {
+  const existing = document.querySelector('link[rel="icon"]');
+  const link = existing || document.createElement('link');
+  link.rel = 'icon';
+  link.type = 'image/png';
+  link.href = href;
+  if (!existing) document.head.appendChild(link);
+}
+
+setFavicon(icon32Url);
 
 function authHeaders() {
   return authToken ? { Authorization: `Bearer ${authToken}` } : {};

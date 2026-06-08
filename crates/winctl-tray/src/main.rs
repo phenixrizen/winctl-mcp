@@ -214,6 +214,25 @@ fn percent_encode_query_value(value: &str) -> String {
     encoded
 }
 
+#[cfg(windows)]
+fn icon_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("WINCTL_TRAY_ICON") {
+        candidates.push(path.into());
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            candidates.push(bin_dir.join("winctl.ico"));
+            if let Some(root_dir) = bin_dir.parent() {
+                candidates.push(root_dir.join("assets").join("winctl.ico"));
+                candidates.push(root_dir.join("assets").join("brand").join("winctl.ico"));
+            }
+        }
+    }
+    candidates.push(PathBuf::from("assets/brand/winctl.ico"));
+    candidates
+}
+
 #[derive(Debug, Deserialize)]
 struct TrayServerConfigFile {
     transport: Option<TrayTransportConfig>,
@@ -479,9 +498,10 @@ fn run_dashboard_window(config: &TrayConfig) -> anyhow::Result<()> {
 #[cfg(all(windows, target_env = "msvc"))]
 fn run_dashboard_webview(url: &str) -> anyhow::Result<()> {
     use winit::application::ApplicationHandler;
-    use winit::dpi::LogicalSize;
+    use winit::dpi::{LogicalSize, PhysicalSize};
     use winit::event::WindowEvent;
     use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::WindowAttributesExtWindows;
     use winit::window::{Window, WindowId};
     use wry::{WebContext, WebView, WebViewBuilder};
 
@@ -499,10 +519,19 @@ fn run_dashboard_webview(url: &str) -> anyhow::Result<()> {
                 return;
             }
 
-            let attributes = Window::default_attributes()
+            let window_icon = dashboard_window_icon(None);
+            let taskbar_icon = dashboard_window_icon(Some(PhysicalSize::new(256, 256)))
+                .or_else(|| window_icon.clone());
+            let mut attributes = Window::default_attributes()
                 .with_title("winctl Dashboard")
                 .with_inner_size(LogicalSize::new(1180.0, 820.0))
                 .with_min_inner_size(LogicalSize::new(860.0, 620.0));
+            if let Some(icon) = window_icon {
+                attributes = attributes.with_window_icon(Some(icon));
+            }
+            if let Some(icon) = taskbar_icon {
+                attributes = attributes.with_taskbar_icon(Some(icon));
+            }
             let window = match event_loop.create_window(attributes) {
                 Ok(window) => window,
                 Err(error) => {
@@ -566,6 +595,19 @@ fn run_dashboard_webview(url: &str) -> anyhow::Result<()> {
         return Err(error).context("dashboard webview failed to start");
     }
     Ok(())
+}
+
+#[cfg(all(windows, target_env = "msvc"))]
+fn dashboard_window_icon(
+    size: Option<winit::dpi::PhysicalSize<u32>>,
+) -> Option<winit::window::Icon> {
+    use winit::platform::windows::IconExtWindows;
+    use winit::window::Icon;
+
+    icon_candidates()
+        .into_iter()
+        .filter(|candidate| candidate.is_file())
+        .find_map(|candidate| Icon::from_path(candidate, size).ok())
 }
 
 fn run_tray(config: &TrayConfig) -> anyhow::Result<()> {
@@ -647,8 +689,8 @@ mod windows_tray {
     };
 
     use super::{
-        copy_mcp_url_to_clipboard, open_dashboard, open_recorder, server_pid, start_server,
-        stop_server, TrayConfig,
+        copy_mcp_url_to_clipboard, icon_candidates, open_dashboard, open_recorder, server_pid,
+        start_server, stop_server, TrayConfig,
     };
 
     const TRAY_UID: u32 = 1;
@@ -1139,24 +1181,6 @@ mod windows_tray {
             unsafe { LoadIconW(None, IDI_APPLICATION).unwrap_or_default() },
             false,
         )
-    }
-
-    fn icon_candidates() -> Vec<std::path::PathBuf> {
-        let mut candidates = Vec::new();
-        if let Some(path) = std::env::var_os("WINCTL_TRAY_ICON") {
-            candidates.push(path.into());
-        }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(bin_dir) = exe.parent() {
-                candidates.push(bin_dir.join("winctl.ico"));
-                if let Some(root_dir) = bin_dir.parent() {
-                    candidates.push(root_dir.join("assets").join("winctl.ico"));
-                    candidates.push(root_dir.join("assets").join("brand").join("winctl.ico"));
-                }
-            }
-        }
-        candidates.push(std::path::PathBuf::from("assets/brand/winctl.ico"));
-        candidates
     }
 
     fn copy_fixed_wide<const N: usize>(dest: &mut [u16; N], text: &str) {
