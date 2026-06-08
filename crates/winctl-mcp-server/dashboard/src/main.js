@@ -2085,12 +2085,12 @@ createApp({
           </section>
         </section>
 
-        <section v-if="selectedTab === 'docs'" class="grid gap-5 lg:grid-cols-[320px_1fr]">
-          <aside class="winctl-card winctl-docs-sidebar overflow-hidden">
+        <section v-if="selectedTab === 'docs'" class="winctl-docs-layout grid gap-5 lg:grid-cols-[320px_1fr]">
+          <aside class="winctl-card winctl-docs-card winctl-docs-sidebar overflow-hidden">
             <div class="winctl-card-header px-4 py-3">
               <h2 class="text-sm font-semibold">Documentation</h2>
             </div>
-            <div class="p-3 space-y-3">
+            <div class="winctl-docs-sidebar-body p-3 space-y-3">
               <input
                 v-model="docsSearch"
                 type="search"
@@ -2120,12 +2120,12 @@ createApp({
               </ul>
             </div>
           </aside>
-          <section class="winctl-card overflow-hidden">
+          <section class="winctl-card winctl-docs-card overflow-hidden">
             <div class="winctl-card-header px-4 py-3">
               <h2 class="text-sm font-semibold">{{ activeDoc?.title ?? 'Select a document' }}</h2>
             </div>
             <div
-              class="winctl-markdown max-h-[80vh] overflow-y-auto p-5"
+              class="winctl-markdown winctl-doc-content p-5"
               @click="handleDocClick"
               v-html="activeDoc?.html ?? '<p class=&quot;opacity-60&quot;>Choose a tool doc from the list.</p>'"
             ></div>

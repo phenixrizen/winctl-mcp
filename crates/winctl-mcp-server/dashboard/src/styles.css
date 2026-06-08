@@ -273,13 +273,31 @@ textarea {
   padding: 3px 9px;
 }
 
+.winctl-docs-layout {
+  min-height: 0;
+}
+
+.winctl-docs-card {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
 .winctl-docs-sidebar {
-  align-self: start;
+  align-self: stretch;
+}
+
+.winctl-docs-sidebar-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
 }
 
 .winctl-doc-menu {
-  max-height: 72vh;
   display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   flex-wrap: nowrap;
   overflow-y: auto;
@@ -297,6 +315,12 @@ textarea {
 .winctl-doc-menu summary .badge {
   margin-left: auto;
   flex-shrink: 0;
+}
+
+.winctl-doc-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
 }
 
 .winctl-dot {
@@ -474,6 +498,22 @@ textarea {
   .winctl-detail-row {
     grid-template-columns: 1fr;
     gap: 2px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .winctl-docs-layout {
+    height: calc(100vh - 220px);
+  }
+}
+
+@media (max-width: 1023px) {
+  .winctl-doc-menu {
+    max-height: 48vh;
+  }
+
+  .winctl-doc-content {
+    overflow: visible;
   }
 }
 
