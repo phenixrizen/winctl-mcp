@@ -22,6 +22,7 @@ const RECENT_AUDIT_ENTRIES: usize = 200;
 const DEFAULT_ARM_MS: u64 = 5 * 60 * 1000;
 const FIRST_CONTROL_COUNTDOWN_MS: u64 = 1_500;
 static HOTKEY_STARTED: AtomicBool = AtomicBool::new(false);
+static HOTKEY_REGISTERED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -134,6 +135,7 @@ pub fn start_emergency_hotkey(runtime: Arc<Mutex<ControlRuntimeState>>) {
     {
         return;
     }
+    HOTKEY_REGISTERED.store(false, Ordering::SeqCst);
 
     #[cfg(windows)]
     {
@@ -143,6 +145,7 @@ pub fn start_emergency_hotkey(runtime: Arc<Mutex<ControlRuntimeState>>) {
     #[cfg(not(windows))]
     {
         let _ = runtime;
+        HOTKEY_REGISTERED.store(false, Ordering::SeqCst);
         HOTKEY_STARTED.store(false, Ordering::SeqCst);
     }
 }
@@ -1031,6 +1034,8 @@ fn snapshot_locked(runtime: &ControlRuntimeState) -> serde_json::Value {
         "require_explicit_consent": runtime.require_explicit_consent,
         "first_control_notification_sent": runtime.first_control_notification_sent,
         "emergency_stop_active": runtime.emergency_stop_active,
+        "emergency_hotkey_started": HOTKEY_STARTED.load(Ordering::SeqCst),
+        "emergency_hotkey_registered": HOTKEY_REGISTERED.load(Ordering::SeqCst),
         "active_tool": runtime.active_tool,
         "active_action_kind": runtime.active_action_kind,
         "events": runtime.events,
@@ -1481,6 +1486,7 @@ fn windows_hotkey_loop(runtime: Arc<Mutex<ControlRuntimeState>>) {
     const HOTKEY_ID: i32 = 0x5743;
     let modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
     if let Err(error) = unsafe { RegisterHotKey(None, HOTKEY_ID, modifiers, VK_ESCAPE.0 as u32) } {
+        HOTKEY_REGISTERED.store(false, Ordering::SeqCst);
         HOTKEY_STARTED.store(false, Ordering::SeqCst);
         tracing::warn!(
             error = %error,
@@ -1488,6 +1494,7 @@ fn windows_hotkey_loop(runtime: Arc<Mutex<ControlRuntimeState>>) {
         );
         return;
     }
+    HOTKEY_REGISTERED.store(true, Ordering::SeqCst);
     tracing::info!("registered Ctrl+Alt+Esc emergency stop hotkey");
 
     let mut message = MSG::default();
@@ -1509,6 +1516,7 @@ fn windows_hotkey_loop(runtime: Arc<Mutex<ControlRuntimeState>>) {
         }
     }
     let _ = unsafe { UnregisterHotKey(None, HOTKEY_ID) };
+    HOTKEY_REGISTERED.store(false, Ordering::SeqCst);
     HOTKEY_STARTED.store(false, Ordering::SeqCst);
 }
 

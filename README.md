@@ -6,6 +6,8 @@
 
 Reliable Windows MCP control server in Rust, with strict bound-window identity checks before focus, input, and capture actions.
 
+Sponsored by [RockSolid Labs, Inc.](https://github.com/rocksolidlabs).
+
 ## Inspiration
 
 This project takes inspiration from [CursorTouch/Windows-MCP](https://github.com/CursorTouch/Windows-MCP/) as an example of broad Windows automation through MCP, while focusing on strict, auditable control of known Windows app targets.
@@ -88,7 +90,7 @@ MCP client examples for Codex, Claude Desktop, and generic Streamable HTTP clien
 
 With HTTP transport, the local diagnostic dashboard is available at `/dashboard`. See [docs/DASHBOARD.md](docs/DASHBOARD.md).
 
-The recorder UI is available at `/recorder` and records MCP tool steps into macro manifests. See [docs/RECORDER.md](docs/RECORDER.md).
+The recorder UI is the Recorder tab in the local dashboard and records MCP tool steps into macro manifests. See [docs/RECORDER.md](docs/RECORDER.md).
 
 Test manifests use `winctl.test.v1` and run through the macro engine. See [docs/TEST_MANIFEST.md](docs/TEST_MANIFEST.md).
 

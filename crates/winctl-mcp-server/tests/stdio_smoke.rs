@@ -204,10 +204,18 @@ async fn streamable_http_health_and_tool_listing_work() {
         .get(format!("{base}/recorder"))
         .send()
         .await
-        .expect("recorder should respond");
+        .expect("recorder redirect should respond");
     assert_eq!(recorder.status(), reqwest::StatusCode::OK);
+    assert_eq!(recorder.url().path(), "/dashboard");
+    assert_eq!(recorder.url().query(), Some("tab=recorder"));
     let recorder_body = recorder.text().await.expect("recorder body");
-    assert!(recorder_body.contains("winctl-mcp recorder"));
+    assert!(recorder_body.contains("winctl-mcp dashboard"));
+    let recorder_state = client
+        .get(format!("{base}/recorder/state"))
+        .send()
+        .await
+        .expect("legacy recorder state route should respond");
+    assert_eq!(recorder_state.status(), reqwest::StatusCode::NOT_FOUND);
 
     let init = post_mcp(
         &client,
@@ -367,6 +375,128 @@ async fn streamable_http_health_and_tool_listing_work() {
     let _ = fs::remove_file(log_path);
 }
 
+#[tokio::test]
+async fn streamable_http_dashboard_tokens_update_runtime_auth() {
+    let log_path = temp_path("winctl-http-auth-smoke.log");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port should bind");
+    let addr = listener.local_addr().expect("local addr should resolve");
+    drop(listener);
+    let startup_token = "startup-secret";
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_winctl-mcp-server"))
+        .arg("serve")
+        .arg("--transport")
+        .arg("http")
+        .arg("--listen")
+        .arg(addr.to_string())
+        .arg("--auth-token")
+        .arg(startup_token)
+        .arg("--log-file")
+        .arg(&log_path)
+        .env("RUST_LOG", "info")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("server should start");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://{addr}");
+    wait_for_health(&client, &base).await;
+
+    let rejected_state = client
+        .get(format!("{base}/dashboard/state"))
+        .send()
+        .await
+        .expect("dashboard state should reject without auth");
+    assert_eq!(rejected_state.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let connect: Value = client
+        .get(format!("{base}/dashboard/connect"))
+        .bearer_auth(startup_token)
+        .send()
+        .await
+        .expect("connect should respond with startup token")
+        .json()
+        .await
+        .expect("connect should return JSON");
+    assert_eq!(connect["ok"], true);
+    assert_eq!(connect["auth_required"], true);
+    assert!(!serde_json::to_string(&connect)
+        .expect("connect JSON should serialize")
+        .contains(startup_token));
+
+    let created: Value = client
+        .post(format!("{base}/dashboard/connect/token"))
+        .bearer_auth(startup_token)
+        .json(&serde_json::json!({"label": "runtime smoke"}))
+        .send()
+        .await
+        .expect("token create should send")
+        .json()
+        .await
+        .expect("token create should return JSON");
+    assert_eq!(created["ok"], true);
+    let runtime_token = created["token"]
+        .as_str()
+        .expect("created token should be returned")
+        .to_owned();
+    let runtime_token_id = created["metadata"]["id"]
+        .as_str()
+        .expect("created token id should be returned")
+        .to_owned();
+    assert!(!serde_json::to_string(&created["tokens"])
+        .expect("token metadata should serialize")
+        .contains(&runtime_token));
+
+    let init = post_mcp_with_bearer(
+        &client,
+        &base,
+        None,
+        Some(&runtime_token),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "auth-smoke", "version": "0.1"}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(init["jsonrpc"], "2.0");
+    assert_eq!(init["id"], 1);
+
+    let revoked: Value = client
+        .post(format!("{base}/dashboard/connect/token/revoke"))
+        .bearer_auth(startup_token)
+        .json(&serde_json::json!({"id": runtime_token_id}))
+        .send()
+        .await
+        .expect("token revoke should send")
+        .json()
+        .await
+        .expect("token revoke should return JSON");
+    assert_eq!(revoked["ok"], true);
+
+    let rejected_runtime_token = client
+        .get(format!("{base}/dashboard/connect"))
+        .bearer_auth(&runtime_token)
+        .send()
+        .await
+        .expect("revoked token request should send");
+    assert_eq!(
+        rejected_runtime_token.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+
+    child.kill().expect("server should be killable");
+    let _ = child.wait();
+    let _ = fs::remove_file(log_path);
+}
+
 fn send_json(stdin: &mut impl Write, value: Value) {
     let line = serde_json::to_string(&value).expect("request should serialize");
     writeln!(stdin, "{line}").expect("request should write");
@@ -437,12 +567,25 @@ async fn post_mcp(
     session_id: Option<&str>,
     body: Value,
 ) -> Value {
+    post_mcp_with_bearer(client, base, session_id, None, body).await
+}
+
+async fn post_mcp_with_bearer(
+    client: &reqwest::Client,
+    base: &str,
+    session_id: Option<&str>,
+    bearer_token: Option<&str>,
+    body: Value,
+) -> Value {
     let mut request = client
         .post(format!("{base}/mcp"))
         .header("Accept", "text/event-stream, application/json")
         .json(&body);
     if let Some(session_id) = session_id {
         request = request.header("Mcp-Session-Id", session_id);
+    }
+    if let Some(bearer_token) = bearer_token {
+        request = request.bearer_auth(bearer_token);
     }
     let response = request.send().await.expect("MCP request should send");
     assert!(

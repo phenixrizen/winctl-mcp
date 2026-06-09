@@ -68,23 +68,23 @@ dashboard-build:
 
 .PHONY: build-linux
 build-linux:
-	$(CARGO) build --workspace $(PROFILE_FLAG)
+	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build --workspace $(PROFILE_FLAG)
 
 .PHONY: build-win
 build-win: require-windows-linker
-	$(CARGO) build --workspace --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
+	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build --workspace --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
 
 .PHONY: build-win-server
 build-win-server: require-windows-linker
-	$(CARGO) build -p winctl-mcp-server --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
+	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build -p winctl-mcp-server --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
 
 .PHONY: build-win-tray
 build-win-tray: require-windows-linker
-	$(CARGO) build -p winctl-tray --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
+	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build -p winctl-tray --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
 
 .PHONY: build-win-fixture
 build-win-fixture: require-windows-linker
-	$(CARGO) build -p winctl-test-target --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
+	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build -p winctl-test-target --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
 
 .PHONY: package-win
 package-win: require-windows-linker dashboard-build build-win-server build-win-tray

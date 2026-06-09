@@ -208,7 +208,7 @@ try {
     [void]$builder.AppendLine('    <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Guid="{4E7DFA08-5C72-4FB5-8E05-7961F0464AA2}">')
     [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpControlShortcut" Name="winctl Control" Description="Start the winctl local control app and MCP server." Target="[BINDIR]winctl-launcher.exe" Arguments="run" WorkingDirectory="BINDIR" Icon="WinctlIcon.ico" IconIndex="0" />')
     [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpDashboardShortcut" Name="winctl Dashboard" Description="Start the MCP server if needed and open the dashboard." Target="[BINDIR]winctl-launcher.exe" Arguments="open-dashboard" WorkingDirectory="BINDIR" Icon="WinctlIcon.ico" IconIndex="0" />')
-    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpRecorderShortcut" Name="winctl Recorder" Description="Start the MCP server if needed and open the recorder." Target="[BINDIR]winctl-launcher.exe" Arguments="open-recorder" WorkingDirectory="BINDIR" Icon="WinctlIcon.ico" IconIndex="0" />')
+    [void]$builder.AppendLine('      <Shortcut Id="WinctlMcpRecorderShortcut" Name="winctl Recorder" Description="Start the MCP server if needed and open the dashboard Recorder tab." Target="[BINDIR]winctl-launcher.exe" Arguments="open-recorder" WorkingDirectory="BINDIR" Icon="WinctlIcon.ico" IconIndex="0" />')
     [void]$builder.AppendLine('      <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />')
     [void]$builder.AppendLine('      <RegistryValue Root="HKLM" Key="Software\winctl-mcp" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />')
     [void]$builder.AppendLine('    </Component>')

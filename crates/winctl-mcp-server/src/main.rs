@@ -17,7 +17,7 @@ use anyhow::Context;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header::CONTENT_TYPE, HeaderMap, StatusCode, Uri};
 use axum::middleware;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json as AxumJson, Router};
 use rmcp::schemars;
@@ -4209,10 +4209,15 @@ async fn run_mcp_stdio(state: AppState) -> anyhow::Result<()> {
 async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()> {
     validate_http_config(config.listen, config.auth_token.as_deref())?;
     tools::capture::ensure_capture_dir(state.capture_dir.as_ref())?;
+    let startup_token_configured = config
+        .auth_token
+        .as_ref()
+        .is_some_and(|token| !token.is_empty());
+    let auth_required = startup_token_configured || !config.listen.ip().is_loopback();
     tracing::info!(
         listen = %config.listen,
         capture_dir = %state.capture_dir.as_ref().display(),
-        auth_required = !config.listen.ip().is_loopback() || config.auth_token.is_some(),
+        auth_required,
         "winctl-mcp-server starting on HTTP"
     );
     log_startup_diagnostics("http", Some(config.listen), &state);
@@ -4220,6 +4225,10 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     let session_manager = Arc::new(LocalSessionManager::default());
     let mut http_config = StreamableHttpServerConfig::default();
     http_config.sse_keep_alive = None;
+    let auth_registry = Arc::new(HttpAuthRegistry::new(
+        config.auth_token.clone(),
+        auth_required,
+    ));
     let service = StreamableHttpService::new(
         {
             let state = state.clone();
@@ -4229,11 +4238,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
         http_config,
     );
     let auth_state = HttpAuthState {
-        required_token: if config.auth_token.is_some() || !config.listen.ip().is_loopback() {
-            config.auth_token.clone()
-        } else {
-            None
-        },
+        registry: auth_registry.clone(),
         allow_query_token: false,
     };
     let mcp_router =
@@ -4245,9 +4250,24 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
             ));
     let dashboard_state = DashboardState {
         app_state: state.clone(),
+        auth: auth_registry.clone(),
+        listen: config.listen,
     };
     let dashboard_router = Router::new()
         .route("/dashboard", get(dashboard_html))
+        .route("/dashboard/connect", get(dashboard_connect_json))
+        .route(
+            "/dashboard/connect/token",
+            post(dashboard_connect_token_create),
+        )
+        .route(
+            "/dashboard/connect/token/reveal",
+            post(dashboard_connect_token_reveal),
+        )
+        .route(
+            "/dashboard/connect/token/revoke",
+            post(dashboard_connect_token_revoke),
+        )
         .route("/dashboard/docs", get(dashboard_docs_json))
         .route("/dashboard/memory/delete", post(dashboard_memory_delete))
         .route("/dashboard/recorder/start", post(dashboard_recorder_start))
@@ -4261,13 +4281,12 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
         .route("/dashboard/uia", get(dashboard_uia_json))
         .route("/dashboard/screenshot", get(dashboard_screenshot_json))
         .route("/dashboard/capture-file", get(dashboard_capture_file))
-        .route("/recorder", get(recorder_html))
-        .route("/recorder/state", get(recorder_state_json))
+        .route("/recorder", get(recorder_redirect))
         .with_state(dashboard_state);
-    let dashboard_router = if config.auth_token.is_some() || !config.listen.ip().is_loopback() {
+    let dashboard_router = if auth_required {
         dashboard_router.route_layer(middleware::from_fn_with_state(
             HttpAuthState {
-                required_token: config.auth_token.clone(),
+                registry: auth_registry,
                 allow_query_token: true,
             },
             require_bearer_auth,
@@ -4294,13 +4313,188 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
 
 #[derive(Clone)]
 struct HttpAuthState {
-    required_token: Option<String>,
+    registry: Arc<HttpAuthRegistry>,
     allow_query_token: bool,
+}
+
+#[derive(Debug)]
+struct HttpAuthRegistry {
+    auth_required: bool,
+    inner: Mutex<HttpAuthRegistryInner>,
+}
+
+#[derive(Debug, Default)]
+struct HttpAuthRegistryInner {
+    tokens: HashMap<String, HttpAuthTokenRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct HttpAuthTokenRecord {
+    id: String,
+    label: String,
+    token: String,
+    created_at_unix_ms: u64,
+    last_used_at_unix_ms: Option<u64>,
+    use_count: u64,
+    startup: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct HttpAuthTokenMetadata {
+    id: String,
+    label: String,
+    created_at_unix_ms: u64,
+    last_used_at_unix_ms: Option<u64>,
+    use_count: u64,
+    startup: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CreatedHttpAuthToken {
+    token: String,
+    metadata: HttpAuthTokenMetadata,
+}
+
+impl HttpAuthRegistry {
+    fn new(startup_token: Option<String>, auth_required: bool) -> Self {
+        let mut inner = HttpAuthRegistryInner::default();
+        if let Some(token) = startup_token.filter(|token| !token.is_empty()) {
+            let now = observability::now_unix_ms();
+            let record = HttpAuthTokenRecord {
+                id: "startup".to_string(),
+                label: "Startup token".to_string(),
+                token,
+                created_at_unix_ms: now,
+                last_used_at_unix_ms: None,
+                use_count: 0,
+                startup: true,
+            };
+            inner.tokens.insert(record.id.clone(), record);
+        }
+        Self {
+            auth_required,
+            inner: Mutex::new(inner),
+        }
+    }
+
+    fn auth_required(&self) -> bool {
+        self.auth_required
+    }
+
+    fn authorize(&self, candidate: &str) -> bool {
+        if candidate.is_empty() {
+            return false;
+        }
+        let now = observability::now_unix_ms();
+        let mut inner = self.inner.lock().expect("auth registry mutex poisoned");
+        let Some(record) = inner
+            .tokens
+            .values_mut()
+            .find(|record| record.token == candidate)
+        else {
+            return false;
+        };
+        record.last_used_at_unix_ms = Some(now);
+        record.use_count = record.use_count.saturating_add(1);
+        true
+    }
+
+    fn list_metadata(&self) -> Vec<HttpAuthTokenMetadata> {
+        let inner = self.inner.lock().expect("auth registry mutex poisoned");
+        let mut tokens = inner
+            .tokens
+            .values()
+            .map(HttpAuthTokenRecord::metadata)
+            .collect::<Vec<_>>();
+        tokens.sort_by(|left, right| {
+            left.startup
+                .cmp(&right.startup)
+                .reverse()
+                .then_with(|| left.created_at_unix_ms.cmp(&right.created_at_unix_ms))
+        });
+        tokens
+    }
+
+    fn create_token(&self, label: Option<String>) -> CreatedHttpAuthToken {
+        let now = observability::now_unix_ms();
+        let record = HttpAuthTokenRecord {
+            id: format!("token-{}", uuid::Uuid::new_v4().simple()),
+            label: normalize_token_label(label),
+            token: generate_http_auth_token(),
+            created_at_unix_ms: now,
+            last_used_at_unix_ms: None,
+            use_count: 0,
+            startup: false,
+        };
+        let metadata = record.metadata();
+        let token = record.token.clone();
+        self.inner
+            .lock()
+            .expect("auth registry mutex poisoned")
+            .tokens
+            .insert(record.id.clone(), record);
+        CreatedHttpAuthToken { token, metadata }
+    }
+
+    fn reveal_token(&self, id: &str) -> Option<CreatedHttpAuthToken> {
+        let inner = self.inner.lock().expect("auth registry mutex poisoned");
+        let record = inner.tokens.get(id)?;
+        Some(CreatedHttpAuthToken {
+            token: record.token.clone(),
+            metadata: record.metadata(),
+        })
+    }
+
+    fn revoke_token(&self, id: &str) -> Option<HttpAuthTokenMetadata> {
+        self.inner
+            .lock()
+            .expect("auth registry mutex poisoned")
+            .tokens
+            .remove(id)
+            .map(|record| record.metadata())
+    }
+}
+
+impl HttpAuthTokenRecord {
+    fn metadata(&self) -> HttpAuthTokenMetadata {
+        HttpAuthTokenMetadata {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            created_at_unix_ms: self.created_at_unix_ms,
+            last_used_at_unix_ms: self.last_used_at_unix_ms,
+            use_count: self.use_count,
+            startup: self.startup,
+        }
+    }
+}
+
+fn normalize_token_label(label: Option<String>) -> String {
+    let label = label
+        .unwrap_or_else(|| "Dashboard token".to_string())
+        .trim()
+        .chars()
+        .take(80)
+        .collect::<String>();
+    if label.is_empty() {
+        "Dashboard token".to_string()
+    } else {
+        label
+    }
+}
+
+fn generate_http_auth_token() -> String {
+    format!(
+        "wctl_{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 #[derive(Clone)]
 struct DashboardState {
     app_state: AppState,
+    auth: Arc<HttpAuthRegistry>,
+    listen: SocketAddr,
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -4314,6 +4508,90 @@ async fn healthz() -> impl IntoResponse {
 async fn dashboard_html() -> impl IntoResponse {
     Html(DASHBOARD_HTML)
 }
+
+#[derive(serde::Deserialize)]
+struct DashboardConnectTokenCreateBody {
+    label: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct DashboardConnectTokenIdBody {
+    id: String,
+}
+
+async fn dashboard_connect_json(State(state): State<DashboardState>) -> impl IntoResponse {
+    AxumJson(serde_json::json!({
+        "ok": true,
+        "mcp_url": format!("http://{}/mcp", state.listen),
+        "server_exe": std::env::current_exe()
+            .ok()
+            .map(|path| path.display().to_string()),
+        "listen": state.listen.to_string(),
+        "auth_required": state.auth.auth_required(),
+        "dashboard_query_token_allowed": true,
+        "tokens": state.auth.list_metadata(),
+    }))
+}
+
+async fn dashboard_connect_token_create(
+    State(state): State<DashboardState>,
+    AxumJson(body): AxumJson<DashboardConnectTokenCreateBody>,
+) -> impl IntoResponse {
+    let created = state.auth.create_token(body.label);
+    tracing::info!(
+        token_id = %created.metadata.id,
+        "dashboard connect token created"
+    );
+    AxumJson(serde_json::json!({
+        "ok": true,
+        "token": created.token,
+        "metadata": created.metadata,
+        "tokens": state.auth.list_metadata(),
+    }))
+}
+
+async fn dashboard_connect_token_reveal(
+    State(state): State<DashboardState>,
+    AxumJson(body): AxumJson<DashboardConnectTokenIdBody>,
+) -> impl IntoResponse {
+    let Some(revealed) = state.auth.reveal_token(&body.id) else {
+        return AxumJson(serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "token_not_found",
+                "message": "token id is not active"
+            },
+        }));
+    };
+    tracing::info!(token_id = %revealed.metadata.id, "dashboard connect token revealed");
+    AxumJson(serde_json::json!({
+        "ok": true,
+        "token": revealed.token,
+        "metadata": revealed.metadata,
+    }))
+}
+
+async fn dashboard_connect_token_revoke(
+    State(state): State<DashboardState>,
+    AxumJson(body): AxumJson<DashboardConnectTokenIdBody>,
+) -> impl IntoResponse {
+    let Some(revoked) = state.auth.revoke_token(&body.id) else {
+        return AxumJson(serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "token_not_found",
+                "message": "token id is not active"
+            },
+        }));
+    };
+    tracing::info!(token_id = %revoked.id, "dashboard connect token revoked");
+    AxumJson(serde_json::json!({
+        "ok": true,
+        "revoked": revoked,
+        "tokens": state.auth.list_metadata(),
+    }))
+}
+
 async fn dashboard_docs_json() -> impl IntoResponse {
     let docs: Vec<_> = DASHBOARD_DOCS
         .iter()
@@ -4437,8 +4715,12 @@ async fn dashboard_asset(AxumPath(path): AxumPath<String>) -> Response {
     }
 }
 
-async fn recorder_html() -> impl IntoResponse {
-    Html(RECORDER_HTML)
+async fn recorder_redirect(uri: Uri) -> Redirect {
+    let target = match raw_query_token_value(uri.query()) {
+        Some(token) => format!("/dashboard?token={token}&tab=recorder"),
+        None => "/dashboard?tab=recorder".to_string(),
+    };
+    Redirect::temporary(&target)
 }
 
 async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoResponse {
@@ -4484,7 +4766,7 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
     AxumJson(serde_json::json!({
         "ok": true,
         "service": "winctl-mcp-server",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": build_version(),
         "capture_dir": state.app_state.capture_dir.as_ref(),
         "policy": state.app_state.policy.as_ref(),
         "bound_windows": bound,
@@ -4498,6 +4780,13 @@ async fn dashboard_state_json(State(state): State<DashboardState>) -> impl IntoR
         "recent_requests": observability.recent_requests,
         "warnings": []
     }))
+}
+
+fn build_version() -> &'static str {
+    match option_env!("WINCTL_BUILD_VERSION") {
+        Some(version) if !version.is_empty() => version,
+        _ => env!("CARGO_PKG_VERSION"),
+    }
 }
 
 async fn dashboard_uia_json(
@@ -4616,14 +4905,6 @@ fn capture_file_content_type(path: &PathBuf) -> &'static str {
     }
 }
 
-async fn recorder_state_json(State(state): State<DashboardState>) -> impl IntoResponse {
-    AxumJson(serde_json::json!({
-        "ok": true,
-        "windows": winctl::list_windows(),
-        "recording": tools::recorder::recorder_state(&state.app_state),
-    }))
-}
-
 const DASHBOARD_HTML: &str = include_str!("../dashboard/dist/index.html");
 // Embed the whole built assets directory so hashed/code-split chunks (e.g. the
 // lazy-loaded Mermaid diagram modules) are served alongside `dashboard.js`/`.css`.
@@ -4634,171 +4915,25 @@ static DASHBOARD_ASSETS: include_dir::Dir<'_> =
 // comrak-rendered tool docs from `docs/*.md` served at `/dashboard/docs`.
 include!(concat!(env!("OUT_DIR"), "/dashboard_docs.rs"));
 
-const RECORDER_HTML: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>winctl-mcp recorder</title>
-  <style>
-    :root {
-      color-scheme: light dark;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f7f8fa;
-      color: #15171a;
-    }
-    body { margin: 0; min-height: 100vh; }
-    header {
-      border-bottom: 1px solid #d9dde3;
-      background: #ffffff;
-      padding: 16px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 16px;
-    }
-    h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
-    main {
-      padding: 20px 24px 32px;
-      display: grid;
-      grid-template-columns: minmax(280px, 420px) 1fr;
-      gap: 16px;
-    }
-    section {
-      background: #ffffff;
-      border: 1px solid #d9dde3;
-      border-radius: 6px;
-      overflow: hidden;
-      min-height: 220px;
-    }
-    h2 {
-      font-size: 13px;
-      text-transform: uppercase;
-      margin: 0;
-      padding: 12px 14px;
-      border-bottom: 1px solid #e4e7ec;
-      color: #5f6b7a;
-      letter-spacing: 0;
-    }
-    label { display: block; font-size: 12px; color: #4e5967; margin: 12px 14px 6px; }
-    input, textarea {
-      box-sizing: border-box;
-      width: calc(100% - 28px);
-      margin: 0 14px;
-      border: 1px solid #aeb7c2;
-      border-radius: 6px;
-      padding: 8px 9px;
-      font: inherit;
-      background: #ffffff;
-      color: inherit;
-    }
-    textarea { min-height: 120px; resize: vertical; }
-    button {
-      appearance: none;
-      border: 1px solid #aeb7c2;
-      background: #ffffff;
-      color: inherit;
-      border-radius: 6px;
-      padding: 8px 10px;
-      font-size: 13px;
-      cursor: pointer;
-      margin: 12px 0 0 14px;
-    }
-    button:hover { background: #eef3f8; }
-    pre {
-      margin: 0;
-      padding: 14px;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      font-size: 12px;
-      line-height: 1.5;
-    }
-    .status { font-size: 13px; color: #4e5967; }
-    @media (max-width: 840px) { main { grid-template-columns: 1fr; } }
-    @media (prefers-color-scheme: dark) {
-      :root { background: #111418; color: #e9edf2; }
-      header, section, button, input, textarea { background: #181c22; }
-      header, section, h2, button, input, textarea { border-color: #303741; }
-      h2 { background: #15191f; color: #aeb7c2; }
-      button:hover { background: #202731; }
-      label, .status { color: #aeb7c2; }
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <div>
-      <h1>winctl-mcp recorder</h1>
-      <div class="status" id="status">Loading</div>
-    </div>
-    <button type="button" onclick="loadState()">Refresh</button>
-  </header>
-  <main>
-    <section>
-      <h2>Draft Step</h2>
-      <label for="tool">Tool</label>
-      <input id="tool" value="input.click">
-      <label for="args">Arguments JSON</label>
-      <textarea id="args">{"bound_id":"${bound_id}","x":0,"y":0}</textarea>
-      <button type="button" onclick="copyStep()">Copy step JSON</button>
-      <pre id="draft"></pre>
-    </section>
-    <section><h2>Recorder State</h2><pre id="state"></pre></section>
-    <section><h2>Windows</h2><pre id="windows"></pre></section>
-  </main>
-  <script>
-    const authToken = new URLSearchParams(window.location.search).get('token');
-    function authFetch(path) {
-      const options = { cache: 'no-store' };
-      if (authToken) options.headers = { Authorization: 'Bearer ' + authToken };
-      return fetch(path, options);
-    }
-    function pretty(value) { return JSON.stringify(value, null, 2); }
-    async function loadState() {
-      const status = document.getElementById('status');
-      status.textContent = 'Loading';
-      try {
-        const response = await authFetch('/recorder/state');
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        const data = await response.json();
-        document.getElementById('state').textContent = pretty(data.recording);
-        document.getElementById('windows').textContent = pretty(data.windows);
-        status.textContent = 'Ready';
-      } catch (error) {
-        status.textContent = String(error);
-      }
-    }
-    async function copyStep() {
-      let args = {};
-      try { args = JSON.parse(document.getElementById('args').value); } catch (_) {}
-      const step = { tool: document.getElementById('tool').value, args };
-      document.getElementById('draft').textContent = pretty(step);
-      await navigator.clipboard.writeText(pretty(step)).catch(() => {});
-    }
-    loadState();
-  </script>
-</body>
-</html>"#;
-
 async fn require_bearer_auth(
     State(state): State<HttpAuthState>,
     headers: HeaderMap,
     request: axum::extract::Request,
     next: middleware::Next,
 ) -> Response {
-    let Some(required_token) = state.required_token else {
+    if !state.registry.auth_required() {
         return next.run(request).await;
-    };
+    }
     let authorized = http_request_authorized(
         &headers,
         request.uri(),
-        &required_token,
+        &state.registry,
         state.allow_query_token,
     );
     if authorized {
         next.run(request).await
     } else {
-        tracing::warn!("HTTP MCP request rejected by bearer auth");
+        tracing::warn!("HTTP request rejected by bearer auth");
         (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
     }
 }
@@ -4806,29 +4941,41 @@ async fn require_bearer_auth(
 fn http_request_authorized(
     headers: &HeaderMap,
     uri: &Uri,
-    required_token: &str,
+    registry: &HttpAuthRegistry,
     allow_query_token: bool,
 ) -> bool {
-    if headers
+    if let Some(token) = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
-        .map(|header| header == format!("Bearer {required_token}"))
-        .unwrap_or(false)
+        .and_then(|header| header.strip_prefix("Bearer "))
     {
-        return true;
+        if registry.authorize(token) {
+            return true;
+        }
     }
 
-    allow_query_token && query_token_authorized(uri.query(), required_token)
+    allow_query_token && query_token_authorized(uri.query(), registry)
 }
 
-fn query_token_authorized(query: Option<&str>, required_token: &str) -> bool {
+fn query_token_authorized(query: Option<&str>, registry: &HttpAuthRegistry) -> bool {
+    raw_query_token_value(query)
+        .and_then(percent_decode_query_component)
+        .as_deref()
+        .map(|token| registry.authorize(token))
+        .unwrap_or(false)
+}
+
+fn raw_query_token_value(query: Option<&str>) -> Option<&str> {
     let Some(query) = query else {
-        return false;
+        return None;
     };
-    query.split('&').any(|pair| {
+    query.split('&').find_map(|pair| {
         let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-        percent_decode_query_component(name).as_deref() == Some("token")
-            && percent_decode_query_component(value).as_deref() == Some(required_token)
+        if percent_decode_query_component(name).as_deref() == Some("token") {
+            Some(value)
+        } else {
+            None
+        }
     })
 }
 
@@ -6036,6 +6183,7 @@ mod tests {
 
     #[test]
     fn http_auth_accepts_bearer_header() {
+        let registry = HttpAuthRegistry::new(Some("secret".to_string()), true);
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::AUTHORIZATION,
@@ -6043,16 +6191,47 @@ mod tests {
         );
         let uri: Uri = "/mcp".parse().unwrap();
 
-        assert!(http_request_authorized(&headers, &uri, "secret", false));
+        assert!(http_request_authorized(&headers, &uri, &registry, false));
     }
 
     #[test]
     fn http_auth_accepts_query_token_only_when_enabled() {
+        let registry = HttpAuthRegistry::new(Some("s e+cret".to_string()), true);
         let headers = HeaderMap::new();
         let uri: Uri = "/dashboard?token=s%20e%2Bcret".parse().unwrap();
 
-        assert!(http_request_authorized(&headers, &uri, "s e+cret", true));
-        assert!(!http_request_authorized(&headers, &uri, "s e+cret", false));
+        assert!(http_request_authorized(&headers, &uri, &registry, true));
+        assert!(!http_request_authorized(&headers, &uri, &registry, false));
+    }
+
+    #[test]
+    fn http_auth_registry_adds_reveals_and_revokes_tokens() {
+        let registry = HttpAuthRegistry::new(Some("startup-token".to_string()), true);
+        assert!(registry.auth_required());
+        assert!(registry.authorize("startup-token"));
+
+        let created = registry.create_token(Some("test token".to_string()));
+        assert!(created.token.starts_with("wctl_"));
+        assert!(registry.authorize(&created.token));
+        let revealed = registry
+            .reveal_token(&created.metadata.id)
+            .expect("created token should reveal");
+        assert_eq!(revealed.token, created.token);
+        let revoked = registry
+            .revoke_token(&created.metadata.id)
+            .expect("created token should revoke");
+        assert_eq!(revoked.id, created.metadata.id);
+        assert!(!registry.authorize(&created.token));
+    }
+
+    #[test]
+    fn build_version_uses_release_override_when_present() {
+        let expected = std::env::var("WINCTL_BUILD_VERSION")
+            .ok()
+            .filter(|version| !version.is_empty())
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+
+        assert_eq!(build_version(), expected.as_str());
     }
 
     #[test]
