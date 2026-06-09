@@ -10,7 +10,7 @@ Release packages also include `winctl-launcher.exe`, a no-console Start Menu lau
 
 ```powershell
 winctl-tray.exe status
-winctl-tray.exe start --server-exe C:\winctl\winctl-mcp-server.exe --listen 127.0.0.1:8765
+winctl-tray.exe start --server-exe C:\winctl\winctl-mcp-server.exe
 winctl-tray.exe stop
 winctl-tray.exe restart
 winctl-tray.exe copy-mcp-url
@@ -23,6 +23,8 @@ winctl-tray.exe run
 ## State
 
 The controller writes a PID file under `%LOCALAPPDATA%\winctl-mcp` by default. Use `--pid-file <path>` to override it.
+
+By default the launcher/tray starts HTTP on `0.0.0.0:8765` so WSL clients can reach the Windows MCP server. It also creates and reuses a bearer token at `%LOCALAPPDATA%\winctl-mcp\http-auth-token`, passes it to the server, and opens dashboard windows through `127.0.0.1` with the token in the local dashboard URL. Override the bind address with `--listen` and the token with `--auth-token`.
 
 ## Native Tray UI
 
@@ -47,7 +49,7 @@ The MSI installer creates these Start Menu shortcuts:
 | `winctl Dashboard` | `winctl-launcher.exe open-dashboard` | Starts the MCP server if needed and opens the native dashboard window without opening a console window. |
 | `winctl Recorder` | `winctl-launcher.exe open-recorder` | Starts the MCP server if needed and opens the native recorder window without opening a console window. |
 
-Open Dashboard launches a native WebView2 window through `wry`; it does not open the system browser. The WebView dashboard is enabled in the Windows MSVC build used for release packages and stores its WebView2 profile under `%LOCALAPPDATA%\winctl-mcp\webview`, not under `Program Files`. When the server config contains `[auth].token`, the tray reads that token and opens the dashboard with an authenticated local URL. MCP traffic still uses bearer-token auth on the `/mcp` endpoint.
+Open Dashboard launches a native WebView2 window through `wry`; it does not open the system browser. The WebView dashboard is enabled in the Windows MSVC build used for release packages and stores its WebView2 profile under `%LOCALAPPDATA%\winctl-mcp\webview`, not under `Program Files`. When the server requires auth, the tray opens the dashboard with an authenticated local URL. MCP traffic uses bearer-token auth on the `/mcp` endpoint.
 
 While running, the tray polls the loopback dashboard state and shows native notification-area alerts when macro/test runs complete as passed, failed, or aborted.
 

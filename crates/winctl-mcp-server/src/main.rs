@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::io::{self, Write};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,7 +15,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{header::CONTENT_TYPE, HeaderMap, StatusCode, Uri};
+use axum::http::{
+    header::{CACHE_CONTROL, CONTENT_TYPE},
+    HeaderMap, StatusCode, Uri,
+};
 use axum::middleware;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -4506,7 +4509,10 @@ async fn healthz() -> impl IntoResponse {
 }
 
 async fn dashboard_html() -> impl IntoResponse {
-    Html(DASHBOARD_HTML)
+    (
+        [(CACHE_CONTROL, "no-store, max-age=0")],
+        Html(DASHBOARD_HTML),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -4522,7 +4528,7 @@ struct DashboardConnectTokenIdBody {
 async fn dashboard_connect_json(State(state): State<DashboardState>) -> impl IntoResponse {
     AxumJson(serde_json::json!({
         "ok": true,
-        "mcp_url": format!("http://{}/mcp", state.listen),
+        "mcp_url": dashboard_connect_mcp_url(state.listen),
         "server_exe": std::env::current_exe()
             .ok()
             .map(|path| path.display().to_string()),
@@ -4531,6 +4537,22 @@ async fn dashboard_connect_json(State(state): State<DashboardState>) -> impl Int
         "dashboard_query_token_allowed": true,
         "tokens": state.auth.list_metadata(),
     }))
+}
+
+fn dashboard_connect_mcp_url(listen: SocketAddr) -> String {
+    let host = if listen.ip().is_unspecified() {
+        default_reachable_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+    } else {
+        listen.ip()
+    };
+    format!("http://{}:{}/mcp", host, listen.port())
+}
+
+fn default_reachable_ip() -> Option<IpAddr> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(8, 8, 8, 8), 80)).ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
 }
 
 async fn dashboard_connect_token_create(
@@ -4709,7 +4731,14 @@ async fn dashboard_asset(AxumPath(path): AxumPath<String>) -> Response {
                 Some("png") => "image/png",
                 _ => "application/octet-stream",
             };
-            ([(CONTENT_TYPE, content_type)], file.contents()).into_response()
+            (
+                [
+                    (CONTENT_TYPE, content_type),
+                    (CACHE_CONTROL, "no-store, max-age=0"),
+                ],
+                file.contents(),
+            )
+                .into_response()
         }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
@@ -6232,6 +6261,15 @@ mod tests {
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
 
         assert_eq!(build_version(), expected.as_str());
+    }
+
+    #[test]
+    fn dashboard_connect_url_never_uses_unspecified_host() {
+        let listen: SocketAddr = "0.0.0.0:8765".parse().unwrap();
+        let url = dashboard_connect_mcp_url(listen);
+
+        assert!(!url.contains("0.0.0.0"));
+        assert!(url.ends_with(":8765/mcp"));
     }
 
     #[test]

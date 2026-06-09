@@ -9,7 +9,7 @@
 ```toml
 [transport]
 mode = "http"
-listen = "127.0.0.1:8765"
+listen = "0.0.0.0:8765"
 
 [auth]
 token = "replace-me"

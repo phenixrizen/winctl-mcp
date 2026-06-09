@@ -8,17 +8,19 @@ If a client still shows `winctl-cmp`, it is using an old MCP server entry or a s
 
 ## Start the Windows Server
 
-Loopback-only local development:
+Installed Windows control app:
 
 ```powershell
 $base = "$env:LOCALAPPDATA\winctl-mcp"
-& "$base\bin\winctl-mcp-server.exe" serve --config "$base\config.toml"
+& "$base\bin\winctl-launcher.exe" run
 ```
+
+The launcher binds HTTP on `0.0.0.0:8765` by default so WSL can connect, creates a bearer token at `%LOCALAPPDATA%\winctl-mcp\http-auth-token`, and keeps dashboard windows on `127.0.0.1`.
 
 Explicit command without config:
 
 ```powershell
-winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765 --auth-token replace-me --log-file "$env:LOCALAPPDATA\winctl-mcp\logs\server.log"
+winctl-mcp-server.exe serve --transport http --listen 0.0.0.0:8765 --auth-token replace-me --log-file "$env:LOCALAPPDATA\winctl-mcp\logs\server.log"
 ```
 
 ## Codex
@@ -32,10 +34,10 @@ http_headers = { Authorization = "Bearer replace-me" }
 tool_timeout_sec = 120.0
 ```
 
-When Codex runs in WSL and Windows loopback is not reachable from WSL, bind the server to a Windows host address and require a token:
+When Codex runs in WSL, point it at the Windows host address and use the generated token from `%LOCALAPPDATA%\winctl-mcp\http-auth-token`:
 
 ```powershell
-winctl-mcp-server.exe serve --transport http --listen <windows-host-ip>:8765 --auth-token replace-me
+Get-Content "$env:LOCALAPPDATA\winctl-mcp\http-auth-token"
 ```
 
 Then point Codex at that address:

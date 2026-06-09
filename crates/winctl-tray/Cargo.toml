@@ -10,6 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 toml.workspace = true
+uuid.workspace = true
 winctl = { path = "../winctl" }
 
 [target.'cfg(windows)'.dependencies]

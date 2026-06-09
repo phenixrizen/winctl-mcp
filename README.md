@@ -69,8 +69,10 @@ See [docs/INDEX.md](docs/INDEX.md) for the MCP tool list. Current tools cover st
 Preferred Windows/WSL development transport:
 
 ```powershell
-winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765 --capture-dir "$env:LOCALAPPDATA\winctl-mcp\captures"
+winctl-mcp-server.exe serve --transport http --listen 0.0.0.0:8765 --auth-token replace-me --capture-dir "$env:LOCALAPPDATA\winctl-mcp\captures"
 ```
+
+The installed Start Menu control app uses the launcher/tray path instead: it binds HTTP on `0.0.0.0:8765`, generates a bearer token under `%LOCALAPPDATA%\winctl-mcp\http-auth-token`, and opens dashboard windows through a local authenticated URL.
 
 By default screenshots are written under the user's local app-data directory on Windows, or under the system temp directory when that is unavailable. Override it with `--capture-dir <path>` or `WINCTL_CAPTURE_DIR`.
 
