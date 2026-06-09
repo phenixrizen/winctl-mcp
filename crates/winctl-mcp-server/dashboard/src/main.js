@@ -1,6 +1,4 @@
-import { createApp, markRaw } from 'vue/dist/vue.esm-bundler.js';
-import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+import { createApp } from 'vue/dist/vue.esm-bundler.js';
 import './styles.css';
 import icon32Url from '../../../../assets/brand/winctl-icon-32.png';
 import logoUrl from '../../../../assets/brand/winctl-logo.svg';
@@ -56,21 +54,6 @@ function getMermaid() {
   return mermaidPromise;
 }
 
-globalThis.MonacoEnvironment = {
-  getWorker(_workerId, label) {
-    if (label === 'json') return new jsonWorker();
-    return new editorWorker();
-  },
-};
-
-let monacoPromise = null;
-function getMonaco() {
-  if (!monacoPromise) {
-    monacoPromise = import('monaco-editor/esm/vs/editor/editor.api');
-  }
-  return monacoPromise;
-}
-
 const params = new URLSearchParams(window.location.search);
 const urlToken = params.get('token');
 if (urlToken) {
@@ -91,7 +74,7 @@ const DASHBOARD_TABS = [
   { id: 'processes', label: 'Processes' },
   { id: 'memory', label: 'Memory' },
   { id: 'docs', label: 'Docs' },
-  { id: 'raw', label: 'Raw' },
+  { id: 'config', label: 'Config' },
 ];
 const requestedTab = params.get('tab');
 const initialTab = DASHBOARD_TABS.some((tab) => tab.id === requestedTab) ? requestedTab : 'overview';
@@ -117,6 +100,14 @@ function jsonSnippet(value) {
 
 function psSingleQuote(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function tomlString(value) {
+  return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+}
+
+function tomlQuotedKey(value) {
+  return `"${tomlString(value)}"`;
 }
 
 function formatUnixMs(value) {
@@ -261,11 +252,17 @@ createApp({
       connectDashboardTokenVisible: false,
       connectMode: 'http',
       copiedConnectId: '',
-      rawEditor: null,
-      rawMonaco: null,
-      rawEditorLoading: false,
-      rawEditorError: null,
-      rawEditorMaximized: false,
+      configClient: 'codex',
+      configTransport: 'http',
+      configServerName: 'winctl-mcp',
+      configHttpUrl: '',
+      configTokenMode: 'env',
+      configTokenEnv: 'WINCTL_MCP_TOKEN',
+      configTokenValue: '',
+      configCommand: '',
+      copiedConfigId: '',
+      issuePanelOpen: false,
+      copiedIssueState: false,
       recorderTitle: 'Recorded macro',
       recorderDescription: '',
       recorderRemember: true,
@@ -671,6 +668,176 @@ ${cursorConfig}
         },
       ];
     },
+    configServerId() {
+      return this.configServerName.trim() || 'winctl-mcp';
+    },
+    configHttpEndpoint() {
+      return this.configHttpUrl.trim() || this.connectMcpUrl;
+    },
+    configServerCommand() {
+      return this.configCommand.trim() || this.connectServerExe;
+    },
+    configTokenEnvName() {
+      return this.configTokenEnv.trim() || 'WINCTL_MCP_TOKEN';
+    },
+    configTokenLiteral() {
+      if (this.configTokenMode === 'manual') return this.configTokenValue || '<token>';
+      if (this.configTokenMode === 'current') return this.currentDashboardToken || this.connectExampleToken;
+      return `\${${this.configTokenEnvName}}`;
+    },
+    configAuthHeaderValue() {
+      return `Bearer ${this.configTokenLiteral}`;
+    },
+    configTokenCommandPrefix() {
+      if (this.configTransport !== 'http') return '';
+      if (this.configTokenMode === 'env') {
+        return `# Set ${this.configTokenEnvName} before launching the client.`;
+      }
+      return `$env:${this.configTokenEnvName} = ${psSingleQuote(this.configTokenLiteral)}`;
+    },
+    configSelectedExample() {
+      const name = this.configServerId;
+      const url = this.configHttpEndpoint;
+      const command = this.configServerCommand;
+      const args = this.connectStdioArgs;
+      const authHeader = this.configAuthHeaderValue;
+      const envName = this.configTokenEnvName;
+      const tokenPrefix = this.configTokenCommandPrefix;
+      const shellName = psSingleQuote(name);
+      const stdioArgs = args.map(psSingleQuote).join(' ');
+      const cursorHttp = jsonSnippet({
+        mcpServers: {
+          [name]: {
+            url,
+            headers: { Authorization: authHeader },
+          },
+        },
+      });
+      const cursorStdio = jsonSnippet({
+        mcpServers: {
+          [name]: {
+            command,
+            args,
+          },
+        },
+      });
+      const copilotHttp = jsonSnippet({
+        servers: {
+          [name]: {
+            type: 'http',
+            url,
+            headers: { Authorization: authHeader },
+          },
+        },
+      });
+      const copilotStdio = jsonSnippet({
+        servers: {
+          [name]: {
+            type: 'stdio',
+            command,
+            args,
+          },
+        },
+      });
+      const copilotAddHttp = jsonSnippet({
+        name,
+        type: 'http',
+        url,
+        headers: { Authorization: authHeader },
+      });
+      const copilotAddStdio = jsonSnippet({ name, command, args });
+
+      if (this.configTransport === 'stdio') {
+        if (this.configClient === 'codex') {
+          return {
+            title: 'Codex stdio',
+            path: '~/.codex/config.toml',
+            config: `[mcp_servers.${tomlQuotedKey(name)}]
+command = "${tomlString(command)}"
+args = ${jsonSnippet(args)}
+tool_timeout_sec = 120.0`,
+            command: `codex mcp add ${shellName} -- ${psSingleQuote(command)} ${stdioArgs}`,
+          };
+        }
+        if (this.configClient === 'claude-code') {
+          return {
+            title: 'Claude Code stdio',
+            path: 'Claude MCP config',
+            config: cursorStdio,
+            command: `claude mcp add ${shellName} -- ${psSingleQuote(command)} ${stdioArgs}`,
+          };
+        }
+        if (this.configClient === 'cursor') {
+          return {
+            title: 'Cursor stdio',
+            path: '.cursor/mcp.json',
+            config: cursorStdio,
+            command: `New-Item -ItemType Directory -Force .cursor
+Set-Content -Path .cursor\\mcp.json -Value @'
+${cursorStdio}
+'@`,
+          };
+        }
+        return {
+          title: 'GitHub Copilot stdio',
+          path: '.vscode/mcp.json',
+          config: copilotStdio,
+          command: `code --add-mcp ${psSingleQuote(copilotAddStdio)}`,
+        };
+      }
+
+      if (this.configClient === 'codex') {
+        const commandLine = `codex mcp add ${shellName} --url ${psSingleQuote(url)} --bearer-token-env-var ${envName}`;
+        return {
+          title: 'Codex HTTP',
+          path: '~/.codex/config.toml',
+          config: `[mcp_servers.${tomlQuotedKey(name)}]
+url = "${tomlString(url)}"
+http_headers = { Authorization = "${tomlString(authHeader)}" }
+tool_timeout_sec = 120.0`,
+          command: tokenPrefix ? `${tokenPrefix}
+${commandLine}` : commandLine,
+        };
+      }
+      if (this.configClient === 'claude-code') {
+        const headerCommand =
+          this.configTokenMode === 'env'
+            ? `$header = "Authorization: Bearer $env:${envName}"
+claude mcp add --transport http ${shellName} ${psSingleQuote(url)} --header $header`
+            : `claude mcp add --transport http ${shellName} ${psSingleQuote(url)} --header ${psSingleQuote(`Authorization: ${authHeader}`)}`;
+        return {
+          title: 'Claude Code HTTP',
+          path: 'Claude MCP config',
+          config: jsonSnippet({
+            type: 'http',
+            url,
+            headers: { Authorization: authHeader },
+          }),
+          command: tokenPrefix && this.configTokenMode !== 'env' ? `${tokenPrefix}
+${headerCommand}` : headerCommand,
+        };
+      }
+      if (this.configClient === 'cursor') {
+        return {
+          title: 'Cursor HTTP',
+          path: '.cursor/mcp.json',
+          config: cursorHttp,
+          command: `New-Item -ItemType Directory -Force .cursor
+Set-Content -Path .cursor\\mcp.json -Value @'
+${cursorHttp}
+'@`,
+        };
+      }
+      return {
+        title: 'GitHub Copilot HTTP',
+        path: '.vscode/mcp.json',
+        config: copilotHttp,
+        command: `code --add-mcp ${psSingleQuote(copilotAddHttp)}`,
+      };
+    },
+    issueUrl() {
+      return 'https://github.com/phenixrizen/winctl-mcp/issues/new';
+    },
     uiaElements() {
       const root = this.uiaSnapshot?.snapshot?.root;
       if (!root) return [];
@@ -798,32 +965,22 @@ ${cursorConfig}
   },
   watch: {
     async selectedTab(tab) {
-      if (tab === 'connect') await this.loadConnect();
+      if (tab === 'connect' || tab === 'config') await this.loadConnect();
       if (tab === 'docs') {
         await this.loadDocs();
         await this.renderMermaid();
       }
-      if (tab === 'raw') this.renderRawEditor();
-    },
-    data() {
-      this.updateRawEditor();
-    },
-    rawEditorMaximized() {
-      this.layoutRawEditor();
     },
   },
   mounted() {
     this.loadState();
-    if (this.selectedTab === 'connect') this.loadConnect();
-    window.addEventListener('resize', this.layoutRawEditor);
+    if (this.selectedTab === 'connect' || this.selectedTab === 'config') this.loadConnect();
     this.intervalId = window.setInterval(() => {
       if (this.autoRefresh) this.loadState({ quiet: true });
     }, 5000);
   },
   beforeUnmount() {
     window.clearInterval(this.intervalId);
-    window.removeEventListener('resize', this.layoutRawEditor);
-    this.rawEditor?.dispose();
   },
   methods: {
     async loadState(options = {}) {
@@ -917,61 +1074,19 @@ ${cursorConfig}
         if (this.copiedConnectId === id) this.copiedConnectId = '';
       }, 1600);
     },
-    async renderRawEditor() {
-      await this.$nextTick();
-      const host = this.$refs.rawEditor;
-      if (!host) return;
-      if (this.rawEditor) {
-        this.updateRawEditor();
-        return;
-      }
-      this.rawEditorLoading = true;
-      this.rawEditorError = null;
-      try {
-        const monaco = markRaw(await getMonaco());
-        const prefersDark =
-          window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        monaco.editor.setTheme(prefersDark ? 'vs-dark' : 'vs');
-        this.rawMonaco = monaco;
-        this.rawEditor = markRaw(monaco.editor.create(host, {
-          value: this.rawJson,
-          language: 'json',
-          readOnly: true,
-          automaticLayout: false,
-          fontSize: 12,
-          fontFamily: 'Consolas, "SFMono-Regular", ui-monospace, monospace',
-          minimap: { enabled: true },
-          scrollBeyondLastLine: false,
-          wordWrap: 'on',
-          wrappingIndent: 'same',
-          renderLineHighlight: 'line',
-          overviewRulerBorder: false,
-          padding: { top: 12, bottom: 12 },
-        }));
-        this.layoutRawEditor();
-      } catch (error) {
-        this.rawEditorError = String(error);
-      } finally {
-        this.rawEditorLoading = false;
-      }
+    async copyConfigText(id, text) {
+      await navigator.clipboard?.writeText(text).catch(() => {});
+      this.copiedConfigId = id;
+      window.setTimeout(() => {
+        if (this.copiedConfigId === id) this.copiedConfigId = '';
+      }, 1600);
     },
-    updateRawEditor() {
-      if (!this.rawEditor) return;
-      const model = this.rawEditor.getModel();
-      if (model && model.getValue() !== this.rawJson) {
-        const position = this.rawEditor.getPosition();
-        const scrollTop = this.rawEditor.getScrollTop();
-        model.setValue(this.rawJson);
-        if (position) this.rawEditor.setPosition(position);
-        this.rawEditor.setScrollTop(scrollTop);
-      }
-      this.layoutRawEditor();
-    },
-    layoutRawEditor() {
-      if (!this.rawEditor) return;
-      window.requestAnimationFrame(() => {
-        this.rawEditor?.layout();
-      });
+    async copyIssueState() {
+      await navigator.clipboard?.writeText(this.rawJson).catch(() => {});
+      this.copiedIssueState = true;
+      window.setTimeout(() => {
+        this.copiedIssueState = false;
+      }, 1600);
     },
     formatUnixMs,
     shortPath,
@@ -2550,19 +2665,153 @@ ${cursorConfig}
           </section>
         </section>
 
-        <section v-show="selectedTab === 'raw'" class="winctl-card winctl-raw-card overflow-hidden" :class="{ 'winctl-raw-card-maximized': rawEditorMaximized }">
-          <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
-            <h2 class="text-sm font-semibold">Dashboard state</h2>
-            <button type="button" class="btn btn-xs" @click="rawEditorMaximized = !rawEditorMaximized">
-              {{ rawEditorMaximized ? 'Restore' : 'Maximize' }}
-            </button>
-          </div>
-          <div v-if="rawEditorError" class="alert alert-error m-4 text-sm">{{ rawEditorError }}</div>
-          <div class="winctl-monaco-shell">
-            <div v-if="rawEditorLoading" class="winctl-monaco-loading text-sm text-slate-500">Loading editor</div>
-            <div ref="rawEditor" class="winctl-monaco-host" aria-label="Dashboard state JSON"></div>
+        <section v-if="selectedTab === 'config'" class="space-y-5">
+          <section class="winctl-card">
+            <div class="winctl-card-header flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 class="text-sm font-semibold">MCP server config</h2>
+                <div class="text-xs text-slate-500">HTTP keeps this dashboard, token management, and observability connected.</div>
+              </div>
+              <button type="button" class="btn btn-xs" :disabled="connectLoading" @click="loadConnect">Refresh</button>
+            </div>
+            <div class="grid gap-4 p-4 lg:grid-cols-3">
+              <label class="form-control">
+                <span class="label-text text-xs font-semibold">Client</span>
+                <select v-model="configClient" class="select select-sm select-bordered">
+                  <option value="codex">Codex</option>
+                  <option value="claude-code">Claude Code</option>
+                  <option value="cursor">Cursor</option>
+                  <option value="github-copilot">GitHub Copilot</option>
+                </select>
+              </label>
+              <label class="form-control">
+                <span class="label-text text-xs font-semibold">Server name</span>
+                <input v-model="configServerName" type="text" class="input input-sm input-bordered" />
+              </label>
+              <label class="form-control">
+                <span class="label-text text-xs font-semibold">Transport</span>
+                <select v-model="configTransport" class="select select-sm select-bordered">
+                  <option value="http">HTTP recommended</option>
+                  <option value="stdio">Stdio fallback</option>
+                </select>
+              </label>
+              <label class="form-control lg:col-span-2">
+                <span class="label-text text-xs font-semibold">HTTP URL</span>
+                <input v-model="configHttpUrl" type="text" class="input input-sm input-bordered" :placeholder="connectMcpUrl" :disabled="configTransport !== 'http'" />
+              </label>
+              <label class="form-control">
+                <span class="label-text text-xs font-semibold">Token source</span>
+                <select v-model="configTokenMode" class="select select-sm select-bordered" :disabled="configTransport !== 'http'">
+                  <option value="env">Environment variable</option>
+                  <option value="current">Current dashboard token</option>
+                  <option value="manual">Manual token</option>
+                </select>
+              </label>
+              <label v-if="configTokenMode === 'env'" class="form-control">
+                <span class="label-text text-xs font-semibold">Token env var</span>
+                <input v-model="configTokenEnv" type="text" class="input input-sm input-bordered" :disabled="configTransport !== 'http'" />
+              </label>
+              <label v-if="configTokenMode === 'manual'" class="form-control">
+                <span class="label-text text-xs font-semibold">Token value</span>
+                <input v-model="configTokenValue" type="password" class="input input-sm input-bordered" autocomplete="off" :disabled="configTransport !== 'http'" />
+              </label>
+              <label class="form-control lg:col-span-2">
+                <span class="label-text text-xs font-semibold">Stdio executable</span>
+                <input v-model="configCommand" type="text" class="input input-sm input-bordered" :placeholder="connectServerExe" :disabled="configTransport !== 'stdio'" />
+              </label>
+            </div>
+            <div v-if="connectError" class="alert alert-error mx-4 mb-4 text-sm">{{ connectError }}</div>
+          </section>
+
+          <div class="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
+            <section class="winctl-card">
+              <div class="winctl-card-header px-4 py-3">
+                <h2 class="text-sm font-semibold">Resolved settings</h2>
+              </div>
+              <dl class="divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
+                  <dt class="text-slate-500">Client</dt>
+                  <dd>{{ configSelectedExample.title }}</dd>
+                </div>
+                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
+                  <dt class="text-slate-500">Transport</dt>
+                  <dd><span class="badge badge-sm" :class="configTransport === 'http' ? 'badge-info' : 'badge-ghost'">{{ configTransport }}</span></dd>
+                </div>
+                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
+                  <dt class="text-slate-500">Install path</dt>
+                  <dd class="winctl-code break-all text-xs">{{ configSelectedExample.path }}</dd>
+                </div>
+                <div v-if="configTransport === 'http'" class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
+                  <dt class="text-slate-500">Endpoint</dt>
+                  <dd class="winctl-code break-all text-xs">{{ configHttpEndpoint }}</dd>
+                </div>
+                <div v-if="configTransport === 'http'" class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
+                  <dt class="text-slate-500">Authorization</dt>
+                  <dd class="winctl-code break-all text-xs">{{ configAuthHeaderValue }}</dd>
+                </div>
+                <div v-if="configTransport === 'stdio'" class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
+                  <dt class="text-slate-500">Executable</dt>
+                  <dd class="winctl-code break-all text-xs">{{ configServerCommand }}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="winctl-card overflow-hidden">
+              <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
+                <div>
+                  <h2 class="text-sm font-semibold">Generated client setup</h2>
+                  <div class="winctl-code text-xs text-slate-500">{{ configSelectedExample.path }}</div>
+                </div>
+                <div class="flex gap-1">
+                  <button type="button" class="btn btn-xs" @click="copyConfigText('config', configSelectedExample.config)">
+                    {{ copiedConfigId === 'config' ? 'Copied' : 'Copy config' }}
+                  </button>
+                  <button type="button" class="btn btn-xs" @click="copyConfigText('command', configSelectedExample.command)">
+                    {{ copiedConfigId === 'command' ? 'Copied' : 'Copy command' }}
+                  </button>
+                </div>
+              </div>
+              <div class="grid gap-3 p-4">
+                <div>
+                  <div class="mb-1 text-xs font-bold uppercase text-slate-500">Config</div>
+                  <pre class="winctl-code overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-[#e6edf6]"><code>{{ configSelectedExample.config }}</code></pre>
+                </div>
+                <div>
+                  <div class="mb-1 text-xs font-bold uppercase text-slate-500">Command</div>
+                  <pre class="winctl-code overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-[#e6edf6]"><code>{{ configSelectedExample.command }}</code></pre>
+                </div>
+              </div>
+            </section>
           </div>
         </section>
+
+        <button
+          v-if="selectedTab === 'overview'"
+          type="button"
+          class="btn btn-circle btn-info winctl-issue-help"
+          aria-label="Open issue helper"
+          @click="issuePanelOpen = true"
+        >?</button>
+
+        <div v-if="issuePanelOpen" class="modal modal-open">
+          <div class="modal-box max-w-4xl">
+            <h2 class="text-lg font-semibold">GitHub issue helper</h2>
+            <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              Open an issue on GitHub and include this dashboard state JSON when reporting dashboard or server behavior.
+            </p>
+            <div class="mt-4 flex flex-wrap gap-2">
+              <a class="btn btn-sm btn-info" :href="issueUrl" target="_blank" rel="noreferrer">Open GitHub issue</a>
+              <button type="button" class="btn btn-sm" @click="copyIssueState">
+                {{ copiedIssueState ? 'Copied' : 'Copy state JSON' }}
+              </button>
+              <button type="button" class="btn btn-sm btn-ghost" @click="issuePanelOpen = false">Close</button>
+            </div>
+            <pre class="winctl-code winctl-issue-state mt-4 rounded bg-[#0d1117] p-3 text-xs text-[#e6edf6]"><code>{{ rawJson }}</code></pre>
+          </div>
+          <form method="dialog" class="modal-backdrop" @click.prevent="issuePanelOpen = false">
+            <button type="button">close</button>
+          </form>
+        </div>
       </main>
     </div>
   `,
