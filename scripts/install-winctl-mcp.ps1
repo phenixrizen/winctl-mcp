@@ -1,7 +1,7 @@
 param(
     [string]$SourceDir = "",
     [string]$InstallDir = "$env:LOCALAPPDATA\winctl-mcp",
-    [string]$Listen = "127.0.0.1:8765",
+    [string]$Listen = "0.0.0.0:8765",
     [string]$AuthToken = "",
     [switch]$Force
 )
@@ -117,13 +117,14 @@ max_steps = 200
 $serverExe = Join-Path $binDir "winctl-mcp-server.exe"
 $trayExe = Join-Path $binDir "winctl-tray.exe"
 $launcherExe = Join-Path $binDir "winctl-launcher.exe"
+$localListen = $Listen -replace '^0\.0\.0\.0:', '127.0.0.1:'
 
 Write-Host "Installed winctl-mcp to $InstallDir"
 Write-Host "Config: $configPath"
 Write-Host "HTTP server:"
 Write-Host "  `"$serverExe`" serve --config `"$configPath`""
 Write-Host "Health check:"
-Write-Host "  Invoke-RestMethod http://$Listen/healthz"
+Write-Host "  Invoke-RestMethod http://$localListen/healthz"
 if (Test-Path $trayExe) {
     Write-Host "Tray/controller:"
     Write-Host "  `"$trayExe`" status"

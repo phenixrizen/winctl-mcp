@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
-use std::net::{SocketAddr, TcpStream};
+use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 fn main() {
     if let Err(error) = run() {
@@ -65,6 +66,7 @@ struct TrayConfig {
     listen: SocketAddr,
     listen_overridden: bool,
     auth_token: Option<String>,
+    auth_token_file: PathBuf,
     dashboard_url_override: Option<String>,
     log_file: Option<PathBuf>,
     log_file_overridden: bool,
@@ -95,9 +97,10 @@ impl Default for TrayConfig {
             .unwrap_or_else(|| PathBuf::from("winctl-mcp-server.exe"));
         Self {
             server_exe,
-            listen: "127.0.0.1:8765".parse().expect("default listen is valid"),
+            listen: "0.0.0.0:8765".parse().expect("default listen is valid"),
             listen_overridden: false,
             auth_token: None,
+            auth_token_file: data_dir.join("http-auth-token"),
             dashboard_url_override: None,
             log_file: Some(data_dir.join("server.log")),
             log_file_overridden: false,
@@ -147,7 +150,7 @@ fn sanitize_log_message(message: &str) -> String {
 
 impl TrayConfig {
     fn mcp_url(&self) -> String {
-        format!("http://{}/mcp", self.listen)
+        format!("http://{}/mcp", self.mcp_addr())
     }
 
     fn dashboard_url(&self) -> String {
@@ -157,18 +160,40 @@ impl TrayConfig {
         self.dashboard_base_url()
     }
 
+    fn dashboard_status_url(&self) -> String {
+        sanitize_log_message(&self.dashboard_url())
+    }
+
     fn recorder_url(&self) -> String {
         self.dashboard_url_with_tab("recorder")
     }
 
     fn dashboard_base_url(&self) -> String {
+        let dashboard_addr = self.dashboard_addr();
         match &self.auth_token {
             Some(token) if !token.is_empty() => format!(
                 "http://{}/dashboard?token={}",
-                self.listen,
+                dashboard_addr,
                 percent_encode_query_value(token)
             ),
-            _ => format!("http://{}/dashboard", self.listen),
+            _ => format!("http://{dashboard_addr}/dashboard"),
+        }
+    }
+
+    fn dashboard_addr(&self) -> SocketAddr {
+        if self.listen.ip().is_unspecified() {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), self.listen.port())
+        } else {
+            self.listen
+        }
+    }
+
+    fn mcp_addr(&self) -> SocketAddr {
+        if self.listen.ip().is_unspecified() {
+            let host = default_reachable_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+            SocketAddr::new(host, self.listen.port())
+        } else {
+            self.listen
         }
     }
 
@@ -204,6 +229,47 @@ impl TrayConfig {
         }
         Ok(())
     }
+
+    fn ensure_auth_token(&mut self) -> anyhow::Result<()> {
+        if self
+            .auth_token
+            .as_ref()
+            .is_some_and(|token| !token.is_empty())
+        {
+            return Ok(());
+        }
+        if let Ok(token) = fs::read_to_string(&self.auth_token_file) {
+            let token = token.trim().to_string();
+            if !token.is_empty() {
+                self.auth_token = Some(token);
+                return Ok(());
+            }
+        }
+        if let Some(parent) = self.auth_token_file.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let token = generate_auth_token();
+        fs::write(&self.auth_token_file, format!("{token}\n"))
+            .with_context(|| format!("failed to write {}", self.auth_token_file.display()))?;
+        self.auth_token = Some(token);
+        Ok(())
+    }
+}
+
+fn generate_auth_token() -> String {
+    format!(
+        "wctl_{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+fn default_reachable_ip() -> Option<IpAddr> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(8, 8, 8, 8), 80)).ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
 }
 
 fn percent_encode_query_value(value: &str) -> String {
@@ -310,6 +376,10 @@ impl Cli {
                     config.log_file = Some(required_path(&args, index, "--log-file")?);
                     config.log_file_overridden = true;
                 }
+                "--auth-token" => {
+                    index += 1;
+                    config.auth_token = Some(required_string(&args, index, "--auth-token")?);
+                }
                 "--config" => {
                     index += 1;
                     config.config_file = Some(required_path(&args, index, "--config")?);
@@ -328,14 +398,22 @@ impl Cli {
             index += 1;
         }
         config.apply_config_file_defaults()?;
+        if command.uses_http_server() {
+            config.ensure_auth_token()?;
+        }
         Ok(Self { command, config })
+    }
+}
+
+impl CommandMode {
+    fn uses_http_server(self) -> bool {
+        !matches!(self, CommandMode::Stop)
     }
 }
 
 fn start_server(config: &TrayConfig) -> anyhow::Result<()> {
     if server_listener_accepts(config.listen) {
-        println!("winctl-mcp-server already listening on {}", config.listen);
-        return Ok(());
+        return ensure_current_or_restart(config);
     }
     if let Some(pid) = server_pid(config) {
         println!("winctl-mcp-server already running pid {pid}");
@@ -366,6 +444,9 @@ fn start_server(config: &TrayConfig) -> anyhow::Result<()> {
         let log_file = config.log_file.as_ref().expect("checked above");
         command.arg("--log-file").arg(log_file);
     }
+    if let Some(token) = &config.auth_token {
+        command.arg("--auth-token").arg(token);
+    }
     let child = command.spawn().with_context(|| {
         format!(
             "failed to launch server executable {}",
@@ -379,20 +460,17 @@ fn start_server(config: &TrayConfig) -> anyhow::Result<()> {
 }
 
 fn stop_server(config: &TrayConfig) -> anyhow::Result<()> {
-    let pid = read_pid(&config.pid_file)?;
-    #[cfg(windows)]
-    {
-        winctl::kill_process(pid).with_context(|| format!("failed to stop server pid {pid}"))?;
+    let mut pids = server_process_pids(config);
+    if pids.is_empty() {
+        pids.push(read_pid(&config.pid_file)?);
     }
-    #[cfg(not(windows))]
-    {
-        Command::new("kill")
-            .arg(pid.to_string())
-            .status()
-            .with_context(|| format!("failed to invoke kill for pid {pid}"))?;
+    pids.sort_unstable();
+    pids.dedup();
+    for pid in pids {
+        stop_server_pid(pid)?;
+        println!("stopped winctl-mcp-server pid {pid}");
     }
     let _ = fs::remove_file(&config.pid_file);
-    println!("stopped winctl-mcp-server pid {pid}");
     Ok(())
 }
 
@@ -405,7 +483,7 @@ fn print_status(config: &TrayConfig) -> anyhow::Result<()> {
         server_exe: config.server_exe.clone(),
         listen: config.listen,
         mcp_url: config.mcp_url(),
-        dashboard_url: config.dashboard_url(),
+        dashboard_url: config.dashboard_status_url(),
         pid_file: config.pid_file.clone(),
     };
     println!("{}", serde_json::to_string_pretty(&status)?);
@@ -442,7 +520,7 @@ fn open_recorder(config: &TrayConfig) -> anyhow::Result<()> {
 
 fn ensure_server_ready(config: &TrayConfig) -> anyhow::Result<()> {
     if server_listener_accepts(config.listen) {
-        return Ok(());
+        return ensure_current_or_restart(config);
     }
     start_server(config)?;
     let timeout = Duration::from_secs(10);
@@ -454,6 +532,140 @@ fn ensure_server_ready(config: &TrayConfig) -> anyhow::Result<()> {
         config.listen,
         timeout.as_millis()
     )
+}
+
+fn ensure_current_or_restart(config: &TrayConfig) -> anyhow::Result<()> {
+    let state = fetch_dashboard_state(config)?;
+    if dashboard_state_matches_version(&state, build_version())? {
+        println!("winctl-mcp-server already listening on {}", config.listen);
+        return Ok(());
+    }
+
+    let live_version = state
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    append_tray_log(&format!(
+        "restarting stale winctl-mcp-server on {}; live version={live_version}, launcher version={}",
+        config.listen,
+        build_version()
+    ));
+    stop_matching_server_processes(config)?;
+    let stop_timeout = Duration::from_secs(5);
+    if !wait_for_server_listener_closed(config.listen, stop_timeout) {
+        anyhow::bail!(
+            "winctl-mcp-server did not release {} within {} ms",
+            config.listen,
+            stop_timeout.as_millis()
+        );
+    }
+    start_server(config)?;
+    let timeout = Duration::from_secs(10);
+    if wait_for_server_listener(config.listen, timeout) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "winctl-mcp-server did not restart on {} within {} ms",
+        config.listen,
+        timeout.as_millis()
+    )
+}
+
+fn fetch_dashboard_state(config: &TrayConfig) -> anyhow::Result<Value> {
+    let mut stream = TcpStream::connect_timeout(&config.listen, Duration::from_millis(600))
+        .context("failed to connect to dashboard state endpoint")?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .context("failed to set dashboard read timeout")?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .context("failed to set dashboard write timeout")?;
+    let mut request = format!(
+        "GET /dashboard/state HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
+        config.listen
+    );
+    if let Some(token) = &config.auth_token {
+        request.push_str(&format!("Authorization: Bearer {token}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .context("failed to request dashboard state")?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .context("failed to read dashboard state response")?;
+    let (headers, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| anyhow::anyhow!("dashboard state response was malformed"))?;
+    if !headers.starts_with("HTTP/1.1 200") && !headers.starts_with("HTTP/1.0 200") {
+        anyhow::bail!(
+            "dashboard state returned {}",
+            headers.lines().next().unwrap_or("HTTP error")
+        );
+    }
+    serde_json::from_str(body).context("failed to parse dashboard state JSON")
+}
+
+fn wait_for_server_listener_closed(listen: SocketAddr, timeout: Duration) -> bool {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if !server_listener_accepts(listen) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    !server_listener_accepts(listen)
+}
+
+fn dashboard_state_matches_version(state: &Value, expected_version: &str) -> anyhow::Result<bool> {
+    let service = state
+        .get("service")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if service != "winctl-mcp-server" {
+        anyhow::bail!("listener is not winctl-mcp-server; service={service:?}");
+    }
+    Ok(state.get("version").and_then(Value::as_str) == Some(expected_version))
+}
+
+fn build_version() -> &'static str {
+    match option_env!("WINCTL_BUILD_VERSION") {
+        Some(version) if !version.is_empty() => version,
+        _ => env!("CARGO_PKG_VERSION"),
+    }
+}
+
+fn stop_matching_server_processes(config: &TrayConfig) -> anyhow::Result<()> {
+    let pids = server_process_pids(config);
+    if pids.is_empty() {
+        anyhow::bail!(
+            "refusing to restart stale listener on {}; no running process matched {}",
+            config.listen,
+            config.server_exe.display()
+        );
+    }
+    for pid in pids {
+        stop_server_pid(pid)?;
+        append_tray_log(&format!("stopped stale winctl-mcp-server pid {pid}"));
+    }
+    let _ = fs::remove_file(&config.pid_file);
+    Ok(())
+}
+
+fn stop_server_pid(pid: u32) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        winctl::kill_process(pid).with_context(|| format!("failed to stop server pid {pid}"))?;
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("kill")
+            .arg(pid.to_string())
+            .status()
+            .with_context(|| format!("failed to invoke kill for pid {pid}"))?;
+    }
+    Ok(())
 }
 
 fn wait_for_server_listener(listen: SocketAddr, timeout: Duration) -> bool {
@@ -675,6 +887,28 @@ fn server_pid(config: &TrayConfig) -> Option<u32> {
     read_pid(&config.pid_file)
         .ok()
         .filter(|pid| is_server_process_alive(*pid, &config.server_exe))
+}
+
+fn server_process_pids(config: &TrayConfig) -> Vec<u32> {
+    #[cfg(windows)]
+    {
+        let expected = normalize_windows_path(&config.server_exe.to_string_lossy());
+        winctl::list_processes()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|process| {
+                let actual = process.exe_path?;
+                let actual = normalize_windows_path(&actual);
+                actual
+                    .eq_ignore_ascii_case(&expected)
+                    .then_some(process.pid)
+            })
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        server_pid(config).into_iter().collect()
+    }
 }
 
 fn server_listener_accepts(listen: SocketAddr) -> bool {
@@ -1255,7 +1489,12 @@ fn is_server_process_alive(pid: u32, server_exe: &PathBuf) -> bool {
 
 #[cfg(windows)]
 fn normalize_windows_path(path: &str) -> String {
-    path.replace('/', "\\")
+    let normalized = path.trim_matches('"').replace('/', "\\");
+    normalized
+        .strip_prefix("\\\\?\\")
+        .or_else(|| normalized.strip_prefix("\\??\\"))
+        .unwrap_or(&normalized)
+        .to_string()
 }
 
 fn required_path(args: &[OsString], index: usize, flag: &str) -> anyhow::Result<PathBuf> {
@@ -1291,6 +1530,27 @@ mod tests {
         );
         assert_eq!(cli.config.listen.port(), 9999);
         assert!(cli.config.listen_overridden);
+    }
+
+    #[test]
+    fn default_launcher_listens_for_wsl_with_token() {
+        let cli = Cli::parse([
+            OsString::from("open-dashboard"),
+            OsString::from("--auth-token"),
+            OsString::from("test-token"),
+        ])
+        .unwrap();
+
+        assert_eq!(cli.config.listen.to_string(), "0.0.0.0:8765");
+        assert!(!cli.config.mcp_url().contains("0.0.0.0"));
+        assert_eq!(
+            cli.config.dashboard_url(),
+            "http://127.0.0.1:8765/dashboard?token=test-token"
+        );
+        assert_eq!(
+            cli.config.recorder_url(),
+            "http://127.0.0.1:8765/dashboard?token=test-token&tab=recorder"
+        );
     }
 
     #[test]
@@ -1345,11 +1605,16 @@ listen = "127.0.0.1:8765"
 
     #[test]
     fn parses_recorder_shortcuts() {
-        let cli = Cli::parse([OsString::from("recording-toggle")]).unwrap();
+        let cli = Cli::parse([
+            OsString::from("recording-toggle"),
+            OsString::from("--auth-token"),
+            OsString::from("test-token"),
+        ])
+        .unwrap();
         assert_eq!(cli.command, CommandMode::RecordingToggle);
         assert_eq!(
             cli.config.recorder_url(),
-            "http://127.0.0.1:8765/dashboard?tab=recorder"
+            "http://127.0.0.1:8765/dashboard?token=test-token&tab=recorder"
         );
     }
 
@@ -1370,6 +1635,40 @@ listen = "127.0.0.1:8765"
             sanitized,
             "failed at http://127.0.0.1:8765/dashboard?token=<redacted>&x=1"
         );
+    }
+
+    #[test]
+    fn status_url_redacts_dashboard_token() {
+        let cli = Cli::parse([
+            OsString::from("status"),
+            OsString::from("--auth-token"),
+            OsString::from("secret-token"),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.config.dashboard_status_url(),
+            "http://127.0.0.1:8765/dashboard?token=<redacted>"
+        );
+        assert!(cli.config.dashboard_url().contains("secret-token"));
+    }
+
+    #[test]
+    fn dashboard_state_version_check_requires_current_server() {
+        let current = serde_json::json!({
+            "ok": true,
+            "service": "winctl-mcp-server",
+            "version": "9.9.9"
+        });
+        assert!(dashboard_state_matches_version(&current, "9.9.9").unwrap());
+        assert!(!dashboard_state_matches_version(&current, "9.9.8").unwrap());
+
+        let other_service = serde_json::json!({
+            "ok": true,
+            "service": "other",
+            "version": "9.9.9"
+        });
+        assert!(dashboard_state_matches_version(&other_service, "9.9.9").is_err());
     }
 
     #[test]

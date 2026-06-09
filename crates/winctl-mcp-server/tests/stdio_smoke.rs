@@ -156,6 +156,13 @@ async fn streamable_http_health_and_tool_listing_work() {
         .await
         .expect("dashboard should respond");
     assert_eq!(dashboard.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        dashboard
+            .headers()
+            .get(reqwest::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store, max-age=0")
+    );
     let dashboard_body = dashboard
         .text()
         .await
@@ -175,6 +182,13 @@ async fn streamable_http_health_and_tool_listing_work() {
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok()),
         Some("text/javascript; charset=utf-8")
+    );
+    assert_eq!(
+        dashboard_js
+            .headers()
+            .get(reqwest::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store, max-age=0")
     );
     let dashboard_css = client
         .get(format!("{base}/dashboard/assets/dashboard.css"))

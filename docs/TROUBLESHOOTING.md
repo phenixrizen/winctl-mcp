@@ -12,17 +12,19 @@ powershell -ExecutionPolicy Bypass -File "$base\scripts\diagnose-winctl-mcp.ps1"
 ## Transport Startup
 
 - Check the server process: `Get-Process winctl-mcp-server`.
-- Check health: `Invoke-RestMethod http://127.0.0.1:8765/healthz`.
+- Check health from Windows: `Invoke-RestMethod http://127.0.0.1:8765/healthz`.
 - Check logs: `%LOCALAPPDATA%\winctl-mcp\logs\server.log`.
 - If Codex shows a `winctl-cmp` tool prefix, rename the MCP server entry to `winctl-mcp` and restart Codex so it creates a fresh MCP session.
 
 ## WSL to Windows HTTP
 
-Windows and WSL can have different loopback scopes. If `127.0.0.1` from WSL cannot reach the Windows server, start the server on a Windows host address with an auth token:
+Windows and WSL can have different loopback scopes. The installed launcher binds HTTP on `0.0.0.0:8765` with a bearer token so WSL can reach the Windows server through the Windows host address. Read the token on Windows:
 
 ```powershell
-winctl-mcp-server.exe serve --transport http --listen <windows-host-ip>:8765 --auth-token replace-me
+Get-Content "$env:LOCALAPPDATA\winctl-mcp\http-auth-token"
 ```
+
+Then use `http://<windows-host-ip>:8765/mcp` with `Authorization: Bearer <token>` from WSL.
 
 Then configure the WSL client with:
 

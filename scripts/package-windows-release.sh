@@ -114,7 +114,7 @@ cat > "${dist_dir}/RELEASE.json" <<EOF
     "bin/winctl-launcher.exe"
   ],
   "entrypoints": {
-    "http": "winctl-mcp-server.exe serve --transport http --listen 127.0.0.1:8765",
+    "http": "winctl-launcher.exe run",
     "stdio": "winctl-mcp-server.exe serve --transport stdio",
     "control": "winctl-launcher.exe run",
     "self_test": "winctl-mcp-server.exe self-test windows-list"
