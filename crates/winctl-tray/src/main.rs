@@ -188,6 +188,10 @@ impl TrayConfig {
         }
     }
 
+    fn listener_probe_addr(&self) -> SocketAddr {
+        self.dashboard_addr()
+    }
+
     fn mcp_addr(&self) -> SocketAddr {
         if self.listen.ip().is_unspecified() {
             let host = default_reachable_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
@@ -412,7 +416,7 @@ impl CommandMode {
 }
 
 fn start_server(config: &TrayConfig) -> anyhow::Result<()> {
-    if server_listener_accepts(config.listen) {
+    if server_listener_accepts(config.listener_probe_addr()) {
         return ensure_current_or_restart(config);
     }
     if let Some(pid) = server_pid(config) {
@@ -519,25 +523,40 @@ fn open_recorder(config: &TrayConfig) -> anyhow::Result<()> {
 }
 
 fn ensure_server_ready(config: &TrayConfig) -> anyhow::Result<()> {
-    if server_listener_accepts(config.listen) {
+    let probe_addr = config.listener_probe_addr();
+    if server_listener_accepts(probe_addr) {
         return ensure_current_or_restart(config);
     }
     start_server(config)?;
     let timeout = Duration::from_secs(10);
-    if wait_for_server_listener(config.listen, timeout) {
+    if wait_for_server_listener(probe_addr, timeout) {
         return Ok(());
     }
     anyhow::bail!(
-        "winctl-mcp-server did not accept connections on {} within {} ms",
+        "winctl-mcp-server did not accept connections on {} within {} ms (bind {})",
+        probe_addr,
+        timeout.as_millis(),
         config.listen,
-        timeout.as_millis()
     )
 }
 
+fn listener_label(config: &TrayConfig) -> String {
+    let probe_addr = config.listener_probe_addr();
+    if probe_addr == config.listen {
+        probe_addr.to_string()
+    } else {
+        format!("{probe_addr} (bind {})", config.listen)
+    }
+}
+
 fn ensure_current_or_restart(config: &TrayConfig) -> anyhow::Result<()> {
+    let probe_addr = config.listener_probe_addr();
     let state = fetch_dashboard_state(config)?;
     if dashboard_state_matches_version(&state, build_version())? {
-        println!("winctl-mcp-server already listening on {}", config.listen);
+        println!(
+            "winctl-mcp-server already listening on {}",
+            listener_label(config)
+        );
         return Ok(());
     }
 
@@ -547,32 +566,33 @@ fn ensure_current_or_restart(config: &TrayConfig) -> anyhow::Result<()> {
         .unwrap_or("unknown");
     append_tray_log(&format!(
         "restarting stale winctl-mcp-server on {}; live version={live_version}, launcher version={}",
-        config.listen,
+        listener_label(config),
         build_version()
     ));
     stop_matching_server_processes(config)?;
     let stop_timeout = Duration::from_secs(5);
-    if !wait_for_server_listener_closed(config.listen, stop_timeout) {
+    if !wait_for_server_listener_closed(probe_addr, stop_timeout) {
         anyhow::bail!(
             "winctl-mcp-server did not release {} within {} ms",
-            config.listen,
+            listener_label(config),
             stop_timeout.as_millis()
         );
     }
     start_server(config)?;
     let timeout = Duration::from_secs(10);
-    if wait_for_server_listener(config.listen, timeout) {
+    if wait_for_server_listener(probe_addr, timeout) {
         return Ok(());
     }
     anyhow::bail!(
         "winctl-mcp-server did not restart on {} within {} ms",
-        config.listen,
+        listener_label(config),
         timeout.as_millis()
     )
 }
 
 fn fetch_dashboard_state(config: &TrayConfig) -> anyhow::Result<Value> {
-    let mut stream = TcpStream::connect_timeout(&config.listen, Duration::from_millis(600))
+    let probe_addr = config.listener_probe_addr();
+    let mut stream = TcpStream::connect_timeout(&probe_addr, Duration::from_millis(600))
         .context("failed to connect to dashboard state endpoint")?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -582,7 +602,7 @@ fn fetch_dashboard_state(config: &TrayConfig) -> anyhow::Result<Value> {
         .context("failed to set dashboard write timeout")?;
     let mut request = format!(
         "GET /dashboard/state HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
-        config.listen
+        probe_addr
     );
     if let Some(token) = &config.auth_token {
         request.push_str(&format!("Authorization: Bearer {token}\r\n"));
@@ -641,7 +661,7 @@ fn stop_matching_server_processes(config: &TrayConfig) -> anyhow::Result<()> {
     if pids.is_empty() {
         anyhow::bail!(
             "refusing to restart stale listener on {}; no running process matched {}",
-            config.listen,
+            listener_label(config),
             config.server_exe.display()
         );
     }
@@ -969,7 +989,7 @@ mod windows_tray {
     }
 
     pub(super) fn run(config: TrayConfig) -> anyhow::Result<()> {
-        if !super::server_listener_accepts(config.listen) {
+        if !super::server_listener_accepts(config.listener_probe_addr()) {
             if let Err(error) = start_server(&config) {
                 eprintln!("failed to start winctl-mcp-server: {error:#}");
             }
@@ -1297,7 +1317,8 @@ mod windows_tray {
     }
 
     fn fetch_dashboard_state(config: &TrayConfig) -> anyhow::Result<Value> {
-        let mut stream = TcpStream::connect_timeout(&config.listen, Duration::from_millis(600))
+        let probe_addr = config.listener_probe_addr();
+        let mut stream = TcpStream::connect_timeout(&probe_addr, Duration::from_millis(600))
             .context("failed to connect to dashboard state endpoint")?;
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
@@ -1307,7 +1328,7 @@ mod windows_tray {
             .context("failed to set dashboard write timeout")?;
         let mut request = format!(
             "GET /dashboard/state HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
-            config.listen
+            probe_addr
         );
         if let Some(token) = &config.auth_token {
             request.push_str(&format!("Authorization: Bearer {token}\r\n"));
@@ -1542,6 +1563,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(cli.config.listen.to_string(), "0.0.0.0:8765");
+        assert_eq!(
+            cli.config.listener_probe_addr().to_string(),
+            "127.0.0.1:8765"
+        );
         assert!(!cli.config.mcp_url().contains("0.0.0.0"));
         assert_eq!(
             cli.config.dashboard_url(),
