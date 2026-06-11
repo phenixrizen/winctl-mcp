@@ -134,11 +134,7 @@ async fn config_endpoint_loads_saves_and_gates() {
         .send()
         .await
         .expect("authorized POST should respond");
-    assert_eq!(
-        save.status().as_u16(),
-        200,
-        "authorized POST should be 200"
-    );
+    assert_eq!(save.status().as_u16(), 200, "authorized POST should be 200");
 
     // 5. Read the config file from disk and verify the change persisted and
     //    the locked [transport] section is preserved.

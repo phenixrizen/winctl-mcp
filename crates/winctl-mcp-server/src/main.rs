@@ -4260,7 +4260,10 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     let dashboard_router = Router::new()
         .route("/dashboard", get(dashboard_html))
         .route("/dashboard/connect", get(dashboard_connect_json))
-        .route("/dashboard/config", get(dashboard_config_json).post(dashboard_config_save))
+        .route(
+            "/dashboard/config",
+            get(dashboard_config_json).post(dashboard_config_save),
+        )
         .route("/dashboard/restart", post(dashboard_config_restart))
         .route(
             "/dashboard/connect/token",
@@ -4562,10 +4565,7 @@ fn default_reachable_ip() -> Option<IpAddr> {
 /// Gate for config-mutating dashboard endpoints: loopback-only, and a valid
 /// bearer token in the `Authorization` header (header-only — no query token),
 /// required even on loopback. Returns the rejection response on failure.
-fn config_endpoint_guard(
-    state: &DashboardState,
-    headers: &HeaderMap,
-) -> Result<(), Response> {
+fn config_endpoint_guard(state: &DashboardState, headers: &HeaderMap) -> Result<(), Response> {
     if !state.listen.ip().is_loopback() {
         return Err((
             StatusCode::FORBIDDEN,
@@ -4709,11 +4709,7 @@ async fn dashboard_config_json(State(state): State<DashboardState>) -> impl Into
                     .as_ref()
                     .and_then(|t| t.mode.clone())
                     .unwrap_or_else(|| "http".to_string());
-                let token_set = file
-                    .auth
-                    .as_ref()
-                    .and_then(|a| a.token.as_ref())
-                    .is_some();
+                let token_set = file.auth.as_ref().and_then(|a| a.token.as_ref()).is_some();
                 let sections = serde_json::json!({
                     "policy": file.policy,
                     "paths": file.paths,
@@ -6685,9 +6681,18 @@ mod config_serde_tests {
         });
         let text = toml::to_string_pretty(&file).expect("serialize");
         assert!(text.contains("[policy]"), "got: {text}");
-        assert!(text.contains("enable_filesystem_mutation = true"), "got: {text}");
-        assert!(!text.contains("[transport]"), "None sections must be omitted: {text}");
-        assert!(!text.contains("enable_clipboard_write"), "None fields must be omitted: {text}");
+        assert!(
+            text.contains("enable_filesystem_mutation = true"),
+            "got: {text}"
+        );
+        assert!(
+            !text.contains("[transport]"),
+            "None sections must be omitted: {text}"
+        );
+        assert!(
+            !text.contains("enable_clipboard_write"),
+            "None fields must be omitted: {text}"
+        );
 
         let parsed: WinctlConfigFile = toml::from_str(&text).expect("parse");
         assert_eq!(

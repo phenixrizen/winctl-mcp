@@ -38,7 +38,10 @@ pub(crate) struct FieldError {
 
 /// Overlay the editable sections from `edits` onto a copy of `existing`,
 /// leaving `[transport]`, `[auth]`, and any other untouched fields intact.
-pub(crate) fn merge_editable(existing: &WinctlConfigFile, edits: &ConfigSaveBody) -> WinctlConfigFile {
+pub(crate) fn merge_editable(
+    existing: &WinctlConfigFile,
+    edits: &ConfigSaveBody,
+) -> WinctlConfigFile {
     let mut merged = existing.clone();
     if edits.policy.is_some() {
         merged.policy = edits.policy.clone();
@@ -154,7 +157,12 @@ pub(crate) fn sections_from_policy(
         max_runtime_ms: policy.max_macro_runtime_ms,
         max_steps: policy.max_macro_steps,
     };
-    (policy_section, paths_section, embedding_section, macro_section)
+    (
+        policy_section,
+        paths_section,
+        embedding_section,
+        macro_section,
+    )
 }
 
 /// Name of the tray binary as built by the workspace (sibling of the server exe).
@@ -245,7 +253,10 @@ enable_filesystem_mutation = false
             merged.transport.as_ref().unwrap().listen.as_deref(),
             Some("127.0.0.1:8765")
         );
-        assert_eq!(merged.auth.as_ref().unwrap().token.as_deref(), Some("keep-me"));
+        assert_eq!(
+            merged.auth.as_ref().unwrap().token.as_deref(),
+            Some("keep-me")
+        );
         assert_eq!(
             merged.policy.as_ref().unwrap().enable_filesystem_mutation,
             Some(true)
@@ -292,9 +303,13 @@ enable_filesystem_mutation = false
     #[test]
     fn write_atomic_replaces_destination() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("winctl-config-editor-test-{}.toml", std::process::id()));
+        let path = dir.join(format!(
+            "winctl-config-editor-test-{}.toml",
+            std::process::id()
+        ));
         write_atomic(&path, "[policy]\nenable_filesystem_mutation = true\n").expect("first write");
-        write_atomic(&path, "[policy]\nenable_filesystem_mutation = false\n").expect("second write");
+        write_atomic(&path, "[policy]\nenable_filesystem_mutation = false\n")
+            .expect("second write");
         let read_back = std::fs::read_to_string(&path).expect("read back");
         assert!(read_back.contains("enable_filesystem_mutation = false"));
         let _ = std::fs::remove_file(&path);
