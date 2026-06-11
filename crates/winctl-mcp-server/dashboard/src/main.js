@@ -102,14 +102,6 @@ function psSingleQuote(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-function tomlString(value) {
-  return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
-}
-
-function tomlQuotedKey(value) {
-  return `"${tomlString(value)}"`;
-}
-
 function formatUnixMs(value) {
   if (!value) return 'n/a';
   return new Intl.DateTimeFormat(undefined, {
