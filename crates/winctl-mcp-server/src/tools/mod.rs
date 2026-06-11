@@ -1,6 +1,7 @@
 pub mod assertions;
 pub mod browser;
 pub mod capture;
+pub mod config_editor;
 pub mod control;
 pub mod diagnostics;
 pub mod dialogs;
