@@ -4260,7 +4260,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     let dashboard_router = Router::new()
         .route("/dashboard", get(dashboard_html))
         .route("/dashboard/connect", get(dashboard_connect_json))
-        .route("/dashboard/config", get(dashboard_config_json))
+        .route("/dashboard/config", get(dashboard_config_json).post(dashboard_config_save))
         .route(
             "/dashboard/connect/token",
             post(dashboard_connect_token_create),
@@ -4556,6 +4556,91 @@ fn default_reachable_ip() -> Option<IpAddr> {
     socket.connect((Ipv4Addr::new(8, 8, 8, 8), 80)).ok()?;
     let ip = socket.local_addr().ok()?.ip();
     (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+/// Gate for config-mutating dashboard endpoints: loopback-only, and a valid
+/// bearer token in the `Authorization` header (header-only — no query token),
+/// required even on loopback. Returns the rejection response on failure.
+fn config_endpoint_guard(
+    state: &DashboardState,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    if !state.listen.ip().is_loopback() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            AxumJson(serde_json::json!({"ok": false, "reason": "non_loopback"})),
+        )
+            .into_response());
+    }
+    let authorized = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .and_then(|header| header.strip_prefix("Bearer "))
+        .map(|token| state.auth.authorize(token))
+        .unwrap_or(false);
+    if !authorized {
+        return Err((
+            StatusCode::FORBIDDEN,
+            AxumJson(serde_json::json!({"ok": false, "reason": "unauthorized"})),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
+async fn dashboard_config_save(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
+    AxumJson(body): AxumJson<tools::config_editor::ConfigSaveBody>,
+) -> Response {
+    if let Err(rejection) = config_endpoint_guard(&state, &headers) {
+        return rejection;
+    }
+    let Some(path) = state.config_file.clone() else {
+        return (
+            StatusCode::CONFLICT,
+            AxumJson(serde_json::json!({"ok": false, "reason": "no_config_file"})),
+        )
+            .into_response();
+    };
+
+    let existing = match std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| toml::from_str::<WinctlConfigFile>(&text).ok())
+    {
+        Some(file) => file,
+        None => WinctlConfigFile::default(),
+    };
+    let merged = tools::config_editor::merge_editable(&existing, &body);
+
+    let errors = tools::config_editor::validate_editable(&merged);
+    if !errors.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            AxumJson(serde_json::json!({"ok": false, "errors": errors})),
+        )
+            .into_response();
+    }
+
+    let serialized = match tools::config_editor::serialize_config(&merged) {
+        Ok(text) => text,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AxumJson(serde_json::json!({"ok": false, "error": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    if let Err(error) = tools::config_editor::write_atomic(&path, &serialized) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(serde_json::json!({"ok": false, "error": error.to_string()})),
+        )
+            .into_response();
+    }
+    tracing::info!(config_file = %path.display(), "dashboard config saved");
+    AxumJson(serde_json::json!({"ok": true, "restart_required": true})).into_response()
 }
 
 async fn dashboard_config_json(State(state): State<DashboardState>) -> impl IntoResponse {
