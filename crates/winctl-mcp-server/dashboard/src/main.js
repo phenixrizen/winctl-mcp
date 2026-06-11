@@ -74,7 +74,7 @@ const DASHBOARD_TABS = [
   { id: 'processes', label: 'Processes' },
   { id: 'memory', label: 'Memory' },
   { id: 'docs', label: 'Docs' },
-  { id: 'config', label: 'Config' },
+  { id: 'config', label: 'Settings' },
 ];
 const requestedTab = params.get('tab');
 const initialTab = DASHBOARD_TABS.some((tab) => tab.id === requestedTab) ? requestedTab : 'overview';
@@ -252,6 +252,37 @@ createApp({
       connectDashboardTokenVisible: false,
       connectMode: 'http',
       copiedConnectId: '',
+      settingsLoading: false,
+      settingsError: null,
+      settingsSaving: false,
+      settingsRestarting: false,
+      settingsEditable: false,
+      settingsTrayAvailable: false,
+      settingsConfigFile: null,
+      settingsConnection: { transport: '', listen: '', auth_required: false, auth_token_set: false },
+      settingsConfirmOpen: false,
+      settingsNotice: '',
+      settingsFieldErrors: [],
+      settingsForm: {
+        policy: {
+          enable_filesystem_mutation: false,
+          enable_clipboard_write: false,
+          enable_registry_mutation: false,
+          allow_private_network: false,
+          memory_mutation_enabled: true,
+          macro_execution_enabled: true,
+          macro_destructive_tools_allowed: false,
+          max_macro_runtime_ms: null,
+          max_macro_steps: null,
+          screenshot_retention_count: null,
+          tool_allowlist: '',
+          tool_denylist: '',
+        },
+        paths: { capture_dir: '', artifact_dir: '', filesystem_roots: '', memory_db: '' },
+        logging: { log_file: '' },
+        embedding: { model_path: '', dimension: null },
+        macro_execution: { enabled: true, allow_destructive_tools: false, max_runtime_ms: null, max_steps: null },
+      },
       issuePanelOpen: false,
       copiedIssueState: false,
       recorderTitle: 'Recorded macro',
@@ -790,6 +821,7 @@ ${cursorConfig}
   watch: {
     async selectedTab(tab) {
       if (tab === 'connect') await this.loadConnect();
+      if (tab === 'config') this.loadSettings();
       if (tab === 'docs') {
         await this.loadDocs();
         await this.renderMermaid();
@@ -799,6 +831,7 @@ ${cursorConfig}
   mounted() {
     this.loadState();
     if (this.selectedTab === 'connect') this.loadConnect();
+    if (this.selectedTab === 'config') this.loadSettings();
     this.intervalId = window.setInterval(() => {
       if (this.autoRefresh) this.loadState({ quiet: true });
     }, 5000);
@@ -897,6 +930,185 @@ ${cursorConfig}
       window.setTimeout(() => {
         if (this.copiedConnectId === id) this.copiedConnectId = '';
       }, 1600);
+    },
+    settingsListToText(value) {
+      return Array.isArray(value) ? value.join('\n') : '';
+    },
+    settingsTextToList(value) {
+      return String(value || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    },
+    settingsNumOrNull(value) {
+      if (value === null || value === undefined || value === '') return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    },
+    applySettingsResponse(payload) {
+      this.settingsEditable = payload.editable === true;
+      this.settingsTrayAvailable = payload.tray_available === true;
+      this.settingsConfigFile = payload.config_file ?? null;
+      this.settingsConnection = payload.connection ?? this.settingsConnection;
+      const s = payload.sections ?? {};
+      const p = s.policy ?? {};
+      const paths = s.paths ?? {};
+      const logging = s.logging ?? {};
+      const emb = s.embedding ?? {};
+      const macro = s.macro_execution ?? {};
+      this.settingsForm = {
+        policy: {
+          enable_filesystem_mutation: !!p.enable_filesystem_mutation,
+          enable_clipboard_write: !!p.enable_clipboard_write,
+          enable_registry_mutation: !!p.enable_registry_mutation,
+          allow_private_network: !!p.allow_private_network,
+          memory_mutation_enabled: p.memory_mutation_enabled !== false,
+          macro_execution_enabled: p.macro_execution_enabled !== false,
+          macro_destructive_tools_allowed: !!p.macro_destructive_tools_allowed,
+          max_macro_runtime_ms: p.max_macro_runtime_ms ?? null,
+          max_macro_steps: p.max_macro_steps ?? null,
+          screenshot_retention_count: p.screenshot_retention_count ?? null,
+          tool_allowlist: this.settingsListToText(p.tool_allowlist),
+          tool_denylist: this.settingsListToText(p.tool_denylist),
+        },
+        paths: {
+          capture_dir: paths.capture_dir ?? '',
+          artifact_dir: paths.artifact_dir ?? '',
+          filesystem_roots: this.settingsListToText(paths.filesystem_roots),
+          memory_db: paths.memory_db ?? '',
+        },
+        logging: { log_file: logging.log_file ?? '' },
+        embedding: { model_path: emb.model_path ?? '', dimension: emb.dimension ?? null },
+        macro_execution: {
+          enabled: macro.enabled !== false,
+          allow_destructive_tools: !!macro.allow_destructive_tools,
+          max_runtime_ms: macro.max_runtime_ms ?? null,
+          max_steps: macro.max_steps ?? null,
+        },
+      };
+    },
+    async loadSettings() {
+      this.settingsLoading = true;
+      this.settingsError = null;
+      try {
+        const response = await fetch('/dashboard/config', { headers: { ...authHeaders() } });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.reason || `HTTP ${response.status}`);
+        }
+        this.applySettingsResponse(payload);
+      } catch (error) {
+        this.settingsError = String(error);
+      } finally {
+        this.settingsLoading = false;
+      }
+    },
+    settingsPayload() {
+      const f = this.settingsForm;
+      const orNull = (v) => (v.trim() === '' ? null : v.trim());
+      return {
+        policy: {
+          ...f.policy,
+          max_macro_runtime_ms: this.settingsNumOrNull(f.policy.max_macro_runtime_ms),
+          max_macro_steps: this.settingsNumOrNull(f.policy.max_macro_steps),
+          screenshot_retention_count: this.settingsNumOrNull(f.policy.screenshot_retention_count),
+          tool_allowlist: this.settingsTextToList(f.policy.tool_allowlist),
+          tool_denylist: this.settingsTextToList(f.policy.tool_denylist),
+        },
+        paths: {
+          capture_dir: orNull(f.paths.capture_dir),
+          artifact_dir: orNull(f.paths.artifact_dir),
+          filesystem_roots: this.settingsTextToList(f.paths.filesystem_roots),
+          memory_db: orNull(f.paths.memory_db),
+        },
+        logging: { log_file: orNull(f.logging.log_file) },
+        embedding: {
+          model_path: orNull(f.embedding.model_path),
+          dimension: this.settingsNumOrNull(f.embedding.dimension),
+        },
+        macro_execution: {
+          enabled: f.macro_execution.enabled,
+          allow_destructive_tools: f.macro_execution.allow_destructive_tools,
+          max_runtime_ms: this.settingsNumOrNull(f.macro_execution.max_runtime_ms),
+          max_steps: this.settingsNumOrNull(f.macro_execution.max_steps),
+        },
+      };
+    },
+    async saveSettings() {
+      this.settingsSaving = true;
+      this.settingsError = null;
+      this.settingsFieldErrors = [];
+      this.settingsNotice = '';
+      try {
+        const response = await fetch('/dashboard/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(this.settingsPayload()),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (response.status === 422) {
+          this.settingsFieldErrors = payload.errors ?? [];
+          throw new Error('Validation failed');
+        }
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.reason || `HTTP ${response.status}`);
+        }
+        this.settingsNotice = 'Saved. Restart required to apply.';
+        return true;
+      } catch (error) {
+        this.settingsError = String(error);
+        return false;
+      } finally {
+        this.settingsSaving = false;
+      }
+    },
+    async restartServer() {
+      this.settingsRestarting = true;
+      this.settingsError = null;
+      try {
+        const response = await fetch('/dashboard/restart', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (payload.restarting) {
+          this.settingsNotice = 'Restarting server…';
+          await this.waitForServerBack();
+        } else if (payload.manual) {
+          this.settingsNotice = payload.instructions || 'Restart manually via the tray.';
+        } else {
+          throw new Error(payload.reason || payload.error || `HTTP ${response.status}`);
+        }
+      } catch (error) {
+        this.settingsError = String(error);
+      } finally {
+        this.settingsRestarting = false;
+      }
+    },
+    async waitForServerBack() {
+      const deadline = Date.now() + 20000;
+      // brief grace period so we poll the NEW process, not the dying one
+      await new Promise((r) => window.setTimeout(r, 1500));
+      while (Date.now() < deadline) {
+        try {
+          const response = await fetch('/healthz', { cache: 'no-store' });
+          if (response.ok) {
+            this.settingsNotice = 'Server restarted.';
+            await this.loadSettings();
+            return;
+          }
+        } catch (_) {
+          /* server still down; keep polling */
+        }
+        await new Promise((r) => window.setTimeout(r, 750));
+      }
+      this.settingsError = 'Server did not come back within 20s; check the tray and logs.';
+    },
+    async saveAndRestart() {
+      this.settingsConfirmOpen = false;
+      if (await this.saveSettings()) {
+        await this.restartServer();
+      }
     },
     async copyIssueState() {
       await navigator.clipboard?.writeText(this.rawJson).catch(() => {});
@@ -2480,6 +2692,107 @@ ${cursorConfig}
               v-html="activeDoc?.html ?? '<p class=&quot;opacity-60&quot;>Choose a tool doc from the list.</p>'"
             ></div>
           </section>
+        </section>
+
+        <section v-if="selectedTab === 'config'" class="space-y-5">
+          <section class="winctl-card">
+            <div class="winctl-card-header flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 class="text-sm font-semibold">Server settings</h2>
+                <div class="text-xs text-slate-500">Edits the server's config file; a restart applies them.</div>
+              </div>
+              <button type="button" class="btn btn-xs" :disabled="settingsLoading" @click="loadSettings">Refresh</button>
+            </div>
+
+            <div v-if="!settingsEditable" class="alert alert-warning mx-4 mt-4 text-xs">
+              Server started without a <code>--config</code> file; settings are read-only.
+            </div>
+            <div v-if="settingsError" class="alert alert-error mx-4 mt-4 text-sm">{{ settingsError }}</div>
+            <div v-if="settingsNotice" class="alert alert-info mx-4 mt-4 text-sm">{{ settingsNotice }}</div>
+
+            <dl class="grid gap-2 px-4 py-3 text-xs sm:grid-cols-2">
+              <div><dt class="font-semibold">Transport</dt><dd>{{ settingsConnection.transport }}</dd></div>
+              <div><dt class="font-semibold">Listen</dt><dd>{{ settingsConnection.listen }}</dd></div>
+              <div><dt class="font-semibold">Auth required</dt><dd>{{ settingsConnection.auth_required ? 'yes' : 'no' }}</dd></div>
+              <div><dt class="font-semibold">Auth token set</dt><dd>{{ settingsConnection.auth_token_set ? 'yes' : 'no' }}</dd></div>
+            </dl>
+          </section>
+
+          <fieldset :disabled="!settingsEditable" class="space-y-5">
+            <section class="winctl-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">Policy</h3>
+              <div class="grid gap-2 sm:grid-cols-2">
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.enable_filesystem_mutation" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Filesystem mutation</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.enable_clipboard_write" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Clipboard write</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.enable_registry_mutation" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Registry mutation</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.allow_private_network" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Allow private network</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.memory_mutation_enabled" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Memory mutation</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.macro_execution_enabled" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Macro execution</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.macro_destructive_tools_allowed" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Destructive macro tools</span></label>
+              </div>
+              <div class="mt-3 grid gap-3 sm:grid-cols-3">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Max macro runtime (ms)</span><input v-model="settingsForm.policy.max_macro_runtime_ms" type="number" min="0" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Max macro steps</span><input v-model="settingsForm.policy.max_macro_steps" type="number" min="0" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Screenshot retention</span><input v-model="settingsForm.policy.screenshot_retention_count" type="number" min="0" class="input input-sm input-bordered" /></label>
+              </div>
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Tool allowlist (one per line)</span><textarea v-model="settingsForm.policy.tool_allowlist" rows="3" class="textarea textarea-bordered textarea-sm"></textarea></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Tool denylist (one per line)</span><textarea v-model="settingsForm.policy.tool_denylist" rows="3" class="textarea textarea-bordered textarea-sm"></textarea></label>
+              </div>
+            </section>
+
+            <section class="winctl-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">Paths</h3>
+              <div class="grid gap-3 sm:grid-cols-3">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Capture dir</span><input v-model="settingsForm.paths.capture_dir" type="text" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Artifact dir</span><input v-model="settingsForm.paths.artifact_dir" type="text" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Memory DB</span><input v-model="settingsForm.paths.memory_db" type="text" class="input input-sm input-bordered" /></label>
+              </div>
+              <label class="form-control mt-3"><span class="label-text text-xs font-semibold">Filesystem roots (one per line)</span><textarea v-model="settingsForm.paths.filesystem_roots" rows="3" class="textarea textarea-bordered textarea-sm"></textarea></label>
+            </section>
+
+            <section class="winctl-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">Logging &amp; embedding</h3>
+              <div class="grid gap-3 sm:grid-cols-3">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Log file</span><input v-model="settingsForm.logging.log_file" type="text" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Embedding model path</span><input v-model="settingsForm.embedding.model_path" type="text" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Embedding dimension</span><input v-model="settingsForm.embedding.dimension" type="number" min="1" class="input input-sm input-bordered" /></label>
+              </div>
+            </section>
+
+            <section class="winctl-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">Macro execution</h3>
+              <div class="grid gap-2 sm:grid-cols-2">
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.macro_execution.enabled" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Enabled</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.macro_execution.allow_destructive_tools" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Allow destructive tools</span></label>
+              </div>
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Max runtime (ms)</span><input v-model="settingsForm.macro_execution.max_runtime_ms" type="number" min="0" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Max steps</span><input v-model="settingsForm.macro_execution.max_steps" type="number" min="0" class="input input-sm input-bordered" /></label>
+              </div>
+            </section>
+
+            <ul v-if="settingsFieldErrors.length" class="alert alert-error text-xs">
+              <li v-for="err in settingsFieldErrors" :key="err.field"><strong>{{ err.field }}</strong>: {{ err.message }}</li>
+            </ul>
+
+            <div class="flex flex-wrap gap-2">
+              <button type="button" class="btn btn-sm" :disabled="settingsSaving || !settingsEditable" @click="saveSettings">Save</button>
+              <button type="button" class="btn btn-sm btn-info" :disabled="settingsSaving || settingsRestarting || !settingsEditable" @click="settingsConfirmOpen = true">Save &amp; Restart</button>
+            </div>
+          </fieldset>
+
+          <div v-if="settingsConfirmOpen" class="modal modal-open">
+            <div class="modal-box">
+              <h3 class="text-sm font-semibold">Restart the server?</h3>
+              <p class="py-2 text-xs">This saves your changes and restarts the MCP server via the tray. The dashboard will reconnect when it's back.</p>
+              <p v-if="!settingsTrayAvailable" class="text-xs text-warning">Tray binary not found next to the server — you'll get manual restart instructions instead.</p>
+              <div class="modal-action">
+                <button type="button" class="btn btn-sm" @click="settingsConfirmOpen = false">Cancel</button>
+                <button type="button" class="btn btn-sm btn-info" @click="saveAndRestart">Save &amp; Restart</button>
+              </div>
+            </div>
+          </div>
         </section>
 
         <button
