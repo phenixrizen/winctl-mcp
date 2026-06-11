@@ -252,15 +252,6 @@ createApp({
       connectDashboardTokenVisible: false,
       connectMode: 'http',
       copiedConnectId: '',
-      configClient: 'codex',
-      configTransport: 'http',
-      configServerName: 'winctl-mcp',
-      configHttpUrl: '',
-      configTokenMode: 'env',
-      configTokenEnv: 'WINCTL_MCP_TOKEN',
-      configTokenValue: '',
-      configCommand: '',
-      copiedConfigId: '',
       issuePanelOpen: false,
       copiedIssueState: false,
       recorderTitle: 'Recorded macro',
@@ -668,173 +659,6 @@ ${cursorConfig}
         },
       ];
     },
-    configServerId() {
-      return this.configServerName.trim() || 'winctl-mcp';
-    },
-    configHttpEndpoint() {
-      return this.configHttpUrl.trim() || this.connectMcpUrl;
-    },
-    configServerCommand() {
-      return this.configCommand.trim() || this.connectServerExe;
-    },
-    configTokenEnvName() {
-      return this.configTokenEnv.trim() || 'WINCTL_MCP_TOKEN';
-    },
-    configTokenLiteral() {
-      if (this.configTokenMode === 'manual') return this.configTokenValue || '<token>';
-      if (this.configTokenMode === 'current') return this.currentDashboardToken || this.connectExampleToken;
-      return `\${${this.configTokenEnvName}}`;
-    },
-    configAuthHeaderValue() {
-      return `Bearer ${this.configTokenLiteral}`;
-    },
-    configTokenCommandPrefix() {
-      if (this.configTransport !== 'http') return '';
-      if (this.configTokenMode === 'env') {
-        return `# Set ${this.configTokenEnvName} before launching the client.`;
-      }
-      return `$env:${this.configTokenEnvName} = ${psSingleQuote(this.configTokenLiteral)}`;
-    },
-    configSelectedExample() {
-      const name = this.configServerId;
-      const url = this.configHttpEndpoint;
-      const command = this.configServerCommand;
-      const args = this.connectStdioArgs;
-      const authHeader = this.configAuthHeaderValue;
-      const envName = this.configTokenEnvName;
-      const tokenPrefix = this.configTokenCommandPrefix;
-      const shellName = psSingleQuote(name);
-      const stdioArgs = args.map(psSingleQuote).join(' ');
-      const cursorHttp = jsonSnippet({
-        mcpServers: {
-          [name]: {
-            url,
-            headers: { Authorization: authHeader },
-          },
-        },
-      });
-      const cursorStdio = jsonSnippet({
-        mcpServers: {
-          [name]: {
-            command,
-            args,
-          },
-        },
-      });
-      const copilotHttp = jsonSnippet({
-        servers: {
-          [name]: {
-            type: 'http',
-            url,
-            headers: { Authorization: authHeader },
-          },
-        },
-      });
-      const copilotStdio = jsonSnippet({
-        servers: {
-          [name]: {
-            type: 'stdio',
-            command,
-            args,
-          },
-        },
-      });
-      const copilotAddHttp = jsonSnippet({
-        name,
-        type: 'http',
-        url,
-        headers: { Authorization: authHeader },
-      });
-      const copilotAddStdio = jsonSnippet({ name, command, args });
-
-      if (this.configTransport === 'stdio') {
-        if (this.configClient === 'codex') {
-          return {
-            title: 'Codex stdio',
-            path: '~/.codex/config.toml',
-            config: `[mcp_servers.${tomlQuotedKey(name)}]
-command = "${tomlString(command)}"
-args = ${jsonSnippet(args)}
-tool_timeout_sec = 120.0`,
-            command: `codex mcp add ${shellName} -- ${psSingleQuote(command)} ${stdioArgs}`,
-          };
-        }
-        if (this.configClient === 'claude-code') {
-          return {
-            title: 'Claude Code stdio',
-            path: 'Claude MCP config',
-            config: cursorStdio,
-            command: `claude mcp add ${shellName} -- ${psSingleQuote(command)} ${stdioArgs}`,
-          };
-        }
-        if (this.configClient === 'cursor') {
-          return {
-            title: 'Cursor stdio',
-            path: '.cursor/mcp.json',
-            config: cursorStdio,
-            command: `New-Item -ItemType Directory -Force .cursor
-Set-Content -Path .cursor\\mcp.json -Value @'
-${cursorStdio}
-'@`,
-          };
-        }
-        return {
-          title: 'GitHub Copilot stdio',
-          path: '.vscode/mcp.json',
-          config: copilotStdio,
-          command: `code --add-mcp ${psSingleQuote(copilotAddStdio)}`,
-        };
-      }
-
-      if (this.configClient === 'codex') {
-        const commandLine = `codex mcp add ${shellName} --url ${psSingleQuote(url)} --bearer-token-env-var ${envName}`;
-        return {
-          title: 'Codex HTTP',
-          path: '~/.codex/config.toml',
-          config: `[mcp_servers.${tomlQuotedKey(name)}]
-url = "${tomlString(url)}"
-http_headers = { Authorization = "${tomlString(authHeader)}" }
-tool_timeout_sec = 120.0`,
-          command: tokenPrefix ? `${tokenPrefix}
-${commandLine}` : commandLine,
-        };
-      }
-      if (this.configClient === 'claude-code') {
-        const headerCommand =
-          this.configTokenMode === 'env'
-            ? `$header = "Authorization: Bearer $env:${envName}"
-claude mcp add --transport http ${shellName} ${psSingleQuote(url)} --header $header`
-            : `claude mcp add --transport http ${shellName} ${psSingleQuote(url)} --header ${psSingleQuote(`Authorization: ${authHeader}`)}`;
-        return {
-          title: 'Claude Code HTTP',
-          path: 'Claude MCP config',
-          config: jsonSnippet({
-            type: 'http',
-            url,
-            headers: { Authorization: authHeader },
-          }),
-          command: tokenPrefix && this.configTokenMode !== 'env' ? `${tokenPrefix}
-${headerCommand}` : headerCommand,
-        };
-      }
-      if (this.configClient === 'cursor') {
-        return {
-          title: 'Cursor HTTP',
-          path: '.cursor/mcp.json',
-          config: cursorHttp,
-          command: `New-Item -ItemType Directory -Force .cursor
-Set-Content -Path .cursor\\mcp.json -Value @'
-${cursorHttp}
-'@`,
-        };
-      }
-      return {
-        title: 'GitHub Copilot HTTP',
-        path: '.vscode/mcp.json',
-        config: copilotHttp,
-        command: `code --add-mcp ${psSingleQuote(copilotAddHttp)}`,
-      };
-    },
     issueUrl() {
       return 'https://github.com/phenixrizen/winctl-mcp/issues/new';
     },
@@ -965,7 +789,7 @@ ${cursorHttp}
   },
   watch: {
     async selectedTab(tab) {
-      if (tab === 'connect' || tab === 'config') await this.loadConnect();
+      if (tab === 'connect') await this.loadConnect();
       if (tab === 'docs') {
         await this.loadDocs();
         await this.renderMermaid();
@@ -974,7 +798,7 @@ ${cursorHttp}
   },
   mounted() {
     this.loadState();
-    if (this.selectedTab === 'connect' || this.selectedTab === 'config') this.loadConnect();
+    if (this.selectedTab === 'connect') this.loadConnect();
     this.intervalId = window.setInterval(() => {
       if (this.autoRefresh) this.loadState({ quiet: true });
     }, 5000);
@@ -1072,13 +896,6 @@ ${cursorHttp}
       this.copiedConnectId = id;
       window.setTimeout(() => {
         if (this.copiedConnectId === id) this.copiedConnectId = '';
-      }, 1600);
-    },
-    async copyConfigText(id, text) {
-      await navigator.clipboard?.writeText(text).catch(() => {});
-      this.copiedConfigId = id;
-      window.setTimeout(() => {
-        if (this.copiedConfigId === id) this.copiedConfigId = '';
       }, 1600);
     },
     async copyIssueState() {
@@ -2663,126 +2480,6 @@ ${cursorHttp}
               v-html="activeDoc?.html ?? '<p class=&quot;opacity-60&quot;>Choose a tool doc from the list.</p>'"
             ></div>
           </section>
-        </section>
-
-        <section v-if="selectedTab === 'config'" class="space-y-5">
-          <section class="winctl-card">
-            <div class="winctl-card-header flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 class="text-sm font-semibold">MCP server config</h2>
-                <div class="text-xs text-slate-500">HTTP keeps this dashboard, token management, and observability connected.</div>
-              </div>
-              <button type="button" class="btn btn-xs" :disabled="connectLoading" @click="loadConnect">Refresh</button>
-            </div>
-            <div class="grid gap-4 p-4 lg:grid-cols-3">
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Client</span>
-                <select v-model="configClient" class="select select-sm select-bordered">
-                  <option value="codex">Codex</option>
-                  <option value="claude-code">Claude Code</option>
-                  <option value="cursor">Cursor</option>
-                  <option value="github-copilot">GitHub Copilot</option>
-                </select>
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Server name</span>
-                <input v-model="configServerName" type="text" class="input input-sm input-bordered" />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Transport</span>
-                <select v-model="configTransport" class="select select-sm select-bordered">
-                  <option value="http">HTTP recommended</option>
-                  <option value="stdio">Stdio fallback</option>
-                </select>
-              </label>
-              <label class="form-control lg:col-span-2">
-                <span class="label-text text-xs font-semibold">HTTP URL</span>
-                <input v-model="configHttpUrl" type="text" class="input input-sm input-bordered" :placeholder="connectMcpUrl" :disabled="configTransport !== 'http'" />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Token source</span>
-                <select v-model="configTokenMode" class="select select-sm select-bordered" :disabled="configTransport !== 'http'">
-                  <option value="env">Environment variable</option>
-                  <option value="current">Current dashboard token</option>
-                  <option value="manual">Manual token</option>
-                </select>
-              </label>
-              <label v-if="configTokenMode === 'env'" class="form-control">
-                <span class="label-text text-xs font-semibold">Token env var</span>
-                <input v-model="configTokenEnv" type="text" class="input input-sm input-bordered" :disabled="configTransport !== 'http'" />
-              </label>
-              <label v-if="configTokenMode === 'manual'" class="form-control">
-                <span class="label-text text-xs font-semibold">Token value</span>
-                <input v-model="configTokenValue" type="password" class="input input-sm input-bordered" autocomplete="off" :disabled="configTransport !== 'http'" />
-              </label>
-              <label class="form-control lg:col-span-2">
-                <span class="label-text text-xs font-semibold">Stdio executable</span>
-                <input v-model="configCommand" type="text" class="input input-sm input-bordered" :placeholder="connectServerExe" :disabled="configTransport !== 'stdio'" />
-              </label>
-            </div>
-            <div v-if="connectError" class="alert alert-error mx-4 mb-4 text-sm">{{ connectError }}</div>
-          </section>
-
-          <div class="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
-            <section class="winctl-card">
-              <div class="winctl-card-header px-4 py-3">
-                <h2 class="text-sm font-semibold">Resolved settings</h2>
-              </div>
-              <dl class="divide-y divide-slate-200 text-sm dark:divide-slate-700">
-                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Client</dt>
-                  <dd>{{ configSelectedExample.title }}</dd>
-                </div>
-                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Transport</dt>
-                  <dd><span class="badge badge-sm" :class="configTransport === 'http' ? 'badge-info' : 'badge-ghost'">{{ configTransport }}</span></dd>
-                </div>
-                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Install path</dt>
-                  <dd class="winctl-code break-all text-xs">{{ configSelectedExample.path }}</dd>
-                </div>
-                <div v-if="configTransport === 'http'" class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Endpoint</dt>
-                  <dd class="winctl-code break-all text-xs">{{ configHttpEndpoint }}</dd>
-                </div>
-                <div v-if="configTransport === 'http'" class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Authorization</dt>
-                  <dd class="winctl-code break-all text-xs">{{ configAuthHeaderValue }}</dd>
-                </div>
-                <div v-if="configTransport === 'stdio'" class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Executable</dt>
-                  <dd class="winctl-code break-all text-xs">{{ configServerCommand }}</dd>
-                </div>
-              </dl>
-            </section>
-
-            <section class="winctl-card overflow-hidden">
-              <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
-                <div>
-                  <h2 class="text-sm font-semibold">Generated client setup</h2>
-                  <div class="winctl-code text-xs text-slate-500">{{ configSelectedExample.path }}</div>
-                </div>
-                <div class="flex gap-1">
-                  <button type="button" class="btn btn-xs" @click="copyConfigText('config', configSelectedExample.config)">
-                    {{ copiedConfigId === 'config' ? 'Copied' : 'Copy config' }}
-                  </button>
-                  <button type="button" class="btn btn-xs" @click="copyConfigText('command', configSelectedExample.command)">
-                    {{ copiedConfigId === 'command' ? 'Copied' : 'Copy command' }}
-                  </button>
-                </div>
-              </div>
-              <div class="grid gap-3 p-4">
-                <div>
-                  <div class="mb-1 text-xs font-bold uppercase text-slate-500">Config</div>
-                  <pre class="winctl-code overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-[#e6edf6]"><code>{{ configSelectedExample.config }}</code></pre>
-                </div>
-                <div>
-                  <div class="mb-1 text-xs font-bold uppercase text-slate-500">Command</div>
-                  <pre class="winctl-code overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-[#e6edf6]"><code>{{ configSelectedExample.command }}</code></pre>
-                </div>
-              </div>
-            </section>
-          </div>
         </section>
 
         <button
