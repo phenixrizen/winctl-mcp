@@ -4261,6 +4261,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
         .route("/dashboard", get(dashboard_html))
         .route("/dashboard/connect", get(dashboard_connect_json))
         .route("/dashboard/config", get(dashboard_config_json).post(dashboard_config_save))
+        .route("/dashboard/restart", post(dashboard_config_restart))
         .route(
             "/dashboard/connect/token",
             post(dashboard_connect_token_create),
@@ -4641,6 +4642,42 @@ async fn dashboard_config_save(
     }
     tracing::info!(config_file = %path.display(), "dashboard config saved");
     AxumJson(serde_json::json!({"ok": true, "restart_required": true})).into_response()
+}
+
+async fn dashboard_config_restart(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(rejection) = config_endpoint_guard(&state, &headers) {
+        return rejection;
+    }
+    let Some(path) = state.config_file.clone() else {
+        return (
+            StatusCode::CONFLICT,
+            AxumJson(serde_json::json!({"ok": false, "reason": "no_config_file"})),
+        )
+            .into_response();
+    };
+    match tools::config_editor::find_tray_binary() {
+        Some(tray) => match tools::config_editor::spawn_restart(&tray, &path) {
+            Ok(()) => {
+                tracing::info!(config_file = %path.display(), "dashboard restart requested via tray");
+                AxumJson(serde_json::json!({"restarting": true, "poll_url": "/healthz"}))
+                    .into_response()
+            }
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AxumJson(serde_json::json!({"restarting": false, "error": error.to_string()})),
+            )
+                .into_response(),
+        },
+        None => AxumJson(serde_json::json!({
+            "restarting": false,
+            "manual": true,
+            "instructions": format!("Run: winctl-tray restart --config {}", path.display()),
+        }))
+        .into_response(),
+    }
 }
 
 async fn dashboard_config_json(State(state): State<DashboardState>) -> impl IntoResponse {
