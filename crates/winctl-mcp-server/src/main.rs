@@ -5247,68 +5247,101 @@ impl ServeConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct WinctlConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     transport: Option<TransportFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     auth: Option<AuthFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     logging: Option<LoggingFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     paths: Option<PathsFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     policy: Option<PolicyFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     embedding: Option<EmbeddingFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     macro_execution: Option<MacroExecutionFileConfig>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct TransportFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     listen: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AuthFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     token: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct LoggingFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     log_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PathsFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     capture_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     artifact_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     filesystem_roots: Option<Vec<PathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     memory_db: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PolicyFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     enable_filesystem_mutation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     enable_clipboard_write: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     enable_registry_mutation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     allow_private_network: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     memory_mutation_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     macro_execution_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     macro_destructive_tools_allowed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_macro_runtime_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_macro_steps: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     screenshot_retention_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_allowlist: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_denylist: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct EmbeddingFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     model_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     dimension: Option<usize>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct MacroExecutionFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     allow_destructive_tools: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_runtime_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_steps: Option<usize>,
 }
 
@@ -6429,5 +6462,31 @@ dimension = 384
             artifacts: Default::default(),
             replay: Default::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod config_serde_tests {
+    use super::*;
+
+    #[test]
+    fn round_trips_and_omits_none() {
+        let mut file = WinctlConfigFile::default();
+        file.policy = Some(PolicyFileConfig {
+            enable_filesystem_mutation: Some(true),
+            tool_denylist: Some(vec!["registry.write".to_string()]),
+            ..Default::default()
+        });
+        let text = toml::to_string_pretty(&file).expect("serialize");
+        assert!(text.contains("[policy]"), "got: {text}");
+        assert!(text.contains("enable_filesystem_mutation = true"), "got: {text}");
+        assert!(!text.contains("[transport]"), "None sections must be omitted: {text}");
+        assert!(!text.contains("enable_clipboard_write"), "None fields must be omitted: {text}");
+
+        let parsed: WinctlConfigFile = toml::from_str(&text).expect("parse");
+        assert_eq!(
+            parsed.policy.unwrap().enable_filesystem_mutation,
+            Some(true)
+        );
     }
 }
