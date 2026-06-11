@@ -1001,6 +1001,8 @@ ${cursorConfig}
       return {
         policy: {
           ...f.policy,
+          macro_execution_enabled: f.macro_execution.enabled,
+          macro_destructive_tools_allowed: f.macro_execution.allow_destructive_tools,
           max_macro_runtime_ms: this.settingsNumOrNull(f.policy.max_macro_runtime_ms),
           max_macro_steps: this.settingsNumOrNull(f.policy.max_macro_steps),
           screenshot_retention_count: this.settingsNumOrNull(f.policy.screenshot_retention_count),
@@ -2720,8 +2722,6 @@ ${cursorConfig}
                 <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.enable_registry_mutation" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Registry mutation</span></label>
                 <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.allow_private_network" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Allow private network</span></label>
                 <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.memory_mutation_enabled" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Memory mutation</span></label>
-                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.macro_execution_enabled" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Macro execution</span></label>
-                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.macro_destructive_tools_allowed" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Destructive macro tools</span></label>
               </div>
               <div class="mt-3 grid gap-3 sm:grid-cols-3">
                 <label class="form-control"><span class="label-text text-xs font-semibold">Max macro runtime (ms)</span><input v-model="settingsForm.policy.max_macro_runtime_ms" type="number" min="0" class="input input-sm input-bordered" /></label>
