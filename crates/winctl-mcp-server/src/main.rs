@@ -4260,6 +4260,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
     let dashboard_router = Router::new()
         .route("/dashboard", get(dashboard_html))
         .route("/dashboard/connect", get(dashboard_connect_json))
+        .route("/dashboard/config", get(dashboard_config_json))
         .route(
             "/dashboard/connect/token",
             post(dashboard_connect_token_create),
@@ -4555,6 +4556,74 @@ fn default_reachable_ip() -> Option<IpAddr> {
     socket.connect((Ipv4Addr::new(8, 8, 8, 8), 80)).ok()?;
     let ip = socket.local_addr().ok()?.ip();
     (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+async fn dashboard_config_json(State(state): State<DashboardState>) -> impl IntoResponse {
+    let transport_mode;
+    let listen_label = state.listen.to_string();
+    let auth_required = state.auth.auth_required();
+
+    let (editable, auth_token_set, sections) = match &state.config_file {
+        Some(path) => match std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| toml::from_str::<WinctlConfigFile>(&text).ok())
+        {
+            Some(file) => {
+                transport_mode = file
+                    .transport
+                    .as_ref()
+                    .and_then(|t| t.mode.clone())
+                    .unwrap_or_else(|| "http".to_string());
+                let token_set = file
+                    .auth
+                    .as_ref()
+                    .and_then(|a| a.token.as_ref())
+                    .is_some();
+                let sections = serde_json::json!({
+                    "policy": file.policy,
+                    "paths": file.paths,
+                    "logging": file.logging,
+                    "embedding": file.embedding,
+                    "macro_execution": file.macro_execution,
+                });
+                (true, token_set, sections)
+            }
+            None => {
+                transport_mode = "http".to_string();
+                (false, false, serde_json::Value::Null)
+            }
+        },
+        None => {
+            transport_mode = "http".to_string();
+            let (policy, paths, embedding, macro_execution) =
+                tools::config_editor::sections_from_policy(
+                    state.app_state.policy.as_ref(),
+                    state.app_state.capture_dir.as_ref(),
+                );
+            let sections = serde_json::json!({
+                "policy": policy,
+                "paths": paths,
+                "logging": serde_json::Value::Null,
+                "embedding": embedding,
+                "macro_execution": macro_execution,
+            });
+            (false, false, sections)
+        }
+    };
+
+    AxumJson(serde_json::json!({
+        "ok": true,
+        "editable": editable,
+        "config_file": state.config_file.as_ref().map(|p| p.display().to_string()),
+        "tray_available": tools::config_editor::find_tray_binary().is_some(),
+        "connection": {
+            "transport": transport_mode,
+            "listen": listen_label,
+            "auth_required": auth_required,
+            "auth_token_set": auth_token_set,
+        },
+        "sections": sections,
+    }))
 }
 
 async fn dashboard_connect_token_create(
