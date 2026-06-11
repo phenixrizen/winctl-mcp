@@ -4605,12 +4605,25 @@ async fn dashboard_config_save(
             .into_response();
     };
 
-    let existing = match std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| toml::from_str::<WinctlConfigFile>(&text).ok())
-    {
-        Some(file) => file,
-        None => WinctlConfigFile::default(),
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AxumJson(serde_json::json!({"ok": false, "reason": "config_read_failed", "error": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    let existing: WinctlConfigFile = match toml::from_str(&text) {
+        Ok(file) => file,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                AxumJson(serde_json::json!({"ok": false, "reason": "config_parse_failed", "error": error.to_string()})),
+            )
+                .into_response();
+        }
     };
     let merged = tools::config_editor::merge_editable(&existing, &body);
 
