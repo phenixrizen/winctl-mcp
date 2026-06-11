@@ -157,6 +157,60 @@ pub(crate) fn sections_from_policy(
     (policy_section, paths_section, embedding_section, macro_section)
 }
 
+/// Name of the tray binary as built by the workspace (sibling of the server exe).
+#[cfg(windows)]
+const TRAY_BINARY: &str = "winctl-tray.exe";
+#[cfg(not(windows))]
+const TRAY_BINARY: &str = "winctl-tray";
+
+/// Return the tray binary path inside `dir` if it exists. Pure (no `current_exe`),
+/// so it can be tested deterministically.
+fn tray_binary_in(dir: &Path) -> Option<PathBuf> {
+    let candidate = dir.join(TRAY_BINARY);
+    candidate.is_file().then_some(candidate)
+}
+
+/// Locate the tray binary next to the running server executable.
+pub(crate) fn find_tray_binary() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    tray_binary_in(exe.parent()?)
+}
+
+/// Build (but do not spawn) `winctl-tray restart --config <config_file>`.
+pub(crate) fn build_restart_command(tray: &Path, config_file: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(tray);
+    command.arg("restart").arg("--config").arg(config_file);
+    command
+}
+
+/// Spawn the tray restart command fully detached so it survives this process
+/// being killed by the very restart it triggers.
+pub(crate) fn spawn_restart(tray: &Path, config_file: &Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use std::process::Stdio;
+
+    let mut command = build_restart_command(tray, config_file);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    detach(&mut command);
+    command
+        .spawn()
+        .with_context(|| format!("failed to spawn {}", tray.display()))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn detach(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    command.creation_flags(DETACHED_PROCESS);
+}
+
+#[cfg(not(windows))]
+fn detach(_command: &mut std::process::Command) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +298,37 @@ enable_filesystem_mutation = false
         let read_back = std::fs::read_to_string(&path).expect("read back");
         assert!(read_back.contains("enable_filesystem_mutation = false"));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn restart_command_targets_tray_restart_with_config() {
+        let tray = Path::new("/opt/winctl/winctl-tray");
+        let config = Path::new("/etc/winctl/config.toml");
+        let cmd = build_restart_command(tray, config);
+        let prog = cmd.get_program().to_string_lossy().to_string();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert!(prog.ends_with("winctl-tray"));
+        assert_eq!(args, vec!["restart", "--config", "/etc/winctl/config.toml"]);
+    }
+
+    #[test]
+    fn tray_binary_in_returns_none_when_absent() {
+        let dir = std::env::temp_dir().join(format!("winctl-tray-none-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        assert!(tray_binary_in(&dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tray_binary_in_finds_sibling() {
+        let dir = std::env::temp_dir().join(format!("winctl-tray-some-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let tray = dir.join(TRAY_BINARY);
+        std::fs::write(&tray, b"#!/bin/sh\n").expect("write dummy tray");
+        assert_eq!(tray_binary_in(&dir), Some(tray));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
