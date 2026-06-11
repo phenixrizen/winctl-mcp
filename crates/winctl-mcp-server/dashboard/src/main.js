@@ -1057,6 +1057,7 @@ ${cursorConfig}
     async restartServer() {
       this.settingsRestarting = true;
       this.settingsError = null;
+      this.settingsNotice = '';
       try {
         const response = await fetch('/dashboard/restart', {
           method: 'POST',
@@ -2784,6 +2785,9 @@ ${cursorConfig}
                 <button type="button" class="btn btn-sm btn-info" @click="saveAndRestart">Save &amp; Restart</button>
               </div>
             </div>
+            <form method="dialog" class="modal-backdrop" @click.prevent="settingsConfirmOpen = false">
+              <button type="button">close</button>
+            </form>
           </div>
         </section>
 
