@@ -4255,6 +4255,7 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
         app_state: state.clone(),
         auth: auth_registry.clone(),
         listen: config.listen,
+        config_file: config.config_file.clone(),
     };
     let dashboard_router = Router::new()
         .route("/dashboard", get(dashboard_html))
@@ -4498,6 +4499,7 @@ struct DashboardState {
     app_state: AppState,
     auth: Arc<HttpAuthRegistry>,
     listen: SocketAddr,
+    config_file: Option<PathBuf>,
 }
 
 async fn healthz() -> impl IntoResponse {
