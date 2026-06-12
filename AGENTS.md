@@ -27,6 +27,8 @@ This file applies to the entire repository.
 - Prefer the existing Vue + Tailwind + daisyUI component stack before adding custom UI.
 - Use daisyUI components for common dashboard controls such as menus, collapsible submenus, tabs, buttons, badges, alerts, tables, pagination, cards, modals, and form inputs.
 - Add custom dashboard CSS only for layout constraints, product-specific branding, or behavior that the existing component library does not provide.
+- After changing the dashboard UI or the dashboard/HTTP API, build the dashboard (`npm run build`) and LAUNCH it with our own tooling — `winctl-tray open-dashboard` / `winctl-tray dashboard-window`, or load `/dashboard` from a running `winctl-mcp-server` — and VISUALLY INSPECT the affected views before calling the change done. A clean build is not enough; it can still render broken layout.
+- During that inspection, check the tab nav and overall page at the default dashboard-window size (1180×820, min 860×620) for layout regressions introduced by the change: horizontal scrollbars, content wider than the window, `<fieldset>`/grid/flex children forcing overflow (use `min-w-0`; `<fieldset>` defaults to `min-inline-size: min-content`), and broken spacing. Prefer wrapping (`flex-wrap`) over horizontal scroll for tab/menu rows.
 
 ## Commit and versioning conventions
 - Every commit MUST follow Conventional Commits: a `type:` prefix on a single-line subject.
