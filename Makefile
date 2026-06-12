@@ -1,28 +1,19 @@
 SHELL := /bin/bash
 
-# Windows release builds use the MSVC target. GNU remains available as a local
-# compatibility override when a WSL cross-link path is needed.
+# Windows builds target MSVC: winctl-tray gates the dashboard WebView window behind
+# target_env="msvc", so a GNU build cannot open the dashboard. On a Windows host the
+# cargo on PATH already is the MSVC toolchain; on WSL/Linux we drive the
+# Windows-native cargo through PowerShell interop so we still get real MSVC binaries.
+# The GNU target stays selectable as a fast local Linux-cargo compile-check, but its
+# build cannot open the dashboard window.
 CARGO ?= cargo
 RUSTUP ?= rustup
 NPM ?= npm
-# Default Windows target: MSVC on Windows and in CI (release parity), GNU on
-# WSL/Linux where MSVC can't link locally. CI sets WINDOWS_TARGET explicitly, and
-# any explicit override (e.g. WINDOWS_TARGET=... make ...) still wins.
-ifeq ($(OS),Windows_NT)
-  WINDOWS_TARGET ?= x86_64-pc-windows-msvc
-else
-  WINDOWS_TARGET ?= x86_64-pc-windows-gnu
-endif
+WINDOWS_TARGET ?= x86_64-pc-windows-msvc
 RELEASE ?= 1
 VERSION ?= $(shell awk -F\" '/^version = / { print $$2; exit }' Cargo.toml)
 DIST_DIR ?= dist/winctl-mcp-$(VERSION)-windows-$(WINDOWS_TARGET)
 MSI ?= dist/winctl-mcp-$(VERSION)-windows-x64.msi
-
-ifeq ($(WINDOWS_TARGET),x86_64-pc-windows-msvc)
-  ifneq ($(OS),Windows_NT)
-    MSVC_ON_NON_WINDOWS := 1
-  endif
-endif
 
 ifeq ($(RELEASE),1)
   PROFILE_FLAG := --release
@@ -32,15 +23,29 @@ else
   PROFILE_DIR := debug
 endif
 
+# $(call win_cargo,<cargo args>) runs cargo for a Windows-target build:
+#  - Windows host: the cargo on PATH already is the Windows toolchain.
+#  - WSL + MSVC target (default): the Windows-native cargo via PowerShell interop,
+#    with the working dir set to this repo's Windows (\\wsl.localhost\...) path.
+#  - WSL + GNU target: the local Linux cargo links GNU fine (fast compile-check).
+ifeq ($(OS),Windows_NT)
+  win_cargo = WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) $(1)
+else ifeq ($(WINDOWS_TARGET),x86_64-pc-windows-msvc)
+  REPO_WIN := $(shell wslpath -w .)
+  win_cargo = powershell.exe -NoProfile -Command 'Set-Location "$(REPO_WIN)"; $$env:WINCTL_BUILD_VERSION="$(VERSION)"; cargo $(1)'
+else
+  win_cargo = WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) $(1)
+endif
+
 .PHONY: help
 help:
 	@echo "Targets:"
-	@echo "  setup-win-target    Install Rust Windows target"
+	@echo "  setup-win-target    Add the Rust Windows target to the Linux rustup (for cargo check)"
 	@echo "  fmt                 Run rustfmt"
 	@echo "  test                Run workspace tests"
 	@echo "  dashboard-build     Build embedded Vue dashboard assets"
 	@echo "  build-linux         Build workspace for host (Linux)"
-	@echo "  build-win           Build workspace for Windows target"
+	@echo "  build-win           Build workspace for Windows (MSVC via Windows cargo on WSL)"
 	@echo "  build-win-server    Build only winctl-mcp-server for Windows"
 	@echo "  build-win-tray      Build only winctl-tray for Windows"
 	@echo "  build-win-fixture   Build the Windows integration fixture"
@@ -54,16 +59,6 @@ help:
 .PHONY: setup-win-target
 setup-win-target:
 	$(RUSTUP) target add $(WINDOWS_TARGET)
-
-.PHONY: require-windows-linker
-require-windows-linker:
-ifeq ($(MSVC_ON_NON_WINDOWS),1)
-	@echo "WINDOWS_TARGET=$(WINDOWS_TARGET) requires the Windows MSVC linker."
-	@echo "Run this build from Windows/MSVC or CI. From WSL/Linux, use cargo check for MSVC validation or set WINDOWS_TARGET=x86_64-pc-windows-gnu for a local compatibility build."
-	@exit 1
-else
-	@true
-endif
 
 .PHONY: fmt
 fmt:
@@ -82,37 +77,37 @@ build-linux:
 	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build --workspace $(PROFILE_FLAG)
 
 .PHONY: build-win
-build-win: require-windows-linker
-	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build --workspace --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
+build-win:
+	$(call win_cargo,build --workspace --target $(WINDOWS_TARGET) $(PROFILE_FLAG))
 
 .PHONY: build-win-server
-build-win-server: require-windows-linker
-	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build -p winctl-mcp-server --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
+build-win-server:
+	$(call win_cargo,build -p winctl-mcp-server --target $(WINDOWS_TARGET) $(PROFILE_FLAG))
 
 .PHONY: build-win-tray
-build-win-tray: require-windows-linker
-	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build -p winctl-tray --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
+build-win-tray:
+	$(call win_cargo,build -p winctl-tray --target $(WINDOWS_TARGET) $(PROFILE_FLAG))
 
 .PHONY: build-win-fixture
-build-win-fixture: require-windows-linker
-	WINCTL_BUILD_VERSION="$(VERSION)" $(CARGO) build -p winctl-test-target --target $(WINDOWS_TARGET) $(PROFILE_FLAG)
+build-win-fixture:
+	$(call win_cargo,build -p winctl-test-target --target $(WINDOWS_TARGET) $(PROFILE_FLAG))
 
 .PHONY: package-win
-package-win: require-windows-linker dashboard-build build-win-server build-win-tray
+package-win: dashboard-build build-win-server build-win-tray
 	bash scripts/package-windows-release.sh "$(WINDOWS_TARGET)" "$(PROFILE_DIR)" "$(DIST_DIR)" "$(VERSION)"
 
-# Windows MSI targets. These shell out to Windows tools (PowerShell, WiX, msiexec)
-# via WSL interop, converting paths with `wslpath -w`. The MSI is authored
-# Scope="perMachine", so install/uninstall run elevated and trigger a UAC prompt.
-# On WSL the binaries build with the GNU target automatically (see WINDOWS_TARGET
-# default above); the WiX/msiexec steps still need the Windows-side tooling.
+# Windows MSI targets. On WSL these drive the Windows-native tools (cargo via the
+# build-win-* targets, plus WiX and msiexec) through PowerShell interop, converting
+# paths with `wslpath -w`, so the installed build is a real MSVC build (the dashboard
+# WebView requires it). The MSI is Scope="perMachine", so install/uninstall run
+# elevated and trigger a UAC prompt.
 .PHONY: msi
 msi: package-win
 	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$$(wslpath -w scripts/build-windows-msi.ps1)" \
 		-DistDir "$$(wslpath -w '$(DIST_DIR)')" -Version "$(VERSION)" -OutputPath "$$(wslpath -w '$(MSI)')"
 
-# Depends on `msi` so it always installs a freshly built MSI (never a stale one
-# left in dist/). The helper removes any prior install first so the new files land.
+# Depends on `msi` so it always installs a freshly built MSI (never a stale one left
+# in dist/). The helper forces a full reinstall so the freshly built files land.
 .PHONY: install-msi
 install-msi: msi
 	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$$(wslpath -w scripts/windows-msi.ps1)" \
