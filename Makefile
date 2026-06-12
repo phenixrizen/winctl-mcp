@@ -5,7 +5,14 @@ SHELL := /bin/bash
 CARGO ?= cargo
 RUSTUP ?= rustup
 NPM ?= npm
-WINDOWS_TARGET ?= x86_64-pc-windows-msvc
+# Default Windows target: MSVC on Windows and in CI (release parity), GNU on
+# WSL/Linux where MSVC can't link locally. CI sets WINDOWS_TARGET explicitly, and
+# any explicit override (e.g. WINDOWS_TARGET=... make ...) still wins.
+ifeq ($(OS),Windows_NT)
+  WINDOWS_TARGET ?= x86_64-pc-windows-msvc
+else
+  WINDOWS_TARGET ?= x86_64-pc-windows-gnu
+endif
 RELEASE ?= 1
 VERSION ?= $(shell awk -F\" '/^version = / { print $$2; exit }' Cargo.toml)
 DIST_DIR ?= dist/winctl-mcp-$(VERSION)-windows-$(WINDOWS_TARGET)
@@ -97,8 +104,8 @@ package-win: require-windows-linker dashboard-build build-win-server build-win-t
 # Windows MSI targets. These shell out to Windows tools (PowerShell, WiX, msiexec)
 # via WSL interop, converting paths with `wslpath -w`. The MSI is authored
 # Scope="perMachine", so install/uninstall run elevated and trigger a UAC prompt.
-# On WSL the binary build needs the GNU toolchain, e.g.:
-#   WINDOWS_TARGET=x86_64-pc-windows-gnu make msi
+# On WSL the binaries build with the GNU target automatically (see WINDOWS_TARGET
+# default above); the WiX/msiexec steps still need the Windows-side tooling.
 .PHONY: msi
 msi: package-win
 	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$$(wslpath -w scripts/build-windows-msi.ps1)" \
