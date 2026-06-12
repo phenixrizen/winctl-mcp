@@ -4255,10 +4255,16 @@ async fn run_mcp_http(config: ServeConfig, state: AppState) -> anyhow::Result<()
         app_state: state.clone(),
         auth: auth_registry.clone(),
         listen: config.listen,
+        config_file: config.config_file.clone(),
     };
     let dashboard_router = Router::new()
         .route("/dashboard", get(dashboard_html))
         .route("/dashboard/connect", get(dashboard_connect_json))
+        .route(
+            "/dashboard/config",
+            get(dashboard_config_json).post(dashboard_config_save),
+        )
+        .route("/dashboard/restart", post(dashboard_config_restart))
         .route(
             "/dashboard/connect/token",
             post(dashboard_connect_token_create),
@@ -4498,6 +4504,7 @@ struct DashboardState {
     app_state: AppState,
     auth: Arc<HttpAuthRegistry>,
     listen: SocketAddr,
+    config_file: Option<PathBuf>,
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -4553,6 +4560,201 @@ fn default_reachable_ip() -> Option<IpAddr> {
     socket.connect((Ipv4Addr::new(8, 8, 8, 8), 80)).ok()?;
     let ip = socket.local_addr().ok()?.ip();
     (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+/// Gate for config-mutating dashboard endpoints: loopback-only, and a valid
+/// bearer token in the `Authorization` header (header-only — no query token),
+/// required even on loopback. Returns the rejection response on failure.
+fn config_endpoint_guard(state: &DashboardState, headers: &HeaderMap) -> Result<(), Response> {
+    if !state.listen.ip().is_loopback() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            AxumJson(serde_json::json!({"ok": false, "reason": "non_loopback"})),
+        )
+            .into_response());
+    }
+    let authorized = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .and_then(|header| header.strip_prefix("Bearer "))
+        .map(|token| state.auth.authorize(token))
+        .unwrap_or(false);
+    if !authorized {
+        return Err((
+            StatusCode::FORBIDDEN,
+            AxumJson(serde_json::json!({"ok": false, "reason": "unauthorized"})),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
+async fn dashboard_config_save(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
+    AxumJson(body): AxumJson<tools::config_editor::ConfigSaveBody>,
+) -> Response {
+    if let Err(rejection) = config_endpoint_guard(&state, &headers) {
+        return rejection;
+    }
+    let Some(path) = state.config_file.clone() else {
+        return (
+            StatusCode::CONFLICT,
+            AxumJson(serde_json::json!({"ok": false, "reason": "no_config_file"})),
+        )
+            .into_response();
+    };
+
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AxumJson(serde_json::json!({"ok": false, "reason": "config_read_failed", "error": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    let existing: WinctlConfigFile = match toml::from_str(&text) {
+        Ok(file) => file,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                AxumJson(serde_json::json!({"ok": false, "reason": "config_parse_failed", "error": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    let merged = tools::config_editor::merge_editable(&existing, &body);
+
+    let errors = tools::config_editor::validate_editable(&merged);
+    if !errors.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            AxumJson(serde_json::json!({"ok": false, "errors": errors})),
+        )
+            .into_response();
+    }
+
+    let serialized = match tools::config_editor::serialize_config(&merged) {
+        Ok(text) => text,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AxumJson(serde_json::json!({"ok": false, "error": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    if let Err(error) = tools::config_editor::write_atomic(&path, &serialized) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(serde_json::json!({"ok": false, "error": error.to_string()})),
+        )
+            .into_response();
+    }
+    tracing::info!(config_file = %path.display(), "dashboard config saved");
+    AxumJson(serde_json::json!({"ok": true, "restart_required": true})).into_response()
+}
+
+async fn dashboard_config_restart(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(rejection) = config_endpoint_guard(&state, &headers) {
+        return rejection;
+    }
+    let Some(path) = state.config_file.clone() else {
+        return (
+            StatusCode::CONFLICT,
+            AxumJson(serde_json::json!({"ok": false, "reason": "no_config_file"})),
+        )
+            .into_response();
+    };
+    match tools::config_editor::find_tray_binary() {
+        Some(tray) => match tools::config_editor::spawn_restart(&tray, &path) {
+            Ok(()) => {
+                tracing::info!(config_file = %path.display(), "dashboard restart requested via tray");
+                AxumJson(serde_json::json!({"restarting": true, "poll_url": "/healthz"}))
+                    .into_response()
+            }
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AxumJson(serde_json::json!({"restarting": false, "error": error.to_string()})),
+            )
+                .into_response(),
+        },
+        None => AxumJson(serde_json::json!({
+            "restarting": false,
+            "manual": true,
+            "instructions": format!("Run: winctl-tray restart --config {}", path.display()),
+        }))
+        .into_response(),
+    }
+}
+
+async fn dashboard_config_json(State(state): State<DashboardState>) -> impl IntoResponse {
+    let transport_mode;
+    let listen_label = state.listen.to_string();
+    let auth_required = state.auth.auth_required();
+
+    let (editable, auth_token_set, sections) = match &state.config_file {
+        Some(path) => match std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| toml::from_str::<WinctlConfigFile>(&text).ok())
+        {
+            Some(file) => {
+                transport_mode = file
+                    .transport
+                    .as_ref()
+                    .and_then(|t| t.mode.clone())
+                    .unwrap_or_else(|| "http".to_string());
+                let token_set = file.auth.as_ref().and_then(|a| a.token.as_ref()).is_some();
+                let sections = serde_json::json!({
+                    "policy": file.policy,
+                    "paths": file.paths,
+                    "logging": file.logging,
+                    "embedding": file.embedding,
+                    "macro_execution": file.macro_execution,
+                });
+                (true, token_set, sections)
+            }
+            None => {
+                transport_mode = "http".to_string();
+                (false, false, serde_json::Value::Null)
+            }
+        },
+        None => {
+            transport_mode = "http".to_string();
+            let (policy, paths, embedding, macro_execution) =
+                tools::config_editor::sections_from_policy(
+                    state.app_state.policy.as_ref(),
+                    state.app_state.capture_dir.as_ref(),
+                );
+            let sections = serde_json::json!({
+                "policy": policy,
+                "paths": paths,
+                "logging": serde_json::Value::Null,
+                "embedding": embedding,
+                "macro_execution": macro_execution,
+            });
+            (false, false, sections)
+        }
+    };
+
+    AxumJson(serde_json::json!({
+        "ok": true,
+        "editable": editable,
+        "config_file": state.config_file.as_ref().map(|p| p.display().to_string()),
+        "tray_available": tools::config_editor::find_tray_binary().is_some(),
+        "connection": {
+            "transport": transport_mode,
+            "listen": listen_label,
+            "auth_required": auth_required,
+            "auth_token_set": auth_token_set,
+        },
+        "sections": sections,
+    }))
 }
 
 async fn dashboard_connect_token_create(
@@ -5247,68 +5449,101 @@ impl ServeConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct WinctlConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     transport: Option<TransportFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     auth: Option<AuthFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     logging: Option<LoggingFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     paths: Option<PathsFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     policy: Option<PolicyFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     embedding: Option<EmbeddingFileConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     macro_execution: Option<MacroExecutionFileConfig>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct TransportFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     listen: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AuthFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     token: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct LoggingFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     log_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PathsFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     capture_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     artifact_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     filesystem_roots: Option<Vec<PathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     memory_db: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PolicyFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     enable_filesystem_mutation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     enable_clipboard_write: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     enable_registry_mutation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     allow_private_network: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     memory_mutation_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     macro_execution_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     macro_destructive_tools_allowed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_macro_runtime_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_macro_steps: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     screenshot_retention_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_allowlist: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_denylist: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct EmbeddingFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     model_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     dimension: Option<usize>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct MacroExecutionFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     allow_destructive_tools: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_runtime_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_steps: Option<usize>,
 }
 
@@ -6429,5 +6664,40 @@ dimension = 384
             artifacts: Default::default(),
             replay: Default::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod config_serde_tests {
+    use super::*;
+
+    #[test]
+    fn round_trips_and_omits_none() {
+        let mut file = WinctlConfigFile::default();
+        file.policy = Some(PolicyFileConfig {
+            enable_filesystem_mutation: Some(true),
+            tool_denylist: Some(vec!["registry.write".to_string()]),
+            ..Default::default()
+        });
+        let text = toml::to_string_pretty(&file).expect("serialize");
+        assert!(text.contains("[policy]"), "got: {text}");
+        assert!(
+            text.contains("enable_filesystem_mutation = true"),
+            "got: {text}"
+        );
+        assert!(
+            !text.contains("[transport]"),
+            "None sections must be omitted: {text}"
+        );
+        assert!(
+            !text.contains("enable_clipboard_write"),
+            "None fields must be omitted: {text}"
+        );
+
+        let parsed: WinctlConfigFile = toml::from_str(&text).expect("parse");
+        assert_eq!(
+            parsed.policy.unwrap().enable_filesystem_mutation,
+            Some(true)
+        );
     }
 }

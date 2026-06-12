@@ -31,18 +31,21 @@ if [[ -n "${force_version}" ]]; then
 else
   IFS=. read -r major minor patch <<< "${base_version}"
 
+  # Semantic-versioning bump derived from Conventional Commits in the range.
+  # Only release-worthy types cut a release; docs/chore/ci/test/style/refactor/
+  # build land without bumping the version (bump=none -> should_release=false).
   if [[ -z "${latest_tag}" ]]; then
     bump="initial"
-  elif grep -Eq '^BREAKING CHANGE:|^[A-Za-z]+(\([^)]+\))?!:' <<< "${commit_messages}"; then
+  elif grep -Eq '^BREAKING[ -]CHANGE:|^[A-Za-z]+(\([^)]+\))?!:' <<< "${commit_messages}"; then
     major=$((major + 1))
     minor=0
     patch=0
     bump="major"
-  elif grep -Eq '^feat(\([^)]+\))?!?:' <<< "${commit_messages}"; then
+  elif grep -Eq '^feat(\([^)]+\))?:' <<< "${commit_messages}"; then
     minor=$((minor + 1))
     patch=0
     bump="minor"
-  elif [[ "${commit_count}" -gt 0 ]]; then
+  elif grep -Eq '^(fix|perf|revert)(\([^)]+\))?:' <<< "${commit_messages}"; then
     patch=$((patch + 1))
     bump="patch"
   else

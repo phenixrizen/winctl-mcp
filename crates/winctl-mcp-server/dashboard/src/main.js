@@ -74,7 +74,7 @@ const DASHBOARD_TABS = [
   { id: 'processes', label: 'Processes' },
   { id: 'memory', label: 'Memory' },
   { id: 'docs', label: 'Docs' },
-  { id: 'config', label: 'Config' },
+  { id: 'config', label: 'Settings' },
 ];
 const requestedTab = params.get('tab');
 const initialTab = DASHBOARD_TABS.some((tab) => tab.id === requestedTab) ? requestedTab : 'overview';
@@ -100,14 +100,6 @@ function jsonSnippet(value) {
 
 function psSingleQuote(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
-}
-
-function tomlString(value) {
-  return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
-}
-
-function tomlQuotedKey(value) {
-  return `"${tomlString(value)}"`;
 }
 
 function formatUnixMs(value) {
@@ -252,15 +244,37 @@ createApp({
       connectDashboardTokenVisible: false,
       connectMode: 'http',
       copiedConnectId: '',
-      configClient: 'codex',
-      configTransport: 'http',
-      configServerName: 'winctl-mcp',
-      configHttpUrl: '',
-      configTokenMode: 'env',
-      configTokenEnv: 'WINCTL_MCP_TOKEN',
-      configTokenValue: '',
-      configCommand: '',
-      copiedConfigId: '',
+      settingsLoading: false,
+      settingsError: null,
+      settingsSaving: false,
+      settingsRestarting: false,
+      settingsEditable: false,
+      settingsTrayAvailable: false,
+      settingsConfigFile: null,
+      settingsConnection: { transport: '', listen: '', auth_required: false, auth_token_set: false },
+      settingsConfirmOpen: false,
+      settingsNotice: '',
+      settingsFieldErrors: [],
+      settingsForm: {
+        policy: {
+          enable_filesystem_mutation: false,
+          enable_clipboard_write: false,
+          enable_registry_mutation: false,
+          allow_private_network: false,
+          memory_mutation_enabled: true,
+          macro_execution_enabled: true,
+          macro_destructive_tools_allowed: false,
+          max_macro_runtime_ms: null,
+          max_macro_steps: null,
+          screenshot_retention_count: null,
+          tool_allowlist: '',
+          tool_denylist: '',
+        },
+        paths: { capture_dir: '', artifact_dir: '', filesystem_roots: '', memory_db: '' },
+        logging: { log_file: '' },
+        embedding: { model_path: '', dimension: null },
+        macro_execution: { enabled: true, allow_destructive_tools: false, max_runtime_ms: null, max_steps: null },
+      },
       issuePanelOpen: false,
       copiedIssueState: false,
       recorderTitle: 'Recorded macro',
@@ -668,173 +682,6 @@ ${cursorConfig}
         },
       ];
     },
-    configServerId() {
-      return this.configServerName.trim() || 'winctl-mcp';
-    },
-    configHttpEndpoint() {
-      return this.configHttpUrl.trim() || this.connectMcpUrl;
-    },
-    configServerCommand() {
-      return this.configCommand.trim() || this.connectServerExe;
-    },
-    configTokenEnvName() {
-      return this.configTokenEnv.trim() || 'WINCTL_MCP_TOKEN';
-    },
-    configTokenLiteral() {
-      if (this.configTokenMode === 'manual') return this.configTokenValue || '<token>';
-      if (this.configTokenMode === 'current') return this.currentDashboardToken || this.connectExampleToken;
-      return `\${${this.configTokenEnvName}}`;
-    },
-    configAuthHeaderValue() {
-      return `Bearer ${this.configTokenLiteral}`;
-    },
-    configTokenCommandPrefix() {
-      if (this.configTransport !== 'http') return '';
-      if (this.configTokenMode === 'env') {
-        return `# Set ${this.configTokenEnvName} before launching the client.`;
-      }
-      return `$env:${this.configTokenEnvName} = ${psSingleQuote(this.configTokenLiteral)}`;
-    },
-    configSelectedExample() {
-      const name = this.configServerId;
-      const url = this.configHttpEndpoint;
-      const command = this.configServerCommand;
-      const args = this.connectStdioArgs;
-      const authHeader = this.configAuthHeaderValue;
-      const envName = this.configTokenEnvName;
-      const tokenPrefix = this.configTokenCommandPrefix;
-      const shellName = psSingleQuote(name);
-      const stdioArgs = args.map(psSingleQuote).join(' ');
-      const cursorHttp = jsonSnippet({
-        mcpServers: {
-          [name]: {
-            url,
-            headers: { Authorization: authHeader },
-          },
-        },
-      });
-      const cursorStdio = jsonSnippet({
-        mcpServers: {
-          [name]: {
-            command,
-            args,
-          },
-        },
-      });
-      const copilotHttp = jsonSnippet({
-        servers: {
-          [name]: {
-            type: 'http',
-            url,
-            headers: { Authorization: authHeader },
-          },
-        },
-      });
-      const copilotStdio = jsonSnippet({
-        servers: {
-          [name]: {
-            type: 'stdio',
-            command,
-            args,
-          },
-        },
-      });
-      const copilotAddHttp = jsonSnippet({
-        name,
-        type: 'http',
-        url,
-        headers: { Authorization: authHeader },
-      });
-      const copilotAddStdio = jsonSnippet({ name, command, args });
-
-      if (this.configTransport === 'stdio') {
-        if (this.configClient === 'codex') {
-          return {
-            title: 'Codex stdio',
-            path: '~/.codex/config.toml',
-            config: `[mcp_servers.${tomlQuotedKey(name)}]
-command = "${tomlString(command)}"
-args = ${jsonSnippet(args)}
-tool_timeout_sec = 120.0`,
-            command: `codex mcp add ${shellName} -- ${psSingleQuote(command)} ${stdioArgs}`,
-          };
-        }
-        if (this.configClient === 'claude-code') {
-          return {
-            title: 'Claude Code stdio',
-            path: 'Claude MCP config',
-            config: cursorStdio,
-            command: `claude mcp add ${shellName} -- ${psSingleQuote(command)} ${stdioArgs}`,
-          };
-        }
-        if (this.configClient === 'cursor') {
-          return {
-            title: 'Cursor stdio',
-            path: '.cursor/mcp.json',
-            config: cursorStdio,
-            command: `New-Item -ItemType Directory -Force .cursor
-Set-Content -Path .cursor\\mcp.json -Value @'
-${cursorStdio}
-'@`,
-          };
-        }
-        return {
-          title: 'GitHub Copilot stdio',
-          path: '.vscode/mcp.json',
-          config: copilotStdio,
-          command: `code --add-mcp ${psSingleQuote(copilotAddStdio)}`,
-        };
-      }
-
-      if (this.configClient === 'codex') {
-        const commandLine = `codex mcp add ${shellName} --url ${psSingleQuote(url)} --bearer-token-env-var ${envName}`;
-        return {
-          title: 'Codex HTTP',
-          path: '~/.codex/config.toml',
-          config: `[mcp_servers.${tomlQuotedKey(name)}]
-url = "${tomlString(url)}"
-http_headers = { Authorization = "${tomlString(authHeader)}" }
-tool_timeout_sec = 120.0`,
-          command: tokenPrefix ? `${tokenPrefix}
-${commandLine}` : commandLine,
-        };
-      }
-      if (this.configClient === 'claude-code') {
-        const headerCommand =
-          this.configTokenMode === 'env'
-            ? `$header = "Authorization: Bearer $env:${envName}"
-claude mcp add --transport http ${shellName} ${psSingleQuote(url)} --header $header`
-            : `claude mcp add --transport http ${shellName} ${psSingleQuote(url)} --header ${psSingleQuote(`Authorization: ${authHeader}`)}`;
-        return {
-          title: 'Claude Code HTTP',
-          path: 'Claude MCP config',
-          config: jsonSnippet({
-            type: 'http',
-            url,
-            headers: { Authorization: authHeader },
-          }),
-          command: tokenPrefix && this.configTokenMode !== 'env' ? `${tokenPrefix}
-${headerCommand}` : headerCommand,
-        };
-      }
-      if (this.configClient === 'cursor') {
-        return {
-          title: 'Cursor HTTP',
-          path: '.cursor/mcp.json',
-          config: cursorHttp,
-          command: `New-Item -ItemType Directory -Force .cursor
-Set-Content -Path .cursor\\mcp.json -Value @'
-${cursorHttp}
-'@`,
-        };
-      }
-      return {
-        title: 'GitHub Copilot HTTP',
-        path: '.vscode/mcp.json',
-        config: copilotHttp,
-        command: `code --add-mcp ${psSingleQuote(copilotAddHttp)}`,
-      };
-    },
     issueUrl() {
       return 'https://github.com/phenixrizen/winctl-mcp/issues/new';
     },
@@ -965,7 +812,8 @@ ${cursorHttp}
   },
   watch: {
     async selectedTab(tab) {
-      if (tab === 'connect' || tab === 'config') await this.loadConnect();
+      if (tab === 'connect') await this.loadConnect();
+      if (tab === 'config') this.loadSettings();
       if (tab === 'docs') {
         await this.loadDocs();
         await this.renderMermaid();
@@ -974,7 +822,8 @@ ${cursorHttp}
   },
   mounted() {
     this.loadState();
-    if (this.selectedTab === 'connect' || this.selectedTab === 'config') this.loadConnect();
+    if (this.selectedTab === 'connect') this.loadConnect();
+    if (this.selectedTab === 'config') this.loadSettings();
     this.intervalId = window.setInterval(() => {
       if (this.autoRefresh) this.loadState({ quiet: true });
     }, 5000);
@@ -1074,12 +923,187 @@ ${cursorHttp}
         if (this.copiedConnectId === id) this.copiedConnectId = '';
       }, 1600);
     },
-    async copyConfigText(id, text) {
-      await navigator.clipboard?.writeText(text).catch(() => {});
-      this.copiedConfigId = id;
-      window.setTimeout(() => {
-        if (this.copiedConfigId === id) this.copiedConfigId = '';
-      }, 1600);
+    settingsListToText(value) {
+      return Array.isArray(value) ? value.join('\n') : '';
+    },
+    settingsTextToList(value) {
+      return String(value || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    },
+    settingsNumOrNull(value) {
+      if (value === null || value === undefined || value === '') return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    },
+    applySettingsResponse(payload) {
+      this.settingsEditable = payload.editable === true;
+      this.settingsTrayAvailable = payload.tray_available === true;
+      this.settingsConfigFile = payload.config_file ?? null;
+      this.settingsConnection = payload.connection ?? this.settingsConnection;
+      const s = payload.sections ?? {};
+      const p = s.policy ?? {};
+      const paths = s.paths ?? {};
+      const logging = s.logging ?? {};
+      const emb = s.embedding ?? {};
+      const macro = s.macro_execution ?? {};
+      this.settingsForm = {
+        policy: {
+          enable_filesystem_mutation: !!p.enable_filesystem_mutation,
+          enable_clipboard_write: !!p.enable_clipboard_write,
+          enable_registry_mutation: !!p.enable_registry_mutation,
+          allow_private_network: !!p.allow_private_network,
+          memory_mutation_enabled: p.memory_mutation_enabled !== false,
+          macro_execution_enabled: p.macro_execution_enabled !== false,
+          macro_destructive_tools_allowed: !!p.macro_destructive_tools_allowed,
+          max_macro_runtime_ms: p.max_macro_runtime_ms ?? null,
+          max_macro_steps: p.max_macro_steps ?? null,
+          screenshot_retention_count: p.screenshot_retention_count ?? null,
+          tool_allowlist: this.settingsListToText(p.tool_allowlist),
+          tool_denylist: this.settingsListToText(p.tool_denylist),
+        },
+        paths: {
+          capture_dir: paths.capture_dir ?? '',
+          artifact_dir: paths.artifact_dir ?? '',
+          filesystem_roots: this.settingsListToText(paths.filesystem_roots),
+          memory_db: paths.memory_db ?? '',
+        },
+        logging: { log_file: logging.log_file ?? '' },
+        embedding: { model_path: emb.model_path ?? '', dimension: emb.dimension ?? null },
+        macro_execution: {
+          enabled: macro.enabled !== false,
+          allow_destructive_tools: !!macro.allow_destructive_tools,
+          max_runtime_ms: macro.max_runtime_ms ?? null,
+          max_steps: macro.max_steps ?? null,
+        },
+      };
+    },
+    async loadSettings() {
+      this.settingsLoading = true;
+      this.settingsError = null;
+      try {
+        const response = await fetch('/dashboard/config', { headers: { ...authHeaders() } });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.reason || `HTTP ${response.status}`);
+        }
+        this.applySettingsResponse(payload);
+      } catch (error) {
+        this.settingsError = String(error);
+      } finally {
+        this.settingsLoading = false;
+      }
+    },
+    settingsPayload() {
+      const f = this.settingsForm;
+      const orNull = (v) => (v.trim() === '' ? null : v.trim());
+      return {
+        policy: {
+          ...f.policy,
+          macro_execution_enabled: f.macro_execution.enabled,
+          macro_destructive_tools_allowed: f.macro_execution.allow_destructive_tools,
+          max_macro_runtime_ms: this.settingsNumOrNull(f.policy.max_macro_runtime_ms),
+          max_macro_steps: this.settingsNumOrNull(f.policy.max_macro_steps),
+          screenshot_retention_count: this.settingsNumOrNull(f.policy.screenshot_retention_count),
+          tool_allowlist: this.settingsTextToList(f.policy.tool_allowlist),
+          tool_denylist: this.settingsTextToList(f.policy.tool_denylist),
+        },
+        paths: {
+          capture_dir: orNull(f.paths.capture_dir),
+          artifact_dir: orNull(f.paths.artifact_dir),
+          filesystem_roots: this.settingsTextToList(f.paths.filesystem_roots),
+          memory_db: orNull(f.paths.memory_db),
+        },
+        logging: { log_file: orNull(f.logging.log_file) },
+        embedding: {
+          model_path: orNull(f.embedding.model_path),
+          dimension: this.settingsNumOrNull(f.embedding.dimension),
+        },
+        macro_execution: {
+          enabled: f.macro_execution.enabled,
+          allow_destructive_tools: f.macro_execution.allow_destructive_tools,
+          max_runtime_ms: this.settingsNumOrNull(f.macro_execution.max_runtime_ms),
+          max_steps: this.settingsNumOrNull(f.macro_execution.max_steps),
+        },
+      };
+    },
+    async saveSettings() {
+      this.settingsSaving = true;
+      this.settingsError = null;
+      this.settingsFieldErrors = [];
+      this.settingsNotice = '';
+      try {
+        const response = await fetch('/dashboard/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify(this.settingsPayload()),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (response.status === 422) {
+          this.settingsFieldErrors = payload.errors ?? [];
+          throw new Error('Validation failed');
+        }
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.reason || `HTTP ${response.status}`);
+        }
+        this.settingsNotice = 'Saved. Restart required to apply.';
+        return true;
+      } catch (error) {
+        this.settingsError = String(error);
+        return false;
+      } finally {
+        this.settingsSaving = false;
+      }
+    },
+    async restartServer() {
+      this.settingsRestarting = true;
+      this.settingsError = null;
+      this.settingsNotice = '';
+      try {
+        const response = await fetch('/dashboard/restart', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (payload.restarting) {
+          this.settingsNotice = 'Restarting server…';
+          await this.waitForServerBack();
+        } else if (payload.manual) {
+          this.settingsNotice = payload.instructions || 'Restart manually via the tray.';
+        } else {
+          throw new Error(payload.reason || payload.error || `HTTP ${response.status}`);
+        }
+      } catch (error) {
+        this.settingsError = String(error);
+      } finally {
+        this.settingsRestarting = false;
+      }
+    },
+    async waitForServerBack() {
+      const deadline = Date.now() + 20000;
+      // brief grace period so we poll the NEW process, not the dying one
+      await new Promise((r) => window.setTimeout(r, 1500));
+      while (Date.now() < deadline) {
+        try {
+          const response = await fetch('/healthz', { cache: 'no-store' });
+          if (response.ok) {
+            this.settingsNotice = 'Server restarted.';
+            await this.loadSettings();
+            return;
+          }
+        } catch (_) {
+          /* server still down; keep polling */
+        }
+        await new Promise((r) => window.setTimeout(r, 750));
+      }
+      this.settingsError = 'Server did not come back within 20s; check the tray and logs.';
+    },
+    async saveAndRestart() {
+      this.settingsConfirmOpen = false;
+      if (await this.saveSettings()) {
+        await this.restartServer();
+      }
     },
     async copyIssueState() {
       await navigator.clipboard?.writeText(this.rawJson).catch(() => {});
@@ -2669,119 +2693,101 @@ ${cursorHttp}
           <section class="winctl-card">
             <div class="winctl-card-header flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 class="text-sm font-semibold">MCP server config</h2>
-                <div class="text-xs text-slate-500">HTTP keeps this dashboard, token management, and observability connected.</div>
+                <h2 class="text-sm font-semibold">Server settings</h2>
+                <div class="text-xs text-slate-500">Edits the server's config file; a restart applies them.</div>
               </div>
-              <button type="button" class="btn btn-xs" :disabled="connectLoading" @click="loadConnect">Refresh</button>
+              <button type="button" class="btn btn-xs" :disabled="settingsLoading" @click="loadSettings">Refresh</button>
             </div>
-            <div class="grid gap-4 p-4 lg:grid-cols-3">
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Client</span>
-                <select v-model="configClient" class="select select-sm select-bordered">
-                  <option value="codex">Codex</option>
-                  <option value="claude-code">Claude Code</option>
-                  <option value="cursor">Cursor</option>
-                  <option value="github-copilot">GitHub Copilot</option>
-                </select>
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Server name</span>
-                <input v-model="configServerName" type="text" class="input input-sm input-bordered" />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Transport</span>
-                <select v-model="configTransport" class="select select-sm select-bordered">
-                  <option value="http">HTTP recommended</option>
-                  <option value="stdio">Stdio fallback</option>
-                </select>
-              </label>
-              <label class="form-control lg:col-span-2">
-                <span class="label-text text-xs font-semibold">HTTP URL</span>
-                <input v-model="configHttpUrl" type="text" class="input input-sm input-bordered" :placeholder="connectMcpUrl" :disabled="configTransport !== 'http'" />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Token source</span>
-                <select v-model="configTokenMode" class="select select-sm select-bordered" :disabled="configTransport !== 'http'">
-                  <option value="env">Environment variable</option>
-                  <option value="current">Current dashboard token</option>
-                  <option value="manual">Manual token</option>
-                </select>
-              </label>
-              <label v-if="configTokenMode === 'env'" class="form-control">
-                <span class="label-text text-xs font-semibold">Token env var</span>
-                <input v-model="configTokenEnv" type="text" class="input input-sm input-bordered" :disabled="configTransport !== 'http'" />
-              </label>
-              <label v-if="configTokenMode === 'manual'" class="form-control">
-                <span class="label-text text-xs font-semibold">Token value</span>
-                <input v-model="configTokenValue" type="password" class="input input-sm input-bordered" autocomplete="off" :disabled="configTransport !== 'http'" />
-              </label>
-              <label class="form-control lg:col-span-2">
-                <span class="label-text text-xs font-semibold">Stdio executable</span>
-                <input v-model="configCommand" type="text" class="input input-sm input-bordered" :placeholder="connectServerExe" :disabled="configTransport !== 'stdio'" />
-              </label>
+
+            <div v-if="!settingsEditable" class="alert alert-warning mx-4 mt-4 text-xs">
+              Server started without a <code>--config</code> file; settings are read-only.
             </div>
-            <div v-if="connectError" class="alert alert-error mx-4 mb-4 text-sm">{{ connectError }}</div>
+            <div v-if="settingsError" class="alert alert-error mx-4 mt-4 text-sm">{{ settingsError }}</div>
+            <div v-if="settingsNotice" class="alert alert-info mx-4 mt-4 text-sm">{{ settingsNotice }}</div>
+
+            <dl class="grid gap-2 px-4 py-3 text-xs sm:grid-cols-2">
+              <div><dt class="font-semibold">Transport</dt><dd>{{ settingsConnection.transport }}</dd></div>
+              <div><dt class="font-semibold">Listen</dt><dd>{{ settingsConnection.listen }}</dd></div>
+              <div><dt class="font-semibold">Auth required</dt><dd>{{ settingsConnection.auth_required ? 'yes' : 'no' }}</dd></div>
+              <div><dt class="font-semibold">Auth token set</dt><dd>{{ settingsConnection.auth_token_set ? 'yes' : 'no' }}</dd></div>
+            </dl>
           </section>
 
-          <div class="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
-            <section class="winctl-card">
-              <div class="winctl-card-header px-4 py-3">
-                <h2 class="text-sm font-semibold">Resolved settings</h2>
+          <fieldset :disabled="!settingsEditable" class="space-y-5">
+            <section class="winctl-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">Policy</h3>
+              <div class="grid gap-2 sm:grid-cols-2">
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.enable_filesystem_mutation" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Filesystem mutation</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.enable_clipboard_write" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Clipboard write</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.enable_registry_mutation" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Registry mutation</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.allow_private_network" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Allow private network</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.policy.memory_mutation_enabled" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Memory mutation</span></label>
               </div>
-              <dl class="divide-y divide-slate-200 text-sm dark:divide-slate-700">
-                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Client</dt>
-                  <dd>{{ configSelectedExample.title }}</dd>
-                </div>
-                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Transport</dt>
-                  <dd><span class="badge badge-sm" :class="configTransport === 'http' ? 'badge-info' : 'badge-ghost'">{{ configTransport }}</span></dd>
-                </div>
-                <div class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Install path</dt>
-                  <dd class="winctl-code break-all text-xs">{{ configSelectedExample.path }}</dd>
-                </div>
-                <div v-if="configTransport === 'http'" class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Endpoint</dt>
-                  <dd class="winctl-code break-all text-xs">{{ configHttpEndpoint }}</dd>
-                </div>
-                <div v-if="configTransport === 'http'" class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Authorization</dt>
-                  <dd class="winctl-code break-all text-xs">{{ configAuthHeaderValue }}</dd>
-                </div>
-                <div v-if="configTransport === 'stdio'" class="grid grid-cols-[130px_1fr] gap-3 px-4 py-3">
-                  <dt class="text-slate-500">Executable</dt>
-                  <dd class="winctl-code break-all text-xs">{{ configServerCommand }}</dd>
-                </div>
-              </dl>
+              <div class="mt-3 grid gap-3 sm:grid-cols-3">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Max macro runtime (ms)</span><input v-model="settingsForm.policy.max_macro_runtime_ms" type="number" min="0" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Max macro steps</span><input v-model="settingsForm.policy.max_macro_steps" type="number" min="0" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Screenshot retention</span><input v-model="settingsForm.policy.screenshot_retention_count" type="number" min="0" class="input input-sm input-bordered" /></label>
+              </div>
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Tool allowlist (one per line)</span><textarea v-model="settingsForm.policy.tool_allowlist" rows="3" class="textarea textarea-bordered textarea-sm"></textarea></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Tool denylist (one per line)</span><textarea v-model="settingsForm.policy.tool_denylist" rows="3" class="textarea textarea-bordered textarea-sm"></textarea></label>
+              </div>
             </section>
 
-            <section class="winctl-card overflow-hidden">
-              <div class="winctl-card-header flex items-center justify-between gap-3 px-4 py-3">
-                <div>
-                  <h2 class="text-sm font-semibold">Generated client setup</h2>
-                  <div class="winctl-code text-xs text-slate-500">{{ configSelectedExample.path }}</div>
-                </div>
-                <div class="flex gap-1">
-                  <button type="button" class="btn btn-xs" @click="copyConfigText('config', configSelectedExample.config)">
-                    {{ copiedConfigId === 'config' ? 'Copied' : 'Copy config' }}
-                  </button>
-                  <button type="button" class="btn btn-xs" @click="copyConfigText('command', configSelectedExample.command)">
-                    {{ copiedConfigId === 'command' ? 'Copied' : 'Copy command' }}
-                  </button>
-                </div>
+            <section class="winctl-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">Paths</h3>
+              <div class="grid gap-3 sm:grid-cols-3">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Capture dir</span><input v-model="settingsForm.paths.capture_dir" type="text" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Artifact dir</span><input v-model="settingsForm.paths.artifact_dir" type="text" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Memory DB</span><input v-model="settingsForm.paths.memory_db" type="text" class="input input-sm input-bordered" /></label>
               </div>
-              <div class="grid gap-3 p-4">
-                <div>
-                  <div class="mb-1 text-xs font-bold uppercase text-slate-500">Config</div>
-                  <pre class="winctl-code overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-[#e6edf6]"><code>{{ configSelectedExample.config }}</code></pre>
-                </div>
-                <div>
-                  <div class="mb-1 text-xs font-bold uppercase text-slate-500">Command</div>
-                  <pre class="winctl-code overflow-x-auto rounded bg-[#0d1117] p-3 text-xs text-[#e6edf6]"><code>{{ configSelectedExample.command }}</code></pre>
-                </div>
+              <label class="form-control mt-3"><span class="label-text text-xs font-semibold">Filesystem roots (one per line)</span><textarea v-model="settingsForm.paths.filesystem_roots" rows="3" class="textarea textarea-bordered textarea-sm"></textarea></label>
+            </section>
+
+            <section class="winctl-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">Logging &amp; embedding</h3>
+              <div class="grid gap-3 sm:grid-cols-3">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Log file</span><input v-model="settingsForm.logging.log_file" type="text" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Embedding model path</span><input v-model="settingsForm.embedding.model_path" type="text" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Embedding dimension</span><input v-model="settingsForm.embedding.dimension" type="number" min="1" class="input input-sm input-bordered" /></label>
               </div>
             </section>
+
+            <section class="winctl-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">Macro execution</h3>
+              <div class="grid gap-2 sm:grid-cols-2">
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.macro_execution.enabled" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Enabled</span></label>
+                <label class="label cursor-pointer gap-2"><input v-model="settingsForm.macro_execution.allow_destructive_tools" type="checkbox" class="checkbox checkbox-sm" /><span class="label-text text-xs">Allow destructive tools</span></label>
+              </div>
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                <label class="form-control"><span class="label-text text-xs font-semibold">Max runtime (ms)</span><input v-model="settingsForm.macro_execution.max_runtime_ms" type="number" min="0" class="input input-sm input-bordered" /></label>
+                <label class="form-control"><span class="label-text text-xs font-semibold">Max steps</span><input v-model="settingsForm.macro_execution.max_steps" type="number" min="0" class="input input-sm input-bordered" /></label>
+              </div>
+            </section>
+
+            <ul v-if="settingsFieldErrors.length" class="alert alert-error text-xs">
+              <li v-for="err in settingsFieldErrors" :key="err.field"><strong>{{ err.field }}</strong>: {{ err.message }}</li>
+            </ul>
+
+            <div class="flex flex-wrap gap-2">
+              <button type="button" class="btn btn-sm" :disabled="settingsSaving || !settingsEditable" @click="saveSettings">Save</button>
+              <button type="button" class="btn btn-sm btn-info" :disabled="settingsSaving || settingsRestarting || !settingsEditable" @click="settingsConfirmOpen = true">Save &amp; Restart</button>
+            </div>
+          </fieldset>
+
+          <div v-if="settingsConfirmOpen" class="modal modal-open">
+            <div class="modal-box">
+              <h3 class="text-sm font-semibold">Restart the server?</h3>
+              <p class="py-2 text-xs">This saves your changes and restarts the MCP server via the tray. The dashboard will reconnect when it's back.</p>
+              <p v-if="!settingsTrayAvailable" class="text-xs text-warning">Tray binary not found next to the server — you'll get manual restart instructions instead.</p>
+              <div class="modal-action">
+                <button type="button" class="btn btn-sm" @click="settingsConfirmOpen = false">Cancel</button>
+                <button type="button" class="btn btn-sm btn-info" @click="saveAndRestart">Save &amp; Restart</button>
+              </div>
+            </div>
+            <form method="dialog" class="modal-backdrop" @click.prevent="settingsConfirmOpen = false">
+              <button type="button">close</button>
+            </form>
           </div>
         </section>
 
