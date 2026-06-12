@@ -28,12 +28,22 @@ function Invoke-MsiExec {
     }
 }
 
+# ProductCodes currently installed under our UpgradeCode (empty if not installed).
+function Get-InstalledProductCodes {
+    $installer = New-Object -ComObject WindowsInstaller.Installer
+    try {
+        return @($installer.RelatedProducts($UpgradeCode))
+    } catch {
+        return @()
+    }
+}
+
 if ($Action -eq "install") {
     if ([string]::IsNullOrWhiteSpace($MsiPath)) {
-        throw "install requires -MsiPath (run `make msi` first to build it)."
+        throw "install requires -MsiPath (run ``make msi`` first to build it)."
     }
     if (-not (Test-Path -LiteralPath $MsiPath)) {
-        throw "MSI not found: $MsiPath (run `make msi` first)."
+        throw "MSI not found: $MsiPath (run ``make msi`` first)."
     }
     $resolved = (Resolve-Path -LiteralPath $MsiPath).ProviderPath
 
@@ -45,6 +55,14 @@ if ($Action -eq "install") {
         Copy-Item -LiteralPath $resolved -Destination $local -Force
     }
 
+    # The local MSI version is pinned (0.1.0), so installing it over an existing
+    # install is a MajorUpgrade no-op and would NOT refresh the files. Remove any
+    # prior install first so the freshly built binaries/dashboard actually land.
+    foreach ($productCode in Get-InstalledProductCodes) {
+        Write-Host "Removing existing $productCode before reinstall (UAC)..."
+        Invoke-MsiExec -ArgString "/x $productCode /passive"
+    }
+
     Write-Host "Installing $local (per-machine; expect a UAC prompt)..."
     Invoke-MsiExec -ArgString "/i `"$local`" /passive"
     Write-Host "Installed winctl-mcp."
@@ -52,13 +70,7 @@ if ($Action -eq "install") {
 else {
     # Uninstall every product registered under our UpgradeCode, so it works even
     # if the local MSI was rebuilt to a different version/ProductCode (or is gone).
-    $installer = New-Object -ComObject WindowsInstaller.Installer
-    $related = @()
-    try {
-        $related = @($installer.RelatedProducts($UpgradeCode))
-    } catch {
-        $related = @()
-    }
+    $related = Get-InstalledProductCodes
     if ($related.Count -eq 0) {
         Write-Host "winctl-mcp is not installed (no product for UpgradeCode $UpgradeCode)."
         return

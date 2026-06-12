@@ -39,7 +39,7 @@ help:
 	@echo "  build-win-fixture   Build the Windows integration fixture"
 	@echo "  package-win         Package Windows binaries, docs, scripts, metadata, and checksums"
 	@echo "  msi                 Build the Windows MSI from the packaged dist (WiX via PowerShell)"
-	@echo "  install-msi         Install the locally built MSI (per-machine; triggers UAC)"
+	@echo "  install-msi         Rebuild the MSI, remove any old install, then install it (UAC)"
 	@echo "  uninstall-msi       Uninstall winctl-mcp via its MSI UpgradeCode (triggers UAC)"
 	@echo "  check               Run fmt + test + build-linux"
 	@echo "  print-artifacts     Show expected Windows artifact paths"
@@ -104,8 +104,10 @@ msi: package-win
 	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$$(wslpath -w scripts/build-windows-msi.ps1)" \
 		-DistDir "$$(wslpath -w '$(DIST_DIR)')" -Version "$(VERSION)" -OutputPath "$$(wslpath -w '$(MSI)')"
 
+# Depends on `msi` so it always installs a freshly built MSI (never a stale one
+# left in dist/). The helper removes any prior install first so the new files land.
 .PHONY: install-msi
-install-msi:
+install-msi: msi
 	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$$(wslpath -w scripts/windows-msi.ps1)" \
 		-Action install -MsiPath "$$(wslpath -w '$(MSI)')"
 
