@@ -9,6 +9,7 @@ WINDOWS_TARGET ?= x86_64-pc-windows-msvc
 RELEASE ?= 1
 VERSION ?= $(shell awk -F\" '/^version = / { print $$2; exit }' Cargo.toml)
 DIST_DIR ?= dist/winctl-mcp-$(VERSION)-windows-$(WINDOWS_TARGET)
+MSI ?= dist/winctl-mcp-$(VERSION)-windows-x64.msi
 
 ifeq ($(WINDOWS_TARGET),x86_64-pc-windows-msvc)
   ifneq ($(OS),Windows_NT)
@@ -37,6 +38,9 @@ help:
 	@echo "  build-win-tray      Build only winctl-tray for Windows"
 	@echo "  build-win-fixture   Build the Windows integration fixture"
 	@echo "  package-win         Package Windows binaries, docs, scripts, metadata, and checksums"
+	@echo "  msi                 Build the Windows MSI from the packaged dist (WiX via PowerShell)"
+	@echo "  install-msi         Install the locally built MSI (per-machine; triggers UAC)"
+	@echo "  uninstall-msi       Uninstall winctl-mcp via its MSI UpgradeCode (triggers UAC)"
 	@echo "  check               Run fmt + test + build-linux"
 	@echo "  print-artifacts     Show expected Windows artifact paths"
 
@@ -89,6 +93,26 @@ build-win-fixture: require-windows-linker
 .PHONY: package-win
 package-win: require-windows-linker dashboard-build build-win-server build-win-tray
 	bash scripts/package-windows-release.sh "$(WINDOWS_TARGET)" "$(PROFILE_DIR)" "$(DIST_DIR)" "$(VERSION)"
+
+# Windows MSI targets. These shell out to Windows tools (PowerShell, WiX, msiexec)
+# via WSL interop, converting paths with `wslpath -w`. The MSI is authored
+# Scope="perMachine", so install/uninstall run elevated and trigger a UAC prompt.
+# On WSL the binary build needs the GNU toolchain, e.g.:
+#   WINDOWS_TARGET=x86_64-pc-windows-gnu make msi
+.PHONY: msi
+msi: package-win
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$$(wslpath -w scripts/build-windows-msi.ps1)" \
+		-DistDir "$$(wslpath -w '$(DIST_DIR)')" -Version "$(VERSION)" -OutputPath "$$(wslpath -w '$(MSI)')"
+
+.PHONY: install-msi
+install-msi:
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$$(wslpath -w scripts/windows-msi.ps1)" \
+		-Action install -MsiPath "$$(wslpath -w '$(MSI)')"
+
+.PHONY: uninstall-msi
+uninstall-msi:
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$$(wslpath -w scripts/windows-msi.ps1)" \
+		-Action uninstall
 
 .PHONY: check
 check: fmt test build-linux
