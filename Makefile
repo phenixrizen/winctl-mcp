@@ -46,7 +46,7 @@ help:
 	@echo "  build-win-fixture   Build the Windows integration fixture"
 	@echo "  package-win         Package Windows binaries, docs, scripts, metadata, and checksums"
 	@echo "  msi                 Build the Windows MSI from the packaged dist (WiX via PowerShell)"
-	@echo "  install-msi         Rebuild the MSI, remove any old install, then install it (UAC)"
+	@echo "  install-msi         Rebuild and (re)install the MSI in one elevation (UAC)"
 	@echo "  uninstall-msi       Uninstall winctl-mcp via its MSI UpgradeCode (triggers UAC)"
 	@echo "  check               Run fmt + test + build-linux"
 	@echo "  print-artifacts     Show expected Windows artifact paths"

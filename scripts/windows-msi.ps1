@@ -14,11 +14,21 @@ param(
 $ErrorActionPreference = "Stop"
 
 # The packaged MSI is authored Scope="perMachine" (installs under Program Files,
-# writes HKLM), so msiexec must run elevated. Each call triggers a UAC prompt.
+# writes HKLM), so msiexec must run elevated and triggers a UAC prompt. A declined
+# prompt surfaces a clean message instead of a raw Start-Process stack trace.
 function Invoke-MsiExec {
     param([Parameter(Mandatory = $true)][string]$ArgString)
 
-    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $ArgString -Verb RunAs -Wait -PassThru
+    try {
+        $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $ArgString -Verb RunAs -Wait -PassThru
+    } catch {
+        if ($_.Exception.Message -match "canceled by the user") {
+            Write-Host "Elevation was declined at the UAC prompt; nothing was changed."
+            Write-Host "Re-run and approve the prompt to continue."
+            exit 1
+        }
+        throw
+    }
     if ($proc.ExitCode -eq 3010) {
         Write-Host "msiexec completed; a reboot is required to finish (exit 3010)."
         return
@@ -55,16 +65,17 @@ if ($Action -eq "install") {
         Copy-Item -LiteralPath $resolved -Destination $local -Force
     }
 
-    # The local MSI version is pinned (0.1.0), so installing it over an existing
-    # install is a MajorUpgrade no-op and would NOT refresh the files. Remove any
-    # prior install first so the freshly built binaries/dashboard actually land.
-    foreach ($productCode in Get-InstalledProductCodes) {
-        Write-Host "Removing existing $productCode before reinstall (UAC)..."
-        Invoke-MsiExec -ArgString "/x $productCode /passive"
+    if ((Get-InstalledProductCodes).Count -gt 0) {
+        # The local MSI version is pinned (0.1.0), so a plain reinstall is a
+        # MajorUpgrade no-op. REINSTALL=ALL REINSTALLMODE=vamus forces every
+        # component/file to be rewritten from this package, so the freshly built
+        # binaries/dashboard land -- all in a single elevation (one UAC prompt).
+        Write-Host "Reinstalling winctl-mcp over the existing install (per-machine; expect a UAC prompt)..."
+        Invoke-MsiExec -ArgString "/i `"$local`" REINSTALL=ALL REINSTALLMODE=vamus /passive"
+    } else {
+        Write-Host "Installing $local (per-machine; expect a UAC prompt)..."
+        Invoke-MsiExec -ArgString "/i `"$local`" /passive"
     }
-
-    Write-Host "Installing $local (per-machine; expect a UAC prompt)..."
-    Invoke-MsiExec -ArgString "/i `"$local`" /passive"
     Write-Host "Installed winctl-mcp."
 }
 else {
