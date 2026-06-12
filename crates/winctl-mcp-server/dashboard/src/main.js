@@ -1556,7 +1556,7 @@ ${cursorConfig}
       </header>
 
       <main class="w-full px-4 py-5 sm:px-6 lg:px-8">
-        <nav class="mb-5 flex overflow-x-auto border-b border-slate-200 dark:border-slate-700" aria-label="Dashboard sections">
+        <nav class="mb-5 flex flex-wrap border-b border-slate-200 dark:border-slate-700" aria-label="Dashboard sections">
           <button
             v-for="tab in tabs"
             :key="tab.id"
@@ -2713,7 +2713,7 @@ ${cursorConfig}
             </dl>
           </section>
 
-          <fieldset :disabled="!settingsEditable" class="space-y-5">
+          <fieldset :disabled="!settingsEditable" class="min-w-0 space-y-5">
             <section class="winctl-card p-4">
               <h3 class="mb-3 text-sm font-semibold">Policy</h3>
               <div class="grid gap-2 sm:grid-cols-2">
