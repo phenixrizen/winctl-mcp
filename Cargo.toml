@@ -64,11 +64,11 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dwm",
 ] }
 windows-capture = "2"
-rmcp = { version = "1.7", features = ["server", "transport-io", "transport-worker", "transport-streamable-http-server"] }
+rmcp = { version = "2.0", features = ["server", "transport-io", "transport-worker", "transport-streamable-http-server"] }
 regex = "1"
 roxmltree = "0.21"
 base64 = "0.22"
-sha2 = "0.10"
+sha2 = "0.11"
 image = "0.25"
 gif = "0.14"
 rusqlite = { version = "0.40", features = ["bundled"] }
